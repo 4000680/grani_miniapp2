@@ -43,9 +43,10 @@
     width:32px;height:32px;border-radius:10px;background:var(--accent);
     display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;
   }
+  header .header-copy{flex:1;min-width:0;}
   header .title{font-weight:600; font-size:15px;}
-  header .subtitle{font-size:12px; color:var(--muted);}
-  #status{font-size:11px;color:var(--muted); margin-left:auto; text-align:right;}
+  header .subtitle{font-size:11px;line-height:1.3;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  #status{font-size:11px;color:var(--muted);max-width:72px;flex-shrink:0;text-align:right;}
 
   #chat{
     flex:1; min-height:0; min-width:0; overflow-y:auto; overflow-x:hidden; padding:16px; display:flex; flex-direction:column; gap:10px;
@@ -94,7 +95,7 @@
   ::-webkit-scrollbar{width:8px;}
   ::-webkit-scrollbar-thumb{background:var(--border); border-radius:4px;}
   header .back-btn{width:32px;height:32px;border-radius:50%;background:var(--bg);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;color:var(--text);}
-  header .reset-btn{width:32px;height:32px;border-radius:50%;background:var(--bg);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;margin-left:auto;color:var(--muted);font-size:14px;}
+  header .reset-btn{width:32px;height:32px;border-radius:50%;background:var(--bg);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;color:var(--muted);font-size:14px;}
 </style>
 </head>
 <body>
@@ -104,8 +105,9 @@
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"></path></svg>
   </div>
   <div class="logo">кВт</div>
-  <div>
+  <div class="header-copy">
     <div class="title">Расчёт утильсбора</div>
+    <div class="subtitle" id="baseUpdateStatus">Шаблон СЭП: проверяем обновление…</div>
   </div>
   <div id="status"></div>
   <div class="reset-btn" id="resetChatBtn" title="Начать заново">↺</div>
@@ -369,6 +371,26 @@ const SPRAVOCHNIK_FILE = 'spravochnik.xlsx';
 // Если файла ещё нет (например, самый первый деплой до первого прогона автообновления) —
 // калькулятор сам откатится на прямой разбор spravochnik.xlsx.
 const SPRAVOCHNIK_COMPRESSED_FILE = 'spravochnik.json.gz.b64';
+const SPRAVOCHNIK_LAST_UPDATE_FILE = 'spravochnik_last_update.txt';
+
+async function loadBaseUpdateStatus(){
+  const el = document.getElementById('baseUpdateStatus');
+  if(!el) return;
+  try{
+    const resp = await fetch(SPRAVOCHNIK_LAST_UPDATE_FILE, {cache:'no-store'});
+    if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const raw = (await resp.text()).trim();
+    const updatedAt = new Date(raw);
+    if(!raw || Number.isNaN(updatedAt.getTime())) throw new Error('некорректная дата');
+    const label = updatedAt.toLocaleString('ru-RU', {
+      day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'
+    });
+    el.textContent = `Шаблон СЭП обновлён: ${label}`;
+    el.title = `Исходный файл на Яндекс.Диске обновлён ${label}`;
+  }catch(e){
+    el.textContent = 'Шаблон СЭП: ожидается синхронизация';
+  }
+}
 
 function parseSpravochnikRows(rawRows){
   const brandIdx = new Map(), modelIdx = new Map(), ecoIdx = new Map();
@@ -1403,6 +1425,7 @@ document.getElementById('inputForm').addEventListener('submit', function(e){
 
 // восстановление переписки из облака Telegram (CloudStorage), либо приветствие с нуля
 async function initChat(){
+  loadBaseUpdateStatus();
   let restored = null;
   try{ restored = await loadChatState(); }catch(e){ console.warn(e); }
 
