@@ -49,9 +49,16 @@
   #status{font-size:11px;color:var(--muted);max-width:72px;flex-shrink:0;text-align:right;}
 
   #chat{
-    flex:1; min-height:0; min-width:0; overflow-y:auto; overflow-x:hidden; padding:16px; display:flex; flex-direction:column; gap:10px;
+    flex:1; min-height:0; min-width:0; overflow-y:auto; overflow-x:hidden; padding:16px; display:flex; flex-direction:column; gap:10px; scroll-behavior:smooth; scroll-padding-top:10px;
   }
   .msg{flex:0 0 auto;max-width:88%; min-width:0; padding:10px 14px; border-radius:var(--radius); font-size:14px; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere;}
+  .msg.is-new{animation:message-in 180ms ease-out both;transform-origin:bottom left;}
+  .msg.user.is-new{transform-origin:bottom right;}
+  @keyframes message-in{
+    from{opacity:0;transform:translateY(6px) scale(0.985);}
+    to{opacity:1;transform:translateY(0) scale(1);}
+  }
+  @media (prefers-reduced-motion:reduce){.msg.is-new{animation:none;}}
   .msg.user{align-self:flex-end; background:var(--bubble-user); color:var(--bubble-user-text); border-bottom-right-radius:4px;}
   .msg.bot{align-self:flex-start; max-width:94%; background:var(--bubble-bot); color:var(--bubble-bot-text); border:1px solid var(--border); border-bottom-left-radius:4px;}
   .msg.bot table{border-collapse:collapse; width:100%; table-layout:fixed; margin-top:8px; font-size:13px;}
@@ -382,8 +389,8 @@ async function loadBaseUpdateStatus(){
     const raw = (await resp.text()).trim();
     const updatedAt = new Date(raw);
     if(!raw || Number.isNaN(updatedAt.getTime())) throw new Error('некорректная дата');
-    const label = updatedAt.toLocaleString('ru-RU', {
-      day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'
+    const label = updatedAt.toLocaleDateString('ru-RU', {
+      day:'2-digit', month:'2-digit', year:'numeric'
     });
     el.textContent = `Шаблон СЭП обновлён: ${label}`;
     el.title = `Исходный файл на Яндекс.Диске обновлён ${label}`;
@@ -1172,24 +1179,49 @@ function search(brand, model, year, weight){
 
 /* ============== UI ============== */
 const chat = document.getElementById('chat');
+let currentReplyAnchor = null;
+let replyScrollFrame = null;
 
-function scrollDown(){ chat.scrollTop = chat.scrollHeight; }
+function scrollDown(behavior){
+  chat.scrollTo({top:chat.scrollHeight, behavior:behavior || 'smooth'});
+}
+
+// Первая реплика бота после сообщения пользователя служит якорем ответа.
+// Если она длинная, показываем её начало и не уводим экран к последней строке.
+function positionReply(){
+  if(replyScrollFrame) cancelAnimationFrame(replyScrollFrame);
+  replyScrollFrame = requestAnimationFrame(() => {
+    const anchor = currentReplyAnchor;
+    if(!anchor || !anchor.isConnected) return;
+    const isLongReply = anchor.offsetHeight > chat.clientHeight * 0.45;
+    if(isLongReply){
+      const chatRect = chat.getBoundingClientRect();
+      const anchorRect = anchor.getBoundingClientRect();
+      const targetTop = chat.scrollTop + anchorRect.top - chatRect.top - 10;
+      chat.scrollTo({top:Math.max(0, targetTop), behavior:'smooth'});
+    } else {
+      scrollDown('smooth');
+    }
+  });
+}
 
 function addUserMessage(text){
   const div = document.createElement('div');
-  div.className = 'msg user';
+  div.className = 'msg user is-new';
   div.textContent = text;
   chat.appendChild(div);
-  scrollDown();
+  currentReplyAnchor = null;
+  scrollDown('smooth');
   if(!isRestoringChat){ chatTranscript.push({role:'user', html: escapeHtml(text)}); scheduleSaveChat(); }
 }
 
 function addBotMessage(html){
   const div = document.createElement('div');
-  div.className = 'msg bot';
+  div.className = 'msg bot is-new';
   div.innerHTML = html;
   chat.appendChild(div);
-  scrollDown();
+  if(!currentReplyAnchor || !currentReplyAnchor.isConnected) currentReplyAnchor = div;
+  positionReply();
   if(!isRestoringChat){
     chatTranscript.push({role:'bot', html: html});
     const tIndex = chatTranscript.length - 1;
@@ -1198,6 +1230,7 @@ function addBotMessage(html){
       if(chatTranscript[tIndex]) chatTranscript[tIndex] = null; // временное сообщение (например «Читаю СБКТС…») не сохраняем
       scheduleSaveChat();
       origRemove();
+      if(currentReplyAnchor === div) currentReplyAnchor = null;
     };
     scheduleSaveChat();
   }
