@@ -51,6 +51,7 @@ jobs:
           public_url = os.environ["YANDEX_PUBLIC_URL"]
           prefix = os.environ["FILE_NAME_PREFIX"]
           temporary_file = "/tmp/spravochnik.xlsx"
+          temporary_update_file = "/tmp/spravochnik_last_update.txt"
           api_url = (
               "https://cloud-api.yandex.net/v1/disk/public/resources?"
               + urllib.parse.urlencode({"public_key": public_url, "limit": 1000})
@@ -77,6 +78,15 @@ jobs:
           newest = max(candidates, key=lambda item: (item.get("modified", ""), item.get("name", "")))
           print(f"Выбран файл: {newest['name']} (изменён: {newest.get('modified', 'неизвестно')})")
 
+          # Сохраняем дату изменения именно исходного файла на Яндекс.Диске.
+          # Её показывает мини-приложение в строке «Шаблон СЭП обновлён».
+          source_modified = newest.get("modified", "").strip()
+          if not source_modified:
+              print("У выбранного файла отсутствует дата изменения", file=sys.stderr)
+              sys.exit(1)
+          with open(temporary_update_file, "w", encoding="utf-8") as output:
+              output.write(source_modified + "\n")
+
           download_request = urllib.request.Request(
               newest["file"], headers={"User-Agent": "grani-spravochnik-updater"}
           )
@@ -89,23 +99,38 @@ jobs:
           print(f"Скачано: {os.path.getsize(temporary_file) / 1024 / 1024:.2f} МБ")
           PY
 
+          xlsx_changed=false
+          metadata_changed=false
+
           if cmp -s /tmp/spravochnik.xlsx "$TARGET_XLSX"; then
             echo "Содержимое справочника не изменилось."
-            echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             mv /tmp/spravochnik.xlsx "$TARGET_XLSX"
+            xlsx_changed=true
+          fi
+
+          if cmp -s /tmp/spravochnik_last_update.txt "$LAST_UPDATE_FILE"; then
+            echo "Дата исходного файла не изменилась."
+          else
+            mv /tmp/spravochnik_last_update.txt "$LAST_UPDATE_FILE"
+            metadata_changed=true
+          fi
+
+          echo "xlsx_changed=$xlsx_changed" >> "$GITHUB_OUTPUT"
+          if [[ "$xlsx_changed" == "true" || "$metadata_changed" == "true" ]]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Установить библиотеку для Excel
-        if: steps.download.outputs.changed == 'true'
+        if: steps.download.outputs.xlsx_changed == 'true'
         run: npm install --no-save --no-package-lock https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
 
       - name: Создать сжатую базу для приложения
-        if: steps.download.outputs.changed == 'true'
+        if: steps.download.outputs.xlsx_changed == 'true'
         run: |
           node scripts/convert-spravochnik.js "$TARGET_XLSX" "$TARGET_COMPRESSED"
-          date -u +"%Y-%m-%dT%H:%M:%SZ" > "$LAST_UPDATE_FILE"
 
       - name: Сохранить обновление в репозитории
         if: steps.download.outputs.changed == 'true'
