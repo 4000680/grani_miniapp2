@@ -1,0 +1,123 @@
+name: Обновление справочника с Яндекс.Диска
+
+on:
+  schedule:
+    # GitHub Actions использует UTC. Проверяем раз в час со сдвигом,
+    # чтобы не попадать в пиковую нагрузку ровно в начале часа.
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-spravochnik
+  cancel-in-progress: false
+
+env:
+  YANDEX_PUBLIC_URL: "https://disk.yandex.ru/d/VeYxsi3IcnmK2w"
+  FILE_NAME_PREFIX: "Справочник технических характеристик"
+  TARGET_XLSX: "tabs/utilsbor/spravochnik.xlsx"
+  TARGET_COMPRESSED: "tabs/utilsbor/spravochnik.json.gz.b64"
+  LAST_UPDATE_FILE: "tabs/utilsbor/spravochnik_last_update.txt"
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Получить файлы репозитория
+        uses: actions/checkout@v4
+
+      - name: Подготовить Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Скачать самый свежий справочник
+        id: download
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          import os
+          import shutil
+          import sys
+          import urllib.parse
+          import urllib.request
+
+          public_url = os.environ["YANDEX_PUBLIC_URL"]
+          prefix = os.environ["FILE_NAME_PREFIX"]
+          temporary_file = "/tmp/spravochnik.xlsx"
+          api_url = (
+              "https://cloud-api.yandex.net/v1/disk/public/resources?"
+              + urllib.parse.urlencode({"public_key": public_url, "limit": 1000})
+          )
+
+          request = urllib.request.Request(api_url, headers={"User-Agent": "grani-spravochnik-updater"})
+          with urllib.request.urlopen(request, timeout=60) as response:
+              resource = json.load(response)
+
+          items = resource.get("_embedded", {}).get("items", [])
+          candidates = [
+              item for item in items
+              if item.get("type") == "file"
+              and item.get("name", "").startswith(prefix)
+              and item.get("name", "").lower().endswith(".xlsx")
+              and item.get("file")
+          ]
+          if not candidates:
+              available = [item.get("name", "") for item in items if item.get("type") == "file"]
+              print(f"Не найден .xlsx-файл с началом имени: {prefix}", file=sys.stderr)
+              print("Файлы в папке: " + (", ".join(available) or "папка пуста"), file=sys.stderr)
+              sys.exit(1)
+
+          newest = max(candidates, key=lambda item: (item.get("modified", ""), item.get("name", "")))
+          print(f"Выбран файл: {newest['name']} (изменён: {newest.get('modified', 'неизвестно')})")
+
+          download_request = urllib.request.Request(
+              newest["file"], headers={"User-Agent": "grani-spravochnik-updater"}
+          )
+          with urllib.request.urlopen(download_request, timeout=180) as response, open(temporary_file, "wb") as output:
+              shutil.copyfileobj(response, output)
+
+          if os.path.getsize(temporary_file) == 0:
+              print("Яндекс.Диск вернул пустой файл", file=sys.stderr)
+              sys.exit(1)
+          print(f"Скачано: {os.path.getsize(temporary_file) / 1024 / 1024:.2f} МБ")
+          PY
+
+          if cmp -s /tmp/spravochnik.xlsx "$TARGET_XLSX"; then
+            echo "Содержимое справочника не изменилось."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            mv /tmp/spravochnik.xlsx "$TARGET_XLSX"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Установить библиотеку для Excel
+        if: steps.download.outputs.changed == 'true'
+        run: npm install --no-save --no-package-lock https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
+
+      - name: Создать сжатую базу для приложения
+        if: steps.download.outputs.changed == 'true'
+        run: |
+          node scripts/convert-spravochnik.js "$TARGET_XLSX" "$TARGET_COMPRESSED"
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > "$LAST_UPDATE_FILE"
+
+      - name: Сохранить обновление в репозитории
+        if: steps.download.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$TARGET_XLSX" "$TARGET_COMPRESSED" "$LAST_UPDATE_FILE"
+          if git diff --cached --quiet; then
+            echo "После конвертации изменений нет."
+            exit 0
+          fi
+          git commit -m "Автоматически обновить справочник автомобилей"
+          git push
