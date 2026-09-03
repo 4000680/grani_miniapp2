@@ -1,0 +1,1436 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Расчёт утильсбора</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+<style>
+  :root{
+    --bg:#f7f7f8; --panel:#ffffff; --text:#1a1a1a; --muted:#6b6b6b;
+    --accent:#c8102e; --accent-hover:#a80d26; --border:#e3e3e3;
+    --bubble-user:#c8102e; --bubble-user-text:#ffffff;
+    --bubble-bot:#f0f0f1; --bubble-bot-text:#1a1a1a;
+    --radius:14px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#141414; --panel:#1e1e1e; --text:#f2f2f2; --muted:#9a9a9a;
+      --accent:#e3344f; --accent-hover:#ff4d68; --border:#333333;
+      --bubble-bot:#2a2a2a; --bubble-bot-text:#f2f2f2;
+    }
+  }
+  :root[data-theme="dark"]{
+      --bg:#141414; --panel:#1e1e1e; --text:#f2f2f2; --muted:#9a9a9a;
+      --accent:#e3344f; --accent-hover:#ff4d68; --border:#333333;
+      --bubble-bot:#2a2a2a; --bubble-bot-text:#f2f2f2;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    height:100vh; display:flex; flex-direction:column; overflow:hidden;
+  }
+  header{
+    padding:14px 16px; background:var(--panel); border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:10px; flex-shrink:0;
+  }
+  header .logo{
+    width:32px;height:32px;border-radius:50%;background:var(--accent);
+    display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;
+  }
+  header .title{font-weight:600; font-size:15px;}
+  header .subtitle{font-size:12px; color:var(--muted);}
+  #status{font-size:11px;color:var(--muted); margin-left:auto; text-align:right;}
+
+  #chat{
+    flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px;
+  }
+  .msg{max-width:85%; padding:10px 14px; border-radius:var(--radius); font-size:14px; line-height:1.5; white-space:pre-wrap; word-wrap:break-word;}
+  .msg.user{align-self:flex-end; background:var(--bubble-user); color:var(--bubble-user-text); border-bottom-right-radius:4px;}
+  .msg.bot{align-self:flex-start; background:var(--bubble-bot); color:var(--bubble-bot-text); border-bottom-left-radius:4px;}
+  .msg.bot table{border-collapse:collapse; width:100%; margin-top:8px; font-size:13px;}
+  .msg.bot th, .msg.bot td{border:1px solid var(--border); padding:5px 8px; text-align:left;}
+  .msg.bot th{background:rgba(0,0,0,0.04);}
+  :root[data-theme="dark"] .msg.bot th{background:rgba(255,255,255,0.06);}
+  .variant-row{transition:background 0.12s; border-radius:6px;}
+  .variant-row:hover{background:rgba(200,16,46,0.1);}
+  tr.variant-row:hover td{background:rgba(200,16,46,0.1);}
+  #pdfUploadLabel:hover{background:rgba(200,16,46,0.1); border-color:var(--accent);}
+  .sbkts-field-table{border-collapse:collapse; width:100%; margin-top:8px; font-size:13px;}
+  .sbkts-field-table td{padding:4px 8px; border-bottom:1px solid var(--border);}
+  .sbkts-field-table td:first-child{color:var(--muted); white-space:nowrap;}
+
+  .chip-row{display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;}
+  .chip{
+    background:var(--panel); border:1px solid var(--border); color:var(--text);
+    padding:6px 12px; border-radius:16px; font-size:13px; cursor:pointer; transition:0.15s;
+  }
+  .chip:hover{background:var(--accent); color:#fff; border-color:var(--accent);}
+
+  #inputBar{
+    display:flex; gap:8px; padding:12px; background:var(--panel); border-top:1px solid var(--border); flex-shrink:0;
+  }
+  #inputForm{display:flex; gap:8px; width:100%;}
+  #textInput{
+    flex:1; padding:11px 14px; border-radius:20px; border:1px solid var(--border);
+    background:var(--bg); color:var(--text); font-size:14px; outline:none;
+  }
+  #textInput:focus{border-color:var(--accent);}
+  #sendBtn{
+    background:var(--accent); color:#fff; border:none; border-radius:20px;
+    padding:0 20px; font-size:14px; font-weight:600; cursor:pointer; transition:0.15s;
+  }
+  #sendBtn:hover{background:var(--accent-hover);}
+  #sendBtn:disabled{opacity:0.5; cursor:default;}
+
+  .hint{font-size:12px; color:var(--muted); padding:0 16px 8px;}
+  ::-webkit-scrollbar{width:8px;}
+  ::-webkit-scrollbar-thumb{background:var(--border); border-radius:4px;}
+  header .back-btn{width:32px;height:32px;border-radius:50%;background:var(--bg);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;color:var(--text);}
+  header .reset-btn{width:32px;height:32px;border-radius:50%;background:var(--bg);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;margin-left:auto;color:var(--muted);font-size:14px;}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="back-btn" id="backToHomeBtn" title="Назад">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"></path></svg>
+  </div>
+  <div class="logo">кВт</div>
+  <div>
+    <div class="title">Расчёт утильсбора</div>
+  </div>
+  <div id="status"></div>
+  <div class="reset-btn" id="resetChatBtn" title="Начать заново">↺</div>
+</header>
+
+<div id="chat"></div>
+
+<div id="inputBar">
+  <form id="inputForm">
+    <input id="textInput" type="text" placeholder="" autocomplete="off" disabled>
+    <label id="pdfUploadLabel" title="Загрузить СБКТС (PDF)" style="display:flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:50%;background:var(--bg);border:1px solid var(--border);cursor:pointer;flex-shrink:0;font-size:16px;">
+      📄<input id="pdfInput" type="file" accept="application/pdf" style="display:none;">
+    </label>
+    <button id="sendBtn" type="submit" disabled>➤</button>
+  </form>
+</div>
+
+<script>
+/* ============== TELEGRAM MINI APP: инициализация, навигация назад, облако ==============
+   Этот блок — единственное место в файле, отвечающее за интеграцию с Telegram.
+   Не содержит логики расчёта утильсбора; их можно менять независимо друг от друга. */
+const tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+if(tg){
+  tg.ready();
+  tg.expand();
+  document.documentElement.setAttribute('data-theme', tg.colorScheme === 'dark' ? 'dark' : 'light');
+  try{
+    if(tg.themeParams.bg_color) tg.setBackgroundColor(tg.themeParams.bg_color);
+    if(tg.themeParams.header_bg_color || tg.themeParams.bg_color){
+      tg.setHeaderColor(tg.themeParams.header_bg_color || tg.themeParams.bg_color);
+    }
+  }catch(e){ /* старые версии клиента Telegram могут не поддерживать эти методы */ }
+  tg.onEvent('themeChanged', () => {
+    document.documentElement.setAttribute('data-theme', tg.colorScheme === 'dark' ? 'dark' : 'light');
+  });
+  tg.BackButton.show();
+  tg.BackButton.onClick(() => { window.location.href = '../../index.html'; });
+}
+document.getElementById('backToHomeBtn').addEventListener('click', () => {
+  window.location.href = '../../index.html';
+});
+
+/* ---- CloudStorage: сохранение переписки в облаке Telegram (переживает закрытие приложения) ---- */
+function csAvailable(){ return !!(tg && tg.CloudStorage); }
+function csSet(key, value){
+  return new Promise((resolve) => {
+    if(csAvailable()){ tg.CloudStorage.setItem(key, value, (err, ok) => resolve(!err && ok !== false)); }
+    else { try{ localStorage.setItem('tgcs_' + key, value); resolve(true); }catch(e){ resolve(false); } }
+  });
+}
+function csGet(key){
+  return new Promise((resolve) => {
+    if(csAvailable()){ tg.CloudStorage.getItem(key, (err, value) => resolve(err ? null : value)); }
+    else { try{ resolve(localStorage.getItem('tgcs_' + key)); }catch(e){ resolve(null); } }
+  });
+}
+function csGetItems(keys){
+  return new Promise((resolve) => {
+    if(keys.length === 0){ resolve({}); return; }
+    if(csAvailable() && tg.CloudStorage.getItems){ tg.CloudStorage.getItems(keys, (err, values) => resolve(err ? {} : values)); }
+    else if(csAvailable()){ (async () => { const res = {}; for(const k of keys){ res[k] = await csGet(k); } resolve(res); })(); }
+    else { const res = {}; keys.forEach(k => res[k] = localStorage.getItem('tgcs_' + k)); resolve(res); }
+  });
+}
+function csGetKeys(){
+  return new Promise((resolve) => {
+    if(csAvailable()){ tg.CloudStorage.getKeys((err, keys) => resolve(err ? [] : (keys || []))); }
+    else {
+      try{
+        const keys = [];
+        for(let i=0;i<localStorage.length;i++){ const k = localStorage.key(i); if(k && k.indexOf('tgcs_') === 0) keys.push(k.slice(5)); }
+        resolve(keys);
+      }catch(e){ resolve([]); }
+    }
+  });
+}
+function csRemove(keys){
+  return new Promise((resolve) => {
+    if(keys.length === 0){ resolve(true); return; }
+    if(csAvailable()){ tg.CloudStorage.removeItems(keys, (err) => resolve(!err)); }
+    else { keys.forEach(k => { try{ localStorage.removeItem('tgcs_' + k); }catch(e){} }); resolve(true); }
+  });
+}
+
+const CS_PREFIX = 'us1_'; // us1 = utilsbor v1, чтобы не пересекаться с другими вкладками в будущем
+let chatTranscript = []; // [{role:'user'|'bot', html}]
+let isRestoringChat = false;
+let saveTimer = null;
+
+function scheduleSaveChat(){
+  if(isRestoringChat) return;
+  if(saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveChatState, 450);
+}
+
+async function saveChatState(){
+  try{
+    const trimmed = chatTranscript.filter(m => m !== null).slice(-50);
+    const state = { t: trimmed, p: pendingUtilContext };
+    const json = JSON.stringify(state);
+    let b64;
+    if(window.pako){
+      const compressed = pako.deflate(json);
+      let binary = '';
+      for(let i=0;i<compressed.length;i++) binary += String.fromCharCode(compressed[i]);
+      b64 = 'gz:' + btoa(binary);
+    } else {
+      b64 = 'raw:' + btoa(unescape(encodeURIComponent(json)));
+    }
+    const chunkSize = 3500;
+    const chunks = [];
+    for(let i=0;i<b64.length;i+=chunkSize) chunks.push(b64.slice(i, i+chunkSize));
+    const capped = chunks.slice(0, 80);
+    await csSet(CS_PREFIX + 'n', String(capped.length));
+    for(let i=0;i<capped.length;i++){ await csSet(CS_PREFIX + 'c' + i, capped[i]); }
+    const keys = await csGetKeys();
+    const staleChunkKeys = keys.filter(k => {
+      if(k.indexOf(CS_PREFIX + 'c') !== 0) return false;
+      const idx = parseInt(k.slice((CS_PREFIX + 'c').length));
+      return !isNaN(idx) && idx >= capped.length;
+    });
+    if(staleChunkKeys.length) await csRemove(staleChunkKeys);
+  }catch(e){ console.warn('Не удалось сохранить переписку:', e); }
+}
+
+async function loadChatState(){
+  try{
+    const nStr = await csGet(CS_PREFIX + 'n');
+    if(!nStr) return null;
+    const n = parseInt(nStr);
+    if(!n || n <= 0) return null;
+    const keys = []; for(let i=0;i<n;i++) keys.push(CS_PREFIX + 'c' + i);
+    const values = await csGetItems(keys);
+    let b64 = '';
+    for(let i=0;i<n;i++){ b64 += values[CS_PREFIX + 'c' + i] || ''; }
+    if(!b64) return null;
+    let json;
+    if(b64.indexOf('gz:') === 0){
+      const binary = atob(b64.slice(3));
+      const bytes = new Uint8Array(binary.length);
+      for(let i=0;i<binary.length;i++) bytes[i] = binary.charCodeAt(i);
+      json = pako.inflate(bytes, { to: 'string' });
+    } else {
+      json = decodeURIComponent(escape(atob(b64.slice(4))));
+    }
+    return JSON.parse(json);
+  }catch(e){ console.warn('Не удалось загрузить переписку:', e); return null; }
+}
+
+async function clearChatState(){
+  const keys = await csGetKeys();
+  const ours = keys.filter(k => k.indexOf(CS_PREFIX) === 0);
+  if(ours.length) await csRemove(ours);
+}
+
+document.getElementById('resetChatBtn').addEventListener('click', async function(){
+  const ok = tg && tg.showConfirm
+    ? await new Promise(r => tg.showConfirm('Начать расчёт заново? История переписки будет очищена.', r))
+    : confirm('Начать расчёт заново? История переписки будет очищена.');
+  if(!ok) return;
+  await clearChatState();
+  chatTranscript = [];
+  pendingUtilContext = null;
+  document.getElementById('chat').innerHTML = '';
+  addBotMessage(WELCOME_HTML);
+});
+
+const WELCOME_HTML = '👋 Привет! Помогу с расчётом <b>мощности и утильсбора</b> для любого авто.<br><br>Есть два способа:<br><br>🔍 <b>По характеристикам</b> — напишите марку, модель и год выпуска<br><i>Например: Mazda CX-5 2026</i><br><br>📄 <b>По СБКТС</b> — прикрепите PDF через скрепку, и я сразу посчитаю утильсбор и пени за просрочку';
+
+/* ============== ДАННЫЕ ============== */
+let UTIL_TABLE = null; // строится из rates.xlsx функцией loadRates()
+const RATES_FILE = 'rates.xlsx';
+
+// Плоский формат rates.xlsx (лист "Ставки", заголовок в первой строке):
+// Категория ТС | Тип двигателя (ДВС/Электро/гибрид) | Плательщик (Коммерческий/Личное пользование) |
+// Объём от, см³ | Объём до, см³ | Мощность от, кВт | Мощность до, кВт |
+// Коэфф. (новое, до 3 лет) | Сумма руб (новое, до 3 лет) | Коэфф. (старше 3 лет) | Сумма руб (старше 3 лет)
+//
+
+// Сейчас калькулятор использует только категорию "M1" (легковые). Строки с другими
+// категориями (например N1) можно добавлять в файл заранее — они будут прочитаны и
+// сохранены в UTIL_TABLE_RAW, но расчёт по ним потребует доп. доработки кода (выбор
+// категории у пользователя), которой сейчас нет.
+let UTIL_TABLE_RAW = []; // все строки как есть, на будущее (для категорий, ещё не подключённых к расчёту)
+
+async function loadRates(){
+  const resp = await fetch(RATES_FILE);
+  if(!resp.ok) throw new Error(`не найден файл ${RATES_FILE} (HTTP ${resp.status})`);
+  const buf = await resp.arrayBuffer();
+  const wb = XLSX.read(buf, {type:'array'});
+  const sheetName = wb.SheetNames.includes('Ставки') ? 'Ставки' : wb.SheetNames[0];
+  const ws = wb.Sheets[sheetName];
+  const raw = XLSX.utils.sheet_to_json(ws, {defval:null}); // объекты по названиям колонок из заголовка
+
+  UTIL_TABLE_RAW = raw;
+
+  const table = {
+    commercial: {electric: [], ice: {"0-1000":[], "1000-2000":[], "2000-3000":[], "3000-3500":[], "3500+":[]}},
+    personal:   {electric: [], ice: {"0-1000":[], "1000-2000":[], "2000-3000":[], "3000-3500":[], "3500+":[]}}
+  };
+
+  function ccmToBucket(from, to){
+    // определяем корзину объёма по границам диапазона строки файла
+    if(from === null && to === null) return null; // электро
+    const f = Number(from)||0;
+    if(f < 1000) return "0-1000";
+    if(f < 2000) return "1000-2000";
+    if(f < 3000) return "2000-3000";
+    if(f < 3500) return "3000-3500";
+    return "3500+";
+  }
+
+  for(const r of raw){
+    const category = String(r['Категория ТС']||'').trim().toUpperCase();
+    if(category !== 'M1') continue; // пока считаем только M1; другие категории — на будущее
+
+    const payerRaw = String(r['Плательщик']||'').trim().toLowerCase();
+    const payer = payerRaw.startsWith('коммерч') ? 'commercial' : (payerRaw.startsWith('личн') ? 'personal' : null);
+    if(!payer) continue;
+
+    const engineType = String(r['Тип двигателя']||'').trim().toLowerCase();
+    const isElectric = engineType.startsWith('электро');
+
+    const bracket = {
+      kwMin: Number(r['Мощность от, кВт']) || 0,
+      kwMax: (r['Мощность до, кВт'] === null || r['Мощность до, кВт'] === '') ? Infinity : Number(r['Мощность до, кВт']),
+      coefNew: Number(r['Коэфф. (новое, до 3 лет)']),
+      sumNew: Number(r['Сумма руб (новое, до 3 лет)']),
+      coefOld: Number(r['Коэфф. (старше 3 лет)']),
+      sumOld: Number(r['Сумма руб (старше 3 лет)']),
+    };
+
+    if(isElectric){
+      table[payer].electric.push(bracket);
+    } else {
+      const bucket = ccmToBucket(r['Объём от, см³'], r['Объём до, см³']);
+      if(bucket && table[payer].ice[bucket]) table[payer].ice[bucket].push(bracket);
+    }
+  }
+
+  // сортируем каждую группу по возрастанию мощности
+  for(const payer of ['commercial','personal']){
+    table[payer].electric.sort((a,b)=>a.kwMin-b.kwMin);
+    for(const k in table[payer].ice) table[payer].ice[k].sort((a,b)=>a.kwMin-b.kwMin);
+  }
+
+  UTIL_TABLE = table;
+}
+
+let DB = null; // {brands, models, eco, rows}
+
+// Имя xlsx-файла со справочником авто — лежит рядом с index.html.
+// Структура колонок (в этом порядке, с заголовком в первой строке):
+// Код | Марка | Коммерческое наименование | Экологический класс | Год выпуска |
+// Максимальная мощность (кВт) | Максимальная 30-минутная мощность (кВт) |
+// Технически допустимая максимальная масса (кг) | Нижний предел | Верхний предел
+const SPRAVOCHNIK_FILE = 'spravochnik.xlsx';
+// Сжатая версия того же справочника (brands/models/eco/rows уже построены и проиндексированы) —
+// готовится автоматически GitHub Action'ом (scripts/convert-spravochnik.js) при каждом обновлении
+// spravochnik.xlsx. Весит в 6-8 раз меньше исходного xlsx, поэтому грузится значительно быстрее.
+// Если файла ещё нет (например, самый первый деплой до первого прогона автообновления) —
+// калькулятор сам откатится на прямой разбор spravochnik.xlsx.
+const SPRAVOCHNIK_COMPRESSED_FILE = 'spravochnik.json.gz.b64';
+
+function parseSpravochnikRows(rawRows){
+  const brandIdx = new Map(), modelIdx = new Map(), ecoIdx = new Map();
+  const brands = [], models = [], eco = [];
+  const rows = [];
+
+  for(const r of rawRows){
+    const brand = r[1], model = r[2];
+    if(brand === null || brand === undefined || brand === '') continue;
+    const brandStr = String(brand).trim();
+    const modelStr = model !== null && model !== undefined ? String(model).trim() : '';
+    const ecoStr = r[3] !== null && r[3] !== undefined ? String(r[3]).trim() : null;
+
+    if(!brandIdx.has(brandStr)){ brandIdx.set(brandStr, brands.length); brands.push(brandStr); }
+    if(!modelIdx.has(modelStr)){ modelIdx.set(modelStr, models.length); models.push(modelStr); }
+    let eIdx = -1;
+    if(ecoStr !== null){
+      if(!ecoIdx.has(ecoStr)){ ecoIdx.set(ecoStr, eco.length); eco.push(ecoStr); }
+      eIdx = ecoIdx.get(ecoStr);
+    }
+
+    rows.push([
+      brandIdx.get(brandStr),
+      modelIdx.get(modelStr),
+      r[4] !== null && r[4] !== undefined ? Number(r[4]) : null, // год
+      eIdx,
+      r[5] !== null && r[5] !== undefined ? Number(r[5]) : null, // мощность
+      r[6] !== null && r[6] !== undefined ? Number(r[6]) : null, // 30-мин мощность
+      r[7] !== null && r[7] !== undefined ? Number(r[7]) : null, // масса
+      r[8] !== null && r[8] !== undefined ? Number(r[8]) : null, // нижний предел
+      r[9] !== null && r[9] !== undefined ? Number(r[9]) : null, // верхний предел
+    ]);
+  }
+  return {brands, models, eco, rows};
+}
+
+async function loadDBFromCompressed(){
+  const resp = await fetch(SPRAVOCHNIK_COMPRESSED_FILE);
+  if(!resp.ok) throw new Error(`нет сжатого файла (HTTP ${resp.status})`);
+  const b64 = (await resp.text()).trim();
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++) bytes[i] = binary.charCodeAt(i);
+  const inflated = pako.inflate(bytes); // сырые байты — {to:'string'} у pako некорректно работает с кириллицей
+  const json = new TextDecoder('utf-8').decode(inflated);
+  const parsed = JSON.parse(json);
+  return {brands: parsed.brands, models: parsed.models, eco: parsed.eco, rows: parsed.rows};
+}
+
+async function loadDBFromXlsx(){
+  const resp = await fetch(SPRAVOCHNIK_FILE);
+  if(!resp.ok) throw new Error(`не найден файл ${SPRAVOCHNIK_FILE} (HTTP ${resp.status})`);
+  const buf = await resp.arrayBuffer();
+  const wb = XLSX.read(buf, {type:'array', cellDates:false});
+  // берём лист "Данные", если нет — первый лист в файле
+  const sheetName = wb.SheetNames.includes('Данные') ? 'Данные' : wb.SheetNames[0];
+  const ws = wb.Sheets[sheetName];
+  // range:1 — пропускаем строку заголовка
+  const rawRows = XLSX.utils.sheet_to_json(ws, {header:1, range:1, blankrows:false, defval:null});
+  return parseSpravochnikRows(rawRows);
+}
+
+async function loadDB(){
+  try{
+    try{
+      DB = await loadDBFromCompressed();
+    }catch(compressedErr){
+      console.warn('Сжатый справочник недоступен, читаю xlsx напрямую:', compressedErr.message);
+      DB = await loadDBFromXlsx();
+    }
+    document.getElementById('textInput').disabled = false;
+    document.getElementById('sendBtn').disabled = false;
+    document.getElementById('textInput').focus();
+  }catch(e){
+    addBotMessage(`Не удалось загрузить справочник: ${escapeHtml(e.message)}. Проверьте, что файлы ${escapeHtml(SPRAVOCHNIK_COMPRESSED_FILE)} или ${escapeHtml(SPRAVOCHNIK_FILE)} лежат рядом с index.html и открыты через http(s) (не напрямую с диска — читайте через локальный сервер или GitHub Pages).`);
+    console.error(e);
+  }
+}
+
+/* ============== ПОДДЕРЖКА РУССКОГО ВВОДА ============== */
+
+// частые русские названия марок -> точное имя в базе (латиницей)
+const BRAND_RU_MAP = {
+  "ТОЙОТА":"TOYOTA","ХОНДА":"HONDA","НИССАН":"NISSAN","МАЗДА":"MAZDA","СУБАРУ":"SUBARU",
+  "МИЦУБИСИ":"MITSUBISHI","МИЦУБИШИ":"MITSUBISHI","СУЗУКИ":"SUZUKI","ЛЕКСУС":"LEXUS",
+  "БМВ":"BMW","МЕРСЕДЕС":"MERCEDES-BENZ","АУДИ":"AUDI","ФОЛЬКСВАГЕН":"VOLKSWAGEN",
+  "ФОЛЬКСВАГЕ":"VOLKSWAGEN","ШКОДА":"SKODA","РЕНО":"RENAULT","ПЕЖО":"PEUGEOT",
+  "СИТРОЕН":"CITROEN","ОПЕЛЬ":"OPEL","ФИАТ":"FIAT","ФОРД":"FORD","ШЕВРОЛЕ":"CHEVROLET",
+  "ХЕНДАЙ":"HYUNDAI","ХЮНДАЙ":"HYUNDAI","КИА":"KIA","ВОЛЬВО":"VOLVO","ЯГУАР":"JAGUAR",
+  "ЛЕНД РОВЕР":"LAND ROVER","ЛЕНДРОВЕР":"LAND ROVER","ПОРШЕ":"PORSCHE","МИНИ":"MINI",
+  "АЛЬФА РОМЕО":"ALFA ROMEO","ЛАДА":"LADA","ВАЗ":"LADA","ГАЗ":"GAZ","УАЗ":"UAZ",
+  "ГЕЛИ":"GEELY","ДЖИЛИ":"GEELY","ЧЕРИ":"CHERY","ХАВЕЙЛ":"HAVAL","ХАВАЛ":"HAVAL",
+  "ЧАНГАН":"CHANGAN","ЭКЗИД":"EXEED","ОМОДА":"OMODA","ДЖЕТУР":"JETOUR","ТАНК":"TANK",
+  "БАЙДИ":"BYD","БИ ВАЙ ДИ":"BYD","ЗИКР":"ZEEKR","ГРЕЙТ ВОЛЛ":"GREAT WALL",
+  "ГРЕЙТВОЛЛ":"GREAT WALL","ДОНГФЕНГ":"DONGFENG","ФАВ":"FAW","ДЖАК":"JAC",
+  "ЛИФАН":"LIFAN","ДЭУ":"DAEWOO","ССАНГЙОНГ":"SSANGYONG","КАДИЛЛАК":"CADILLAC",
+  "ИНФИНИТИ":"INFINITI","АКУРА":"ACURA","ДАЦИЯ":"DACIA","СЕАТ":"SEAT",
+  "АСТОН МАРТИН":"ASTON MARTIN","БЕНТЛИ":"BENTLEY","РОЛЛС РОЙС":"ROLLS-ROYCE",
+  "МАЗЕРАТИ":"MASERATI","ФЕРРАРИ":"FERRARI","ЛАМБОРГИНИ":"LAMBORGHINI",
+  "ГАЙЩ":"GAC","ГАК":"GAC","АИОН":"AION","АВАТР":"AVATR","ВОЯХ":"VOYAH",
+  "ХОНКИ":"HONGQI","ХОНГЦИ":"HONGQI","ФОРТОН":"FOTON","МАКСУС":"MAXUS",
+  "СААБ":"SAAB","АЛЬПИНА":"ALPINA","СМАРТ":"SMART","ДАЙХАЦУ":"DAIHATSU"
+};
+
+// простая транслитерация кириллицы в латиницу (используется как fallback для fuzzy-поиска)
+const TRANSLIT_MAP = {
+  'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'e','ж':'zh','з':'z','и':'i',
+  'й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s','т':'t',
+  'у':'u','ф':'f','х':'kh','ц':'ts','ч':'ch','ш':'sh','щ':'sch','ъ':'','ы':'y',
+  'ь':'','э':'e','ю':'yu','я':'ya'
+};
+function transliterate(str){
+  return str.toLowerCase().split('').map(ch => TRANSLIT_MAP[ch] !== undefined ? TRANSLIT_MAP[ch] : ch).join('');
+}
+function hasCyrillic(str){ return /[а-яА-ЯёЁ]/.test(str); }
+
+// раскладка ЙЦУКЕН -> QWERTY (частый случай: печатали латиницей при русской раскладке)
+const LAYOUT_MAP = {
+  'й':'q','ц':'w','у':'e','к':'r','е':'t','н':'y','г':'u','ш':'i','щ':'o','з':'p',
+  'х':'[','ъ':']','ф':'a','ы':'s','в':'d','а':'f','п':'g','р':'h','о':'j','л':'k',
+  'д':'l','ж':';','э':"'",'я':'z','ч':'x','с':'c','м':'v','и':'b','т':'n','ь':'m',
+  'б':',','ю':'.'
+};
+function layoutConvert(str){
+  return str.toLowerCase().split('').map(ch => LAYOUT_MAP[ch] !== undefined ? LAYOUT_MAP[ch] : ch).join('');
+}
+
+function levenshtein(a, b){
+  a = a.toLowerCase(); b = b.toLowerCase();
+  const m = a.length, n = b.length;
+  const dp = Array.from({length:m+1}, ()=> new Array(n+1).fill(0));
+  for(let i=0;i<=m;i++) dp[i][0]=i;
+  for(let j=0;j<=n;j++) dp[0][j]=j;
+  for(let i=1;i<=m;i++){
+    for(let j=1;j<=n;j++){
+      const cost = a[i-1]===b[j-1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i-1][j]+1, dp[i][j-1]+1, dp[i-1][j-1]+cost);
+    }
+  }
+  return dp[m][n];
+}
+
+// находит индекс марки в DB.brands по произвольному вводу (латиница/кириллица/опечатки)
+function resolveBrand(input){
+  const upper = input.trim().toUpperCase();
+
+  // 1. точное совпадение латиницей
+  let idx = DB.brands.findIndex(b => b.toUpperCase() === upper);
+  if(idx !== -1) return idx;
+
+  // 2. словарь русских названий
+  if(BRAND_RU_MAP[upper]){
+    idx = DB.brands.findIndex(b => b.toUpperCase() === BRAND_RU_MAP[upper]);
+    if(idx !== -1) return idx;
+  }
+
+  // 3. транслитерация (фонетика + раскладка клавиатуры) + нечёткий поиск
+  const candidates_ = hasCyrillic(input) ? [transliterate(input), layoutConvert(input)] : [input.toLowerCase()];
+  let best = -1, bestDist = Infinity;
+  for(let i=0;i<DB.brands.length;i++){
+    const b = DB.brands[i].toLowerCase();
+    for(const candidate of candidates_){
+      const d = levenshtein(candidate, b);
+      const threshold = Math.max(2, Math.floor(b.length*0.3));
+      if(d < bestDist && d <= threshold){ bestDist = d; best = i; }
+    }
+  }
+  return best; // -1 если не нашли
+}
+
+// находит индекс модели среди моделей конкретной марки
+function resolveModel(input, brandIdx){
+  const upper = input.trim().toUpperCase();
+  const modelIdxSet = new Set(DB.rows.filter(r=>r[0]===brandIdx).map(r=>r[1]));
+  const candidates = Array.from(modelIdxSet);
+
+  // точное совпадение
+  let found = candidates.find(mi => DB.models[mi].toUpperCase() === upper);
+  if(found !== undefined) return found;
+
+  // без пробелов/дефисов
+  const normInput = upper.replace(/[\s\-]/g,'');
+  found = candidates.find(mi => DB.models[mi].toUpperCase().replace(/[\s\-]/g,'') === normInput);
+  if(found !== undefined) return found;
+
+  // подстрочное совпадение: запрос — это "хвост"/часть полного названия модели (или наоборот)
+  // например "Q07" находит "QIYUAN Q07" — без привязки к конкретной марке, общее правило
+  if(normInput.length >= 2){
+    const substrMatches = candidates.filter(mi => {
+      const normModel = DB.models[mi].toUpperCase().replace(/[\s\-]/g,'');
+      return normModel.includes(normInput) || normInput.includes(normModel);
+    });
+    if(substrMatches.length === 1) return substrMatches[0];
+    if(substrMatches.length > 1){
+      // если несколько — берём то, что ближе всего по длине к запросу (наиболее специфичное)
+      substrMatches.sort((a,b) => Math.abs(DB.models[a].replace(/[\s\-]/g,'').length - normInput.length) - Math.abs(DB.models[b].replace(/[\s\-]/g,'').length - normInput.length));
+      return substrMatches[0];
+    }
+  }
+
+  // нечёткий поиск (транслитерация: фонетика + раскладка клавиатуры)
+  const candidateStrs = hasCyrillic(input) ? [transliterate(input), layoutConvert(input)] : [input.toLowerCase()];
+  let best = -1, bestDist = Infinity;
+  for(const mi of candidates){
+    const m = DB.models[mi].toLowerCase();
+    for(const candidateStr of candidateStrs){
+      const d = levenshtein(candidateStr, m);
+      const threshold = Math.max(2, Math.floor(m.length*0.4));
+      if(d < bestDist && d <= threshold){ bestDist = d; best = mi; }
+    }
+  }
+  return best;
+}
+
+/* ============== ПАРСИНГ ОБЪЁМА ДВИГАТЕЛЯ (детерминированные правила, без ИИ) ============== */
+const CCM_MIN = 600, CCM_MAX = 7000;
+
+function parseEngineVolume(text){
+  const lower = text.toLowerCase().trim();
+  if(lower.includes('электро') || lower.includes('гибрид') || lower === '0'){
+    return {ok:true, ccm:null}; // электро/гибрид — объём не нужен
+  }
+
+  const m = lower.match(/\d+([.,]\d+)?/);
+  if(!m) return {ok:false, unparsed:true, error:'Не понял объём двигателя. Укажите число в см³ (например 1998) или в литрах (например 2 или 2.0), либо выберите группу:'};
+
+  const raw = parseFloat(m[0].replace(',', '.'));
+  const hasLiterWord = /л(итр)?\.?\b|\bl\b/.test(lower);
+  const hasFraction = m[0].includes('.') || m[0].includes(',');
+
+  let ccm;
+  if(hasLiterWord || hasFraction || raw < 100){
+    // трактуем как литры: "2", "2.0", "3,5", "2 литра" -> умножаем на 1000
+    ccm = Math.round(raw * 1000);
+  } else {
+    // уже в см³: "1998", "2000"
+    ccm = Math.round(raw);
+  }
+
+  if(ccm < CCM_MIN || ccm > CCM_MAX){
+    return {ok:false, outOfRange:true, error:`Объём ${ccm} см³ выглядит некорректно (допустимый диапазон ${CCM_MIN}–${CCM_MAX} см³). Выберите подходящую группу объёма:`};
+  }
+  return {ok:true, ccm};
+}
+
+// группы объёма как в таблице ставок (для выбора кликом при ошибке ввода)
+const CCM_BUCKETS = [
+  {key:"0-1000", label:"до 1000 см³", repCcm:800},
+  {key:"1000-2000", label:"1001–2000 см³", repCcm:1500},
+  {key:"2000-3000", label:"2001–3000 см³", repCcm:2500},
+  {key:"3000-3500", label:"3001–3500 см³", repCcm:3200},
+  {key:"3500+", label:"свыше 3500 см³", repCcm:4000},
+];
+
+function volumeBucketChipsHtml(){
+  let html = `<div class="chip-row">`;
+  for(const b of CCM_BUCKETS){
+    html += `<div class="chip volume-chip" data-ccm="${b.repCcm}">${escapeHtml(b.label)}</div>`;
+  }
+  html += `<div class="chip volume-chip" data-ccm="electro">Электро/гибрид</div>`;
+  html += `</div>`;
+  return html;
+}
+
+/* ============== РАСЧЁТ УТИЛЬСБОРА ============== */
+function findBracket(rows, kw){
+  return rows.find(r => kw >= r.kwMin && kw <= r.kwMax) || rows[rows.length-1];
+}
+
+function ccmBucket(ccm){
+  if(ccm <= 1000) return "0-1000";
+  if(ccm <= 2000) return "1000-2000";
+  if(ccm <= 3000) return "2000-3000";
+  if(ccm <= 3500) return "3000-3500";
+  return "3500+";
+}
+
+// возвращает {coefNew,sumNew,coefOld,sumOld} для категории (commercial/personal)
+function getUtilBracket(category, kw, ccm){
+  const cat = UTIL_TABLE[category];
+  const rows = (ccm === null || ccm === 0) ? cat.electric : cat.ice[ccmBucket(ccm)];
+  return findBracket(rows, kw);
+}
+
+// возраст: 'new' | 'old' | 'both'
+function ageStatus(carYear){
+  const currentYear = new Date().getFullYear();
+  const diff = currentYear - carYear;
+  if(diff > 3) return 'old';
+  if(diff < 3) return 'new';
+  return 'both';
+}
+
+function formatMoney(v){
+  return Math.round(v).toLocaleString('ru-RU') + ' ₽';
+}
+
+function calcUtilSbor(kw, ccm, carYear){
+  const age = ageStatus(carYear);
+  const commercial = getUtilBracket('commercial', kw, ccm);
+  const personal = getUtilBracket('personal', kw, ccm);
+
+  const ages = age === 'both' ? ['new','old'] : [age];
+  const results = [];
+  for(const a of ages){
+    const comSum = a === 'new' ? commercial.sumNew : commercial.sumOld;
+    const perSum = a === 'new' ? personal.sumNew : personal.sumOld;
+    results.push({
+      age: a,
+      commercialSum: comSum,
+      personalSum: perSum,
+      personalDiffers: Math.abs(comSum - perSum) > 1
+    });
+  }
+  return {results, ageAmbiguous: age === 'both'};
+}
+
+function formatUtilResult(calc, kw, ccm, carYear){
+  let html = `<b>Расчёт утильсбора</b><br>Мощность: ${kw} кВт, объём двигателя: ${ccm === null || ccm===0 ? 'электро/гибрид' : ccm + ' см³'}, год: ${carYear}<br><br>`;
+  if(calc.ageAmbiguous){
+    html += `<span style="color:var(--muted);font-size:12px;">Год ${carYear} — авто может быть как младше, так и старше 3 лет в зависимости от месяца выпуска, поэтому привожу оба варианта:</span><br><br>`;
+  }
+  const ageLabel = {new:'до 3 лет (новое)', old:'старше 3 лет'};
+  for(const r of calc.results){
+    html += `<b>${ageLabel[r.age]}:</b><br>`;
+    if(r.personalDiffers){
+      html += `Мощность ≤117,68 кВт — применяется льготная ставка для физлица: <b>${formatMoney(r.personalSum)}</b><br>`;
+      html += `<span style="color:var(--muted);font-size:12px;">Для справки: коммерческий/юрлицо — ${formatMoney(r.commercialSum)}</span><br>`;
+    } else {
+      html += `Сумма утильсбора: <b>${formatMoney(r.personalSum)}</b> <span style="color:var(--muted);font-size:12px;">(мощность выше 117,68 кВт — льготная ставка совпадает с коммерческой)</span><br>`;
+    }
+    html += `<br>`;
+  }
+  return html;
+}
+
+/* Состояние диалога: ждём ли от пользователя объём двигателя после того как показали кВт */
+let pendingUtilContext = null; // {kw, carYear, brand, model}
+
+/* ============== МОДУЛЬ СБКТС: чтение PDF, разбор полей, расчёт пеней ============== */
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+const RU_MONTHS = {
+  'январ':1,'феврал':2,'март':3,'апрел':4,'ма':5,'июн':6,'июл':7,'август':8,
+  'сентябр':9,'октябр':10,'ноябр':11,'декабр':12
+};
+function ruMonthNumber(word){
+  const w = word.toLowerCase();
+  for(const key in RU_MONTHS){ if(w.startsWith(key)) return RU_MONTHS[key]; }
+  return null;
+}
+
+async function extractPdfText(file){
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({data: buf}).promise;
+  let text = '';
+  for(let i=1; i<=pdf.numPages; i++){
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    // pdf.js возвращает отдельные текстовые фрагменты; склеиваем с переносами строк по Y-координате
+    let lastY = null, line = '';
+    for(const item of content.items){
+      if(lastY !== null && Math.abs(item.transform[5]-lastY) > 2){
+        text += line + '\n';
+        line = '';
+      }
+      line += item.str + ' ';
+      lastY = item.transform[5];
+    }
+    text += line + '\n';
+  }
+  return text;
+}
+
+function parseSbkts(text){
+  const result = {};
+  let m;
+
+  m = text.match(/МАРКА\s+(.+?)[\r\n]/);
+  if(m) result.brand = m[1].trim();
+
+  // "КОММЕРЧЕСКОЕ" и "НАИМЕНОВАНИЕ" могут быть на одной строке или разбиты pdf.js на разные —
+  // ищем модель как первую непустую строку после слова "НАИМЕНОВАНИЕ"
+  m = text.match(/КОММЕРЧЕСКОЕ[\s\S]{0,20}?НАИМЕНОВАНИЕ\s*[\r\n]+\s*(.+?)[\r\n]/);
+  if(m) result.model = m[1].trim();
+
+  m = text.match(/ГОД ВЫПУСКА\s+(\d{4})/);
+  if(m) result.year = parseInt(m[1]);
+
+  m = text.match(/КАТЕГОРИЯ\s+(\S+)/);
+  if(m) result.category = m[1].trim();
+
+  m = text.match(/Технически допустимая[\s\S]{0,80}?(\d+)\s*[\r\n]/);
+  if(m) result.maxMass = parseInt(m[1]);
+
+  m = text.match(/Масса транспортного средства[\s\S]{0,60}?(\d+)\s*[\r\n]/);
+  if(m) result.curbMass = parseInt(m[1]);
+
+  // между "цилиндров," и самим числом pdf.js часто вставляет перенос строки + единицу "см³"
+  m = text.match(/рабочий объем цилиндров,[\s\S]{0,20}?(\d+)/);
+  if(m) result.ccm = parseInt(m[1]);
+
+  // между "кВт" и числом мощности часто идёт разорванная по строкам подпись "(мин-1)"
+  m = text.match(/максимальная мощность,[\s\S]{0,60}?\)\s*[\r\n]*\s*(\d+(?:[.,]\d+)?)\s*\(/);
+  if(m) result.kw = parseFloat(m[1].replace(',', '.'));
+
+  // Максимальная 30-минутная мощность электромоторов (гибриды/электро) — может быть
+  // от одного до нескольких моторов: после метки идут несколько чисел ПОДРЯД, каждое
+  // на отдельной строке (по одному на мотор), собираем все и суммируем
+  result.electricKwList = extractAllNumbersAfterLabel(text, /Максимальная\s+30-минутная\s*мощность,\s*кВт/i);
+  if(result.electricKwList.length > 0){
+    result.electricKw = result.electricKwList.reduce((a,b)=>a+b, 0);
+  }
+
+  m = text.match(/Топливо\s+(\S+)/);
+  if(m) result.fuel = m[1].trim();
+
+  m = text.match(/Дата оформления\s*"?(\d{1,2})"?\s+([А-Яа-яЁё]+)\s+(\d{4})/);
+  if(m){
+    const day = parseInt(m[1]);
+    const monthNum = ruMonthNumber(m[2]);
+    const year = parseInt(m[3]);
+    if(monthNum) result.issueDate = new Date(Date.UTC(year, monthNum-1, day));
+  }
+
+  const lower = text.toLowerCase();
+  if(lower.includes('последовательного типа')) result.hybridType = 'sequential';
+  else if(lower.includes('параллельного типа')) result.hybridType = 'parallel';
+  else if(lower.includes('гибрид')) result.hybridType = 'unknown-hybrid';
+  else result.hybridType = null;
+
+  return result;
+}
+
+// собирает все числа, идущие подряд (каждое на своей строке) сразу после метки —
+// используется для полей, где может быть 1, 2, 3 и более значений (моторы гибрида)
+function extractAllNumbersAfterLabel(text, labelRegex, maxLines){
+  maxLines = maxLines || 10;
+  const m = labelRegex.exec(text);
+  if(!m) return [];
+  const rest = text.slice(m.index + m[0].length);
+  const lines = rest.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s.length>0);
+  const nums = [];
+  for(let i=0; i<Math.min(lines.length, maxLines); i++){
+    if(/^\d+(?:[.,]\d+)?$/.test(lines[i])){
+      nums.push(parseFloat(lines[i].replace(',', '.')));
+    } else {
+      break;
+    }
+  }
+  return nums;
+}
+
+// определяет эффективные kw/ccm для утильсбора: суммируем ДВС + ВСЕ электромоторы
+// (может быть 1, 2, 3 и более моторов — все их 30-минутные мощности складываются)
+function resolveEngineForUtil(parsed){
+  const electricSum = parsed.electricKw || 0;
+  const kw = (parsed.kw || 0) + electricSum;
+  let note = null;
+  if(electricSum > 0 && parsed.electricKwList && parsed.electricKwList.length > 0){
+    const list = parsed.electricKwList;
+    note = `Суммарная мощность: ДВС ${parsed.kw||0} кВт + ${list.length} электромотор${list.length>1?'а/ов':''} (${list.join(' + ')} кВт) = ${kw} кВт.`;
+  }
+  return {kw, ccm: parsed.ccm || null, note};
+}
+
+// точный возраст по дате (не только году) на сегодняшний день
+function preciseAgeStatus(issueDate){
+  const now = new Date();
+  const threeYearsAgo = new Date(Date.UTC(now.getUTCFullYear()-3, now.getUTCMonth(), now.getUTCDate()));
+  return issueDate.getTime() <= threeYearsAgo.getTime() ? 'old' : 'new';
+}
+
+// ============== КЛЮЧЕВАЯ СТАВКА И КАЛЕНДАРЬ ПРАЗДНИКОВ РФ ==============
+// Ставку меняем вручную здесь при изменении ЦБ РФ (актуально: 14% с 27.07.2026)
+const KEY_RATE_PERCENT = 14;
+
+// Нерабочие праздничные дни РФ на 2026 год (постановление Правительства РФ).
+// Используются ТОЛЬКО для расчёта срока подачи документов (первые 5 рабочих дней) —
+// при расчёте пеней за просрочку считаются ВСЕ календарные дни без исключений.
+// При появлении календаря на новый год — добавить сюда соответствующие даты.
+const RU_HOLIDAYS_2026 = new Set([
+  '2026-01-01','2026-01-02','2026-01-03','2026-01-04','2026-01-05','2026-01-06',
+  '2026-01-07','2026-01-08','2026-01-09','2026-01-10','2026-01-11',
+  '2026-02-23',
+  '2026-03-08','2026-03-09',
+  '2026-05-01','2026-05-02','2026-05-03',
+  '2026-05-09','2026-05-10','2026-05-11',
+  '2026-06-12','2026-06-13','2026-06-14',
+  '2026-11-04',
+  '2026-12-31'
+]);
+function isHoliday(d){
+  const iso = d.toISOString().slice(0,10);
+  return RU_HOLIDAYS_2026.has(iso);
+}
+
+// добавляет N рабочих дней (пн-пт, минус праздники РФ) к дате
+function addWorkingDays(date, n){
+  let d = new Date(date.getTime());
+  let added = 0;
+  while(added < n){
+    d = new Date(d.getTime() + 24*3600*1000);
+    const dow = d.getUTCDay();
+    if(dow !== 0 && dow !== 6 && !isHoliday(d)) added++;
+  }
+  return d;
+}
+
+function daysBetween(d1, d2){
+  return Math.round((d2.getTime() - d1.getTime()) / (24*3600*1000));
+}
+
+function formatDate(d){
+  return d.toLocaleDateString('ru-RU', {day:'2-digit', month:'2-digit', year:'numeric', timeZone:'UTC'});
+}
+
+function calcPeni(sum, keyRatePercent, daysLate){
+  if(daysLate <= 0) return 0;
+  const dailyRate = (keyRatePercent/100) / 300;
+  return sum * dailyRate * daysLate;
+}
+
+/* Состояние диалога для СБКТС-флоу */
+let pendingSbkts = null; // {parsed, engine, commercialSum, personalSum, differ, category, deadline}
+
+function calcUtilSborPrecise(kw, ccm, issueDate){
+  const age = preciseAgeStatus(issueDate); // 'new' | 'old'
+  const commercial = getUtilBracket('commercial', kw, ccm);
+  const personal = getUtilBracket('personal', kw, ccm);
+  const commercialSum = age === 'new' ? commercial.sumNew : commercial.sumOld;
+  const personalSum = age === 'new' ? personal.sumNew : personal.sumOld;
+  return {age, commercialSum, personalSum, differ: Math.abs(commercialSum-personalSum) > 1};
+}
+
+function formatSbktsExtracted(parsed, engine){
+  const rows = [
+    ['Марка', parsed.brand || '—'],
+    ['Модель', parsed.model || '—'],
+    ['Год выпуска', parsed.year || '—'],
+    ['Категория', parsed.category || '—'],
+    ['Техн. допустимая масса', (parsed.maxMass ? parsed.maxMass+' кг' : '—')],
+    ['Топливо', parsed.fuel || '—'],
+    ['Объём двигателя', parsed.ccm ? parsed.ccm+' см³' : '—'],
+    ['Мощность ДВС', parsed.kw ? parsed.kw+' кВт' : '—'],
+  ];
+  if(parsed.electricKwList && parsed.electricKwList.length === 1){
+    rows.push(['Мощность электромотора (30-мин)', parsed.electricKwList[0]+' кВт']);
+  } else if(parsed.electricKwList && parsed.electricKwList.length > 1){
+    rows.push(['Электромоторы (30-мин), кВт', parsed.electricKwList.join(' + ')+' = '+parsed.electricKw]);
+  }
+  if(parsed.hybridType) rows.push(['Тип гибрида', {sequential:'последовательный', parallel:'параллельный', 'unknown-hybrid':'гибрид (тип не определён)'}[parsed.hybridType]]);
+  rows.push(['Дата оформления СБКТС', parsed.issueDate ? formatDate(parsed.issueDate) : '—']);
+
+  let html = `<b>Данные из СБКТС распознаны:</b><table class="sbkts-field-table">`;
+  for(const [k,v] of rows) html += `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`;
+  html += `</table>`;
+  if(engine.note) html += `<br><span style="color:var(--muted);font-size:12px;">${escapeHtml(engine.note)}</span>`;
+  html += `<br><span style="color:var(--muted);font-size:12px;">Итоговая мощность для расчёта: <b>${engine.kw} кВт</b>${engine.ccm?', объём '+engine.ccm+' см³':''}</span>`;
+  return html;
+}
+
+function formatSbktsUtilAndDeadline(calc, deadline, today){
+  let html = `<br><br><b>Утильсбор</b> (возраст на сегодня — ${calc.age==='new'?'до 3 лет':'старше 3 лет'}):<br>`;
+  if(calc.differ){
+    html += `Мощность ≤117,68 кВт — применяется льготная ставка для физлица (личное пользование): <b style="color:var(--accent);">${formatMoney(calc.personalSum)}</b><br>`;
+    html += `<span style="color:var(--muted);font-size:12px;">Для справки: коммерческий/юрлицо ставка выше — ${formatMoney(calc.commercialSum)}</span><br>`;
+  } else {
+    html += `Сумма утильсбора: <b>${formatMoney(calc.personalSum)}</b> <span style="color:var(--muted);font-size:12px;">(мощность выше 117,68 кВт — льготная ставка совпадает с коммерческой)</span><br>`;
+  }
+  html += `<br>Срок подачи документов и уплаты: <b>5 рабочих дней</b> с даты оформления СБКТС (праздники РФ учтены).<br>Крайний срок: <b>${formatDate(deadline)}</b><br>`;
+  return html;
+}
+
+function finalizePeniReport(sum, deadline){
+  const today = todayUTC();
+  const daysToday = daysBetween(deadline, today);
+
+  let html = `<b>Пени (ключевая ставка ЦБ ${KEY_RATE_PERCENT}%, 1/300 в день)</b><br>`;
+
+  if(daysToday <= 0){
+    html += `Срок ещё не наступил (сегодня ${formatDate(today)}, крайний срок ${formatDate(deadline)}) — пени нет.`;
+    return html;
+  }
+
+  const peniPerDay = calcPeni(sum, KEY_RATE_PERCENT, 1);
+  const peniToday = calcPeni(sum, KEY_RATE_PERCENT, daysToday);
+
+  html += `Просрочка на сегодня (${formatDate(today)}): <b>${daysToday}</b> календарных дн.<br>`;
+  html += `Пени за один день: <b>${formatMoney(peniPerDay)}</b><br>`;
+  html += `Пени накоплено на сегодня: <b style="color:var(--accent);">${formatMoney(peniToday)}</b><br>`;
+  html += `<b>Итого к оплате на сегодня: ${formatMoney(sum+peniToday)}</b>`;
+  html += `<br><br><span style="color:var(--muted);font-size:12px;">Ставку меняем в коде вручную при изменении ЦБ РФ (сейчас ${KEY_RATE_PERCENT}%).</span>`;
+  return html;
+}
+
+function todayUTC(){
+  const n = new Date();
+  return new Date(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()));
+}
+
+function startSbktsFlow(parsed){
+  const engine = resolveEngineForUtil(parsed);
+  if(!parsed.issueDate){
+    addBotMessage('Не удалось найти дату оформления СБКТС в документе — не могу рассчитать срок и пени. Проверьте, что PDF содержит текстовый слой (не скан).');
+    return;
+  }
+  if(!engine.kw){
+    addBotMessage('Не удалось найти мощность двигателя в документе. Проверьте формат файла.');
+    return;
+  }
+  const calc = calcUtilSborPrecise(engine.kw, engine.ccm, parsed.issueDate);
+  const deadline = addWorkingDays(parsed.issueDate, 5);
+  addBotMessage(formatSbktsExtracted(parsed, engine) + formatSbktsUtilAndDeadline(calc, deadline, todayUTC()));
+
+  // льготная ставка для физлица применяется автоматически (до порога мощности она ниже,
+  // выше порога совпадает с коммерческой — так устроена сама таблица ставок)
+  addBotMessage(finalizePeniReport(calc.personalSum, deadline));
+}
+
+document.getElementById('pdfInput').addEventListener('change', async function(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  addUserMessage('📄 ' + file.name);
+  const loadingMsg = addBotMessage('Читаю СБКТС…');
+  try{
+    const text = await extractPdfText(file);
+    const parsed = parseSbkts(text);
+    loadingMsg.remove();
+    startSbktsFlow(parsed);
+  }catch(err){
+    loadingMsg.remove();
+    addBotMessage('Не удалось прочитать PDF: ' + escapeHtml(String(err.message||err)) + '. Убедитесь, что это текстовый PDF (не скан/фото).');
+  }
+  e.target.value = '';
+});
+
+
+// топ-N похожих марок (без порога, просто ближайшие по расстоянию)
+function suggestBrands(input, topN){
+  const candidates_ = hasCyrillic(input) ? [transliterate(input), layoutConvert(input), input.toLowerCase()] : [input.toLowerCase()];
+  const scored = DB.brands.map((b, idx) => {
+    const bl = b.toLowerCase();
+    let best = Infinity;
+    for(const c of candidates_){ const d = levenshtein(c, bl); if(d<best) best=d; }
+    return {idx, name:b, dist:best};
+  });
+  scored.sort((a,b)=>a.dist-b.dist);
+  return scored.slice(0, topN);
+}
+
+// топ-N похожих моделей внутри марки
+function suggestModels(input, brandIdx, topN){
+  const modelIdxSet = new Set(DB.rows.filter(r=>r[0]===brandIdx).map(r=>r[1]));
+  const candidates_ = hasCyrillic(input) ? [transliterate(input), layoutConvert(input), input.toLowerCase()] : [input.toLowerCase()];
+  const scored = Array.from(modelIdxSet).map(mi => {
+    const ml = DB.models[mi].toLowerCase();
+    let best = Infinity;
+    for(const c of candidates_){ const d = levenshtein(c, ml); if(d<best) best=d; }
+    return {idx:mi, name:DB.models[mi], dist:best};
+  });
+  scored.sort((a,b)=>a.dist-b.dist);
+  return scored.slice(0, topN);
+}
+
+function allModelsForBrand(brandIdx){
+  const modelIdxSet = new Set(DB.rows.filter(r=>r[0]===brandIdx).map(r=>r[1]));
+  return Array.from(modelIdxSet).map(mi => DB.models[mi]).sort();
+}
+
+// row: [brandIdx, modelIdx, year, ecoIdx, power_kw, power30, max_mass, mass_low, mass_high]
+// возвращает {status:'ok', rows} | {status:'brand_not_found', suggestions} | {status:'model_not_found', brandIdx, brandName, suggestions}
+function findRowsEx(brand, model, year){
+  const bIdx = resolveBrand(brand);
+  if(bIdx === -1){
+    return {status:'brand_not_found', suggestions: suggestBrands(brand, 5)};
+  }
+  const mIdx = resolveModel(model, bIdx);
+  if(mIdx === -1){
+    const suggestions = suggestModels(model, bIdx, 8);
+    return {status:'model_not_found', brandIdx: bIdx, brandName: DB.brands[bIdx], suggestions};
+  }
+  const allForModel = DB.rows.filter(r => r[0]===bIdx && r[1]===mIdx);
+  const rows = allForModel.filter(r => r[2]===year);
+  if(rows.length === 0 && allForModel.length > 0){
+    const years = Array.from(new Set(allForModel.map(r=>r[2]))).sort((a,b)=>Math.abs(a-year)-Math.abs(b-year));
+    return {status:'year_not_found', brandIdx: bIdx, brandName: DB.brands[bIdx], modelName: DB.models[mIdx], nearbyYears: years.slice(0,2)};
+  }
+  return {status:'ok', rows, brandName: DB.brands[bIdx], modelName: DB.models[mIdx]};
+}
+
+function findRows(brand, model, year){
+  const res = findRowsEx(brand, model, year);
+  return res.status === 'ok' ? res.rows : null;
+}
+
+function totalKw(r){
+  const p = (r[4] !== null && r[4] !== undefined) ? r[4] : 0;
+  const p30 = r[5];
+  return (p30 !== null && p30 !== undefined) ? +(p+p30).toFixed(2) : p;
+}
+
+function kwToHp(kw){
+  return Math.round(kw * 1.35962);
+}
+
+function dedupByKw(rows){
+  const seen = new Map();
+  for(const r of rows){
+    const k = totalKw(r);
+    if(!seen.has(k)) seen.set(k, r);
+  }
+  return Array.from(seen.values());
+}
+
+function dedupByKwMass(rows){
+  const seen = new Map();
+  for(const r of rows){
+    const key = totalKw(r) + '_' + r[6];
+    if(!seen.has(key)) seen.set(key, r);
+  }
+  return Array.from(seen.values());
+}
+
+function listAllVariants(brand, model, year){
+  const ex = findRowsEx(brand, model, year);
+  if(ex.status === 'brand_not_found') return {status:'brand_not_found', suggestions: ex.suggestions};
+  if(ex.status === 'model_not_found') return {status:'model_not_found', brandName: ex.brandName, brandIdx: ex.brandIdx, suggestions: ex.suggestions};
+  if(ex.status === 'year_not_found') return ex;
+  const uniq = dedupByKwMass(ex.rows).sort((a,b)=> (a[6]||0) - (b[6]||0));
+  return {status:'list', variants: uniq, brandName: ex.brandName, modelName: ex.modelName};
+}
+
+function search(brand, model, year, weight){
+  const ex = findRowsEx(brand, model, year);
+  if(ex.status === 'brand_not_found'){
+    return {status:'brand_not_found', suggestions: ex.suggestions};
+  }
+  if(ex.status === 'model_not_found'){
+    return {status:'model_not_found', brandName: ex.brandName, brandIdx: ex.brandIdx, suggestions: ex.suggestions};
+  }
+  if(ex.status === 'year_not_found'){
+    return ex;
+  }
+  const rows = ex.rows;
+  const brandName = ex.brandName, modelName = ex.modelName;
+  if(rows.length === 0){
+    return {status:'not_found', reason:'year'};
+  }
+
+  // 1. точное совпадение по массе
+  const exact = rows.filter(r => r[6] !== null && Math.abs(r[6]-weight) < 1e-6);
+  if(exact.length > 0){
+    const uniq = dedupByKw(exact);
+    if(uniq.length === 1){
+      return {status:'exact', row:uniq[0], brandName, modelName};
+    }
+    return {status:'multiple', variants: uniq.sort((a,b)=>totalKw(a)-totalKw(b)), brandName, modelName};
+  }
+
+  // 2. диапазон нижний/верхний предел
+  const inRange = rows.filter(r => r[7] !== null && r[8] !== null && weight >= r[7] && weight <= r[8]);
+  if(inRange.length === 0){
+    return {status:'not_found', reason:'weight'};
+  }
+  const uniqRange = dedupByKw(inRange);
+  if(uniqRange.length === 1){
+    return {status:'range_match', row: uniqRange[0], brandName, modelName};
+  }
+  return {status:'multiple_range', variants: uniqRange.sort((a,b)=>totalKw(a)-totalKw(b)), brandName, modelName};
+}
+
+/* ============== UI ============== */
+const chat = document.getElementById('chat');
+
+function scrollDown(){ chat.scrollTop = chat.scrollHeight; }
+
+function addUserMessage(text){
+  const div = document.createElement('div');
+  div.className = 'msg user';
+  div.textContent = text;
+  chat.appendChild(div);
+  scrollDown();
+  if(!isRestoringChat){ chatTranscript.push({role:'user', html: escapeHtml(text)}); scheduleSaveChat(); }
+}
+
+function addBotMessage(html){
+  const div = document.createElement('div');
+  div.className = 'msg bot';
+  div.innerHTML = html;
+  chat.appendChild(div);
+  scrollDown();
+  if(!isRestoringChat){
+    chatTranscript.push({role:'bot', html: html});
+    const tIndex = chatTranscript.length - 1;
+    const origRemove = div.remove.bind(div);
+    div.remove = function(){
+      if(chatTranscript[tIndex]) chatTranscript[tIndex] = null; // временное сообщение (например «Читаю СБКТС…») не сохраняем
+      scheduleSaveChat();
+      origRemove();
+    };
+    scheduleSaveChat();
+  }
+  return div;
+}
+
+// клик по кликабельной строке варианта (.variant-row) — мощность уже известна из самой строки,
+// поэтому сразу показываем результат и спрашиваем объём двигателя (без повторного поиска)
+chat.addEventListener('click', function(e){
+  const volEl = e.target.closest('.volume-chip');
+  if(volEl){
+    if(!pendingUtilContext) return; // на всякий случай, если контекст уже сброшен
+    const ccm = volEl.dataset.ccm === 'electro' ? null : parseInt(volEl.dataset.ccm);
+    addUserMessage(volEl.textContent);
+    const calc = calcUtilSbor(pendingUtilContext.kw, ccm, pendingUtilContext.carYear);
+    addBotMessage(formatUtilResult(calc, pendingUtilContext.kw, ccm, pendingUtilContext.carYear));
+    pendingUtilContext = null;
+    return;
+  }
+  const suggestionEl = e.target.closest('.suggestion-chip');
+  if(suggestionEl){
+    const brand = suggestionEl.dataset.brand, model = suggestionEl.dataset.model, year = suggestionEl.dataset.year;
+    const input = document.getElementById('textInput');
+    input.value = `${brand} ${model} ${year}`;
+    document.getElementById('inputForm').dispatchEvent(new Event('submit'));
+    return;
+  }
+  const el = e.target.closest('.variant-row');
+  if(!el) return;
+  const brand = el.dataset.brand, model = el.dataset.model, year = parseInt(el.dataset.year);
+  const kw = parseFloat(el.dataset.kw);
+  const mass = el.dataset.mass && el.dataset.mass !== 'null' && el.dataset.mass !== 'undefined' ? el.dataset.mass : null;
+  const hp = kwToHp(kw);
+
+  addUserMessage(`${brand} ${model} ${year}${mass?', '+mass+' кг':''}`);
+  addBotMessage(`<b>${escapeHtml(brand)} ${escapeHtml(model)} ${year}</b>${mass?', масса '+mass+' кг':''}<br><br>Мощность: <b style="font-size:18px;">${kw} кВт / ${hp} л.с.</b>`);
+  pendingUtilContext = {kw, carYear: year};
+  addBotMessage(`Чтобы рассчитать утильсбор, укажите <b>объём двигателя</b> — в см³ (например 1998) или в литрах (например 2 или 2.0), либо нажмите подходящую группу:${volumeBucketChipsHtml()}`);
+});
+
+function formatVariantsTable(variants, brand, model, year, weight){
+  let html = `Найдено ${variants.length} модификации для <b>${escapeHtml(brand)} ${escapeHtml(model)} ${year}</b> при массе ${weight} кг — уточните какая у вас:<br><table><tr><th>Мощность</th><th>Макс. масса, кг</th></tr>`;
+  for(const r of variants){
+    const kw = totalKw(r); const hp = kwToHp(kw);
+    const kwLabel = (r[5]!==null && r[5]!==undefined) ? `${r[4]} + ${r[5]} = <b>${kw} кВт</b> / ${hp} л.с.` : `<b>${kw} кВт</b> / ${hp} л.с.`;
+    html += `<tr class="variant-row" data-brand="${escapeAttr(brand)}" data-model="${escapeAttr(model)}" data-year="${year}" data-kw="${kw}" data-mass="${r[6]}" style="cursor:pointer;"><td>${kwLabel}</td><td>${r[6]}</td></tr>`;
+  }
+  html += `</table>`;
+  return html;
+}
+
+function formatVariantsList(variants, brand, model, year){
+  let html = `<b>${escapeHtml(brand)} ${escapeHtml(model)} ${year}</b> — найдено ${variants.length} вариант(а/ов). Сверьте вес с шильдика вашего авто:<br><br>`;
+  for(const r of variants){
+    const kw = totalKw(r);
+    const hp = kwToHp(kw);
+    const mass = r[6] !== null && r[6] !== undefined ? `${r[6]} кг` : '—';
+    html += `<div class="variant-row" data-brand="${escapeAttr(brand)}" data-model="${escapeAttr(model)}" data-year="${year}" data-kw="${kw}" data-mass="${r[6]}" style="cursor:pointer; padding:4px 0;">${kw} кВт/${hp} л.с. — ${mass}</div>`;
+  }
+  html += `<br><span style="color:var(--muted);font-size:12px;">Для точного выбора посмотрите на шильдике вес автомобиля и нажмите на нужную модификацию.</span>`;
+  return html;
+}
+
+function suggestionChipsHtml(items){
+  let html = `<div class="chip-row">`;
+  for(const it of items){
+    html += `<div class="chip suggestion-chip" data-brand="${escapeAttr(it.brand)}" data-model="${escapeAttr(it.model)}" data-year="${it.year}">${escapeHtml(it.label)}</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+function notFoundMessage(res, brand, model, year){
+  if(res.status === 'brand_not_found'){
+    const items = res.suggestions.map(s => ({brand:s.name, model:model, year, label:s.name}));
+    return `Не нашёл марку «${escapeHtml(brand)}». Возможно, вы имели в виду:${suggestionChipsHtml(items)}`;
+  }
+  if(res.status === 'model_not_found'){
+    const close = res.suggestions.filter(s => s.dist <= Math.max(3, Math.floor(s.name.length*0.5)));
+    if(close.length > 0){
+      const items = close.map(s => ({brand: res.brandName, model:s.name, year, label:s.name}));
+      return `У марки <b>${escapeHtml(res.brandName)}</b> не нашёл модель «${escapeHtml(model)}». Похожие модели:${suggestionChipsHtml(items)}`;
+    }
+    const all = allModelsForBrand(res.brandIdx);
+    const items = all.slice(0, 60).map(m => ({brand: res.brandName, model:m, year, label:m}));
+    const more = all.length > 60 ? `<br><span style="color:var(--muted);font-size:12px;">и ещё ${all.length-60}…</span>` : '';
+    return `У марки <b>${escapeHtml(res.brandName)}</b> не нашёл модель «${escapeHtml(model)}». Вот все модели этой марки в справочнике:${suggestionChipsHtml(items)}${more}`;
+  }
+  if(res.status === 'year_not_found'){
+    const items = res.nearbyYears.map(y => ({brand: res.brandName, model: res.modelName, year: y, label: String(y)}));
+    return `Для <b>${escapeHtml(res.brandName)} ${escapeHtml(res.modelName)}</b> нет данных за ${year} год. Ближайшие годы, которые есть в справочнике:${suggestionChipsHtml(items)}`;
+  }
+  return '';
+}
+
+function escapeAttr(s){
+  return String(s).replace(/"/g,'&quot;');
+}
+
+function escapeHtml(s){
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+function handleResult(res, brand, model, year, weight){
+  if(res.status === 'brand_not_found' || res.status === 'model_not_found' || res.status === 'year_not_found'){
+    addBotMessage(notFoundMessage(res, brand, model, year));
+    return;
+  }
+  const bName = res.brandName || brand, mName = res.modelName || model;
+  if(res.status === 'not_found' && res.reason === 'weight'){
+    addBotMessage(`Вес ${weight} кг не попадает ни в один диапазон масс для ${escapeHtml(bName)} ${escapeHtml(mName)} ${year}. Проверьте значение массы (обычно это «технически допустимая максимальная масса» с шильдика).`);
+    return;
+  }
+  if(res.status === 'exact' || res.status === 'range_match'){
+    const r = res.row;
+    const note = res.status === 'range_match' ? `<br><span style="color:var(--muted);font-size:12px;">точного совпадения по массе не было, попадает в диапазон ${r[7]}–${r[8]} кг</span>` : '';
+    let kwBreakdown = '';
+    if(r[5]!==null && r[5]!==undefined){
+      if(r[4]!==null && r[4]!==undefined){
+        kwBreakdown = `<br><span style="color:var(--muted);font-size:12px;">(${r[4]} кВт максимальная + ${r[5]} кВт 30-минутная)</span>`;
+      } else {
+        kwBreakdown = `<br><span style="color:var(--muted);font-size:12px;">Максимальная мощность в справочнике не указана — использована только 30-минутная мощность (${r[5]} кВт). Возможен пробел в исходных данных, сверьте с ПТС/шильдиком.</span>`;
+      }
+    }
+    const kw = totalKw(r); const hp = kwToHp(kw);
+    addBotMessage(`<b>${escapeHtml(bName)} ${escapeHtml(mName)} ${year}</b>, масса ${weight} кг<br><br>Мощность: <b style="font-size:18px;">${kw} кВт / ${hp} л.с.</b>${kwBreakdown}${note}`);
+    pendingUtilContext = {kw, carYear: year};
+    addBotMessage(`Чтобы рассчитать утильсбор, укажите <b>объём двигателя</b> — в см³ (например 1998) или в литрах (например 2 или 2.0), либо нажмите подходящую группу:${volumeBucketChipsHtml()}`);
+    return;
+  }
+  if(res.status === 'multiple' || res.status === 'multiple_range'){
+    addBotMessage(formatVariantsTable(res.variants, bName, mName, year, weight));
+    return;
+  }
+}
+
+function parseInput(text){
+  // Пытаемся вытащить год (4 цифры), и опционально вес (следующее число после года)
+  const yearMatch = text.match(/\b(19|20)\d{2}\b/);
+  if(!yearMatch) return null;
+  const year = parseInt(yearMatch[0]);
+
+  let namepart = text.slice(0, text.indexOf(yearMatch[0])).trim();
+  namepart = namepart.replace(/,/g,' ').replace(/\s+/g,' ').trim();
+  const words = namepart.split(' ').filter(Boolean);
+  if(words.length < 2) return null;
+  const brand = words[0];
+  const model = words.slice(1).join(' ');
+
+  // ищем вес только в остатке ПОСЛЕ года
+  const afterYear = text.slice(text.indexOf(yearMatch[0]) + yearMatch[0].length);
+  const weightMatch = afterYear.match(/\d{3,5}/);
+  const weight = weightMatch ? parseInt(weightMatch[0]) : null;
+
+  return {brand, model, year, weight};
+}
+
+document.getElementById('inputForm').addEventListener('submit', function(e){
+  e.preventDefault();
+  const input = document.getElementById('textInput');
+  const text = input.value.trim();
+  if(!text) return;
+  addUserMessage(text);
+  input.value = '';
+
+  // если бот ждёт объём двигателя — считаем утильсбор
+  // НО: если пользователь вместо ответа ввёл новый запрос (марка+модель+год с реальной
+  // маркой из справочника) — это явно новый поиск, а не объём, сбрасываем ожидание
+  if(pendingUtilContext){
+    const maybeNewQuery = parseInput(text);
+    const looksLikeNewSearch = maybeNewQuery && resolveBrand(maybeNewQuery.brand) !== -1;
+    if(!looksLikeNewSearch){
+      const parsedVol = parseEngineVolume(text);
+      if(!parsedVol.ok){
+        addBotMessage(parsedVol.error + volumeBucketChipsHtml());
+        return; // pendingUtilContext сохраняется, ждём выбор группы или новый ввод
+      }
+      const ccm = parsedVol.ccm;
+      const calc = calcUtilSbor(pendingUtilContext.kw, ccm, pendingUtilContext.carYear);
+      addBotMessage(formatUtilResult(calc, pendingUtilContext.kw, ccm, pendingUtilContext.carYear));
+      pendingUtilContext = null;
+      return;
+    }
+    // распознали новый запрос — сбрасываем ожидание объёма и продолжаем как обычный поиск
+    pendingUtilContext = null;
+  }
+
+  const parsed = parseInput(text);
+  if(!parsed){
+    addBotMessage('Не смог разобрать запрос. Формат: <b>Марка Модель Год</b> (вес — по желанию, для точного ответа)<br>Например: <i>Mazda CX-5 2026</i> или <i>Mazda CX-5 2026 2143</i>');
+    return;
+  }
+
+  if(parsed.weight === null){
+    const res = listAllVariants(parsed.brand, parsed.model, parsed.year);
+    if(res.status === 'brand_not_found' || res.status === 'model_not_found' || res.status === 'year_not_found'){
+      addBotMessage(notFoundMessage(res, parsed.brand, parsed.model, parsed.year));
+      return;
+    }
+    if(res.variants.length === 1){
+      const r = res.variants[0];
+      const kw = totalKw(r); const hp = kwToHp(kw);
+      let kwBreakdown = '';
+    if(r[5]!==null && r[5]!==undefined){
+      if(r[4]!==null && r[4]!==undefined){
+        kwBreakdown = `<br><span style="color:var(--muted);font-size:12px;">(${r[4]} кВт максимальная + ${r[5]} кВт 30-минутная)</span>`;
+      } else {
+        kwBreakdown = `<br><span style="color:var(--muted);font-size:12px;">Максимальная мощность в справочнике не указана — использована только 30-минутная мощность (${r[5]} кВт). Возможен пробел в исходных данных, сверьте с ПТС/шильдиком.</span>`;
+      }
+    }
+      addBotMessage(`<b>${escapeHtml(res.brandName)} ${escapeHtml(res.modelName)} ${parsed.year}</b>${r[6]?', масса '+r[6]+' кг':''}<br><br>Мощность: <b style="font-size:18px;">${kw} кВт / ${hp} л.с.</b>${kwBreakdown}`);
+      pendingUtilContext = {kw, carYear: parsed.year};
+      addBotMessage(`Чтобы рассчитать утильсбор, укажите <b>объём двигателя</b> — в см³ (например 1998) или в литрах (например 2 или 2.0), либо нажмите подходящую группу:${volumeBucketChipsHtml()}`);
+      return;
+    }
+    addBotMessage(formatVariantsList(res.variants, res.brandName, res.modelName, parsed.year));
+    return;
+  }
+
+  const res = search(parsed.brand, parsed.model, parsed.year, parsed.weight);
+  handleResult(res, parsed.brand, parsed.model, parsed.year, parsed.weight);
+});
+
+// восстановление переписки из облака Telegram (CloudStorage), либо приветствие с нуля
+async function initChat(){
+  let restored = null;
+  try{ restored = await loadChatState(); }catch(e){ console.warn(e); }
+
+  if(restored && restored.t && restored.t.length){
+    isRestoringChat = true;
+    chat.innerHTML = '';
+    for(const m of restored.t){
+      const div = document.createElement('div');
+      div.className = m.role === 'user' ? 'msg user' : 'msg bot';
+      div.innerHTML = m.html;
+      chat.appendChild(div);
+    }
+    chatTranscript = restored.t.slice();
+    pendingUtilContext = restored.p || null;
+    isRestoringChat = false;
+    scrollDown();
+  } else {
+    addBotMessage(WELCOME_HTML);
+  }
+
+  const statusEl = document.getElementById('status');
+  const inputEl = document.getElementById('textInput');
+  if(statusEl) statusEl.textContent = 'Загрузка базы…';
+  if(inputEl) inputEl.placeholder = 'Загружаем базу авто, подождите…';
+
+  const ratesPromise = loadRates().catch(e => {
+    addBotMessage(`Не удалось загрузить таблицу ставок (${escapeHtml(RATES_FILE)}): ${escapeHtml(e.message)}. Проверьте, что файл лежит рядом с index.html.`);
+    console.error(e);
+  });
+  const dbPromise = loadDB();
+
+  Promise.all([ratesPromise, dbPromise]).then(() => {
+    if(statusEl) statusEl.textContent = '';
+    if(inputEl) inputEl.placeholder = '';
+  });
+}
+
+initChat();
+</script>
+</body>
+</html>
