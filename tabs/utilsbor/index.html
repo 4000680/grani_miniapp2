@@ -33,7 +33,7 @@
   body{
     margin:0; background:var(--bg); color:var(--text);
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    height:100vh; height:100dvh; display:flex; flex-direction:column; overflow:hidden;
+    height:100vh; height:100dvh; display:flex; flex-direction:column; overflow:hidden; position:relative;
   }
   header{
     padding:14px 16px; background:var(--panel); border-bottom:1px solid var(--border);
@@ -51,6 +51,15 @@
   #chat{
     flex:1; min-height:0; min-width:0; overflow-y:auto; overflow-x:hidden; padding:16px; display:flex; flex-direction:column; gap:10px; scroll-behavior:smooth; scroll-padding-top:10px;
   }
+  #scrollDownBtn{
+    position:absolute; right:16px; bottom:calc(76px + env(safe-area-inset-bottom)); z-index:5;
+    width:40px; height:40px; border-radius:50%; border:1px solid var(--border);
+    background:var(--panel); color:var(--accent); box-shadow:0 3px 12px rgba(0,0,0,0.16);
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+    opacity:0; visibility:hidden; transform:translateY(6px); pointer-events:none;
+    transition:opacity 0.15s, transform 0.15s, visibility 0.15s;
+  }
+  #scrollDownBtn.visible{opacity:1;visibility:visible;transform:translateY(0);pointer-events:auto;}
   .msg{flex:0 0 auto;max-width:88%; min-width:0; padding:10px 14px; border-radius:var(--radius); font-size:14px; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere;}
   .msg.is-new{animation:message-in 180ms ease-out both;transform-origin:bottom left;}
   .msg.user.is-new{transform-origin:bottom right;}
@@ -121,6 +130,9 @@
 </header>
 
 <div id="chat"></div>
+<button id="scrollDownBtn" type="button" aria-label="Прокрутить переписку вниз" title="Ниже есть информация">
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
+</button>
 
 <div id="inputBar">
   <form id="inputForm">
@@ -213,7 +225,7 @@ function scheduleSaveChat(){
 async function saveChatState(){
   try{
     const trimmed = chatTranscript.filter(m => m !== null).slice(-50);
-    const state = { t: trimmed, p: pendingUtilContext };
+    const state = { t: trimmed, p: pendingUtilContext, d: pendingPeniContext };
     const json = JSON.stringify(state);
     let b64;
     if(window.pako){
@@ -278,6 +290,7 @@ document.getElementById('resetChatBtn').addEventListener('click', async function
   await clearChatState();
   chatTranscript = [];
   pendingUtilContext = null;
+  pendingPeniContext = null;
   document.getElementById('chat').innerHTML = '';
   addBotMessage(WELCOME_HTML);
 });
@@ -978,6 +991,7 @@ function calcPeniByRatePeriods(sum, deadline, today){
 
 /* Состояние диалога для СБКТС-флоу */
 let pendingSbkts = null; // {parsed, engine, commercialSum, personalSum, differ, category, deadline}
+let pendingPeniContext = null; // {deadline:'YYYY-MM-DD', cases:[{label, sum}]}
 
 function calcUtilSborForSbkts(kw, ccm, carYear){
   // Возраст автомобиля определяется по году выпуска, а не по дате оформления СБКТС.
@@ -1033,24 +1047,26 @@ function formatSbktsUtilAndDeadline(calc, carYear, deadline){
   return html;
 }
 
-function finalizePeniReport(sum, deadline){
-  const today = todayUTC();
-  const daysToday = daysBetween(deadline, today);
+function finalizePeniReport(sum, deadline, calculationDate){
+  const targetDate = calculationDate || todayUTC();
+  const isToday = targetDate.getTime() === todayUTC().getTime();
+  const targetLabel = isToday ? 'сегодня' : `дату ${formatDate(targetDate)}`;
+  const daysLate = daysBetween(deadline, targetDate);
 
   let html = `<b>Пени (1/300 ключевой ставки ЦБ за каждый день)</b><br>`;
 
-  if(daysToday <= 0){
-    html += `Срок ещё не наступил (сегодня ${formatDate(today)}, крайний срок ${formatDate(deadline)}) — пени нет.`;
+  if(daysLate <= 0){
+    html += `На ${formatDate(targetDate)} срок ещё не наступил (крайний срок ${formatDate(deadline)}) — пени нет.`;
     return html;
   }
 
-  const result = calcPeniByRatePeriods(sum, deadline, today);
+  const result = calcPeniByRatePeriods(sum, deadline, targetDate);
   if(result.unsupportedBefore){
     html += `Дата просрочки раньше сохранённой истории ставок (01.01.2023). Для точного расчёта нужно добавить более ранние ставки ЦБ.`;
     return html;
   }
 
-  html += `Просрочка на сегодня (${formatDate(today)}): <b>${daysToday}</b> календарных дн.<br><br>`;
+  html += `Просрочка на ${targetLabel}: <b>${daysLate}</b> календарных дн.<br><br>`;
   html += `<b>Расчёт по периодам:</b><br>`;
   for(const period of result.periods){
     const dateRange = period.from.getTime() === period.to.getTime()
@@ -1060,18 +1076,37 @@ function finalizePeniReport(sum, deadline){
     html += `<span style="font-size:13px;">${dateRange} — ${rateLabel}%, ${period.days} дн.: <b>${formatMoneyPrecise(period.amount)}</b></span><br>`;
   }
 
-  const todayRate = keyRateForDate(today);
-  const peniPerDay = sum * (todayRate/100) / 300;
-  html += `<br>Пени за один день по текущей ставке ${todayRate.toLocaleString('ru-RU')}%: <b>${formatMoneyPrecise(peniPerDay)}</b><br>`;
-  html += `Пени накоплено на сегодня: <b style="color:var(--accent);">${formatMoneyPrecise(result.total)}</b><br>`;
-  html += `<b>Итого к оплате на сегодня: ${formatMoneyPrecise(sum+result.total)}</b>`;
+  const targetRate = keyRateForDate(targetDate);
+  const peniPerDay = sum * (targetRate/100) / 300;
+  html += `<br>Пени за один день по ставке ${targetRate.toLocaleString('ru-RU')}%: <b>${formatMoneyPrecise(peniPerDay)}</b><br>`;
+  html += `Пени накоплено на ${targetLabel}: <b style="color:var(--accent);">${formatMoneyPrecise(result.total)}</b><br>`;
+  html += `<b>Итого к оплате на ${targetLabel}: ${formatMoneyPrecise(sum+result.total)}</b>`;
   html += `<br><br><span style="color:var(--muted);font-size:12px;">Текущая ставка задаётся вручную в коде: ${CURRENT_KEY_RATE_PERCENT}% с ${formatDate(new Date(CURRENT_KEY_RATE_FROM+'T00:00:00Z'))}. Прошлые периоды рассчитаны по ставкам, действовавшим в соответствующие даты.</span>`;
+  if(!isToday && targetDate > todayUTC()){
+    html += `<br><span style="color:var(--muted);font-size:12px;">Будущие дни рассчитаны по текущей ставке ${CURRENT_KEY_RATE_PERCENT}%. Если ставка ЦБ изменится, итог нужно пересчитать.</span>`;
+  }
   return html;
 }
 
 function todayUTC(){
   const n = new Date();
   return new Date(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()));
+}
+
+function parsePlannedDate(text){
+  const value = text.trim();
+  let m = value.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4})$/);
+  let year, month, day;
+  if(m){
+    day = Number(m[1]); month = Number(m[2]); year = Number(m[3]);
+  } else {
+    m = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if(!m) return null;
+    year = Number(m[1]); month = Number(m[2]); day = Number(m[3]);
+  }
+  const date = new Date(Date.UTC(year, month-1, day));
+  if(date.getUTCFullYear() !== year || date.getUTCMonth() !== month-1 || date.getUTCDate() !== day) return null;
+  return date;
 }
 
 function startSbktsFlow(parsed){
@@ -1099,6 +1134,15 @@ function startSbktsFlow(parsed){
     const prefix = calc.ageAmbiguous ? `<b>Вариант «${ageLabel[r.age]}»</b><br>` : '';
     addBotMessage(prefix + finalizePeniReport(r.personalSum, deadline));
   }
+  pendingPeniContext = {
+    deadline: deadline.toISOString().slice(0,10),
+    cases: calc.results.map(r => ({
+      label: calc.ageAmbiguous ? ageLabel[r.age] : '',
+      sum: r.personalSum
+    }))
+  };
+  addBotMessage('Планируете подать документы позже? Укажите предполагаемую дату, и я точно рассчитаю пени на этот день.<br><span style="color:var(--muted);font-size:12px;">Например: 15.09.2026</span>');
+  scheduleSaveChat();
 }
 
 document.getElementById('pdfInput').addEventListener('change', async function(e){
@@ -1255,11 +1299,24 @@ function search(brand, model, year, weight){
 
 /* ============== UI ============== */
 const chat = document.getElementById('chat');
+const scrollDownBtn = document.getElementById('scrollDownBtn');
 let currentReplyAnchor = null;
 let replyScrollFrame = null;
 
+function updateScrollDownButton(){
+  const distanceToBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight;
+  scrollDownBtn.classList.toggle('visible', distanceToBottom > 48);
+}
+
 function scrollDown(behavior){
   chat.scrollTo({top:chat.scrollHeight, behavior:behavior || 'smooth'});
+}
+
+chat.addEventListener('scroll', updateScrollDownButton, {passive:true});
+scrollDownBtn.addEventListener('click', () => scrollDown('smooth'));
+window.addEventListener('resize', updateScrollDownButton);
+if(window.ResizeObserver){
+  new ResizeObserver(updateScrollDownButton).observe(chat);
 }
 
 // Первая реплика бота после сообщения пользователя служит якорем ответа.
@@ -1278,6 +1335,7 @@ function positionReply(){
     } else {
       scrollDown('smooth');
     }
+    requestAnimationFrame(updateScrollDownButton);
   });
 }
 
@@ -1288,6 +1346,7 @@ function addUserMessage(text){
   chat.appendChild(div);
   currentReplyAnchor = null;
   scrollDown('smooth');
+  requestAnimationFrame(updateScrollDownButton);
   if(!isRestoringChat){ chatTranscript.push({role:'user', html: escapeHtml(text)}); scheduleSaveChat(); }
 }
 
@@ -1298,6 +1357,7 @@ function addBotMessage(html){
   chat.appendChild(div);
   if(!currentReplyAnchor || !currentReplyAnchor.isConnected) currentReplyAnchor = div;
   positionReply();
+  requestAnimationFrame(updateScrollDownButton);
   if(!isRestoringChat){
     chatTranscript.push({role:'bot', html: html});
     const tIndex = chatTranscript.length - 1;
@@ -1474,6 +1534,35 @@ document.getElementById('inputForm').addEventListener('submit', function(e){
   addUserMessage(text);
   input.value = '';
 
+  // После расчёта по СБКТС бот ждёт предполагаемую дату подачи документов.
+  // Новый запрос с маркой автомобиля отменяет это ожидание и обрабатывается как обычно.
+  if(pendingPeniContext){
+    const plannedDate = parsePlannedDate(text);
+    if(plannedDate){
+      if(plannedDate < todayUTC()){
+        addBotMessage('Укажите сегодняшнюю или будущую дату подачи документов.<br><span style="color:var(--muted);font-size:12px;">Например: 15.09.2026</span>');
+        return;
+      }
+      const deadline = new Date(pendingPeniContext.deadline + 'T00:00:00Z');
+      for(const item of pendingPeniContext.cases){
+        const prefix = item.label ? `<b>Вариант «${escapeHtml(item.label)}»</b><br>` : '';
+        addBotMessage(prefix + finalizePeniReport(item.sum, deadline, plannedDate));
+      }
+      pendingPeniContext = null;
+      scheduleSaveChat();
+      return;
+    }
+
+    const maybeNewQuery = parseInput(text);
+    const looksLikeNewSearch = maybeNewQuery && resolveBrand(maybeNewQuery.brand) !== -1;
+    if(!looksLikeNewSearch){
+      addBotMessage('Не смог распознать дату. Введите её в формате <b>ДД.ММ.ГГГГ</b>.<br><span style="color:var(--muted);font-size:12px;">Например: 15.09.2026</span>');
+      return;
+    }
+    pendingPeniContext = null;
+    scheduleSaveChat();
+  }
+
   // если бот ждёт объём двигателя — считаем утильсбор
   // НО: если пользователь вместо ответа ввёл новый запрос (марка+модель+год с реальной
   // маркой из справочника) — это явно новый поиск, а не объём, сбрасываем ожидание
@@ -1549,6 +1638,7 @@ async function initChat(){
     }
     chatTranscript = restored.t.slice();
     pendingUtilContext = restored.p || null;
+    pendingPeniContext = restored.d || null;
     isRestoringChat = false;
     scrollDown();
   } else {
