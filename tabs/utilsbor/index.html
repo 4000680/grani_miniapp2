@@ -1081,10 +1081,6 @@ function finalizePeniReport(sum, deadline, calculationDate){
   html += `<br>Пени за один день по ставке ${targetRate.toLocaleString('ru-RU')}%: <b>${formatMoneyPrecise(peniPerDay)}</b><br>`;
   html += `Пени накоплено на ${targetLabel}: <b style="color:var(--accent);">${formatMoneyPrecise(result.total)}</b><br>`;
   html += `<b>Итого к оплате на ${targetLabel}: ${formatMoneyPrecise(sum+result.total)}</b>`;
-  html += `<br><br><span style="color:var(--muted);font-size:12px;">Текущая ставка задаётся вручную в коде: ${CURRENT_KEY_RATE_PERCENT}% с ${formatDate(new Date(CURRENT_KEY_RATE_FROM+'T00:00:00Z'))}. Прошлые периоды рассчитаны по ставкам, действовавшим в соответствующие даты.</span>`;
-  if(!isToday && targetDate > todayUTC()){
-    html += `<br><span style="color:var(--muted);font-size:12px;">Будущие дни рассчитаны по текущей ставке ${CURRENT_KEY_RATE_PERCENT}%. Если ставка ЦБ изменится, итог нужно пересчитать.</span>`;
-  }
   return html;
 }
 
