@@ -695,6 +695,10 @@ function formatMoney(v){
   return Math.round(v).toLocaleString('ru-RU') + ' ₽';
 }
 
+function formatMoneyPrecise(v){
+  return v.toLocaleString('ru-RU', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' ₽';
+}
+
 function calcUtilSbor(kw, ccm, carYear){
   const age = ageStatus(carYear);
   const commercial = getUtilBracket('commercial', kw, ccm);
@@ -865,8 +869,35 @@ function resolveEngineForUtil(parsed){
 }
 
 // ============== КЛЮЧЕВАЯ СТАВКА И КАЛЕНДАРЬ ПРАЗДНИКОВ РФ ==============
-// Ставку меняем вручную здесь при изменении ЦБ РФ (актуально: 14% с 27.07.2026)
-const KEY_RATE_PERCENT = 14;
+// При следующем изменении ставки ЦБ сначала сохранить прежние дату и ставку
+// отдельной записью перед последней строкой KEY_RATE_PERIODS, затем поменять
+// эти две константы. Так уже прошедший период останется зафиксированным.
+const CURRENT_KEY_RATE_PERCENT = 14;
+const CURRENT_KEY_RATE_FROM = '2026-07-27';
+
+// История ключевой ставки ЦБ РФ. Дата "from" входит в период действия ставки.
+// Ставки за прошлые периоды зафиксированы и не зависят от текущей ставки.
+const KEY_RATE_PERIODS = [
+  {from:'2023-01-01', rate:7.5},
+  {from:'2023-07-24', rate:8.5},
+  {from:'2023-08-15', rate:12},
+  {from:'2023-09-18', rate:13},
+  {from:'2023-10-30', rate:15},
+  {from:'2023-12-18', rate:16},
+  {from:'2024-07-29', rate:18},
+  {from:'2024-09-16', rate:19},
+  {from:'2024-10-28', rate:21},
+  {from:'2025-06-09', rate:20},
+  {from:'2025-07-28', rate:18},
+  {from:'2025-09-15', rate:17},
+  {from:'2025-10-27', rate:16.5},
+  {from:'2025-12-22', rate:16},
+  {from:'2026-02-16', rate:15.5},
+  {from:'2026-03-23', rate:15},
+  {from:'2026-04-27', rate:14.5},
+  {from:'2026-06-22', rate:14.25},
+  {from:CURRENT_KEY_RATE_FROM, rate:CURRENT_KEY_RATE_PERCENT}
+];
 
 // Нерабочие праздничные дни РФ на 2026 год (постановление Правительства РФ).
 // Используются ТОЛЬКО для расчёта срока подачи документов (первые 5 рабочих дней) —
@@ -908,10 +939,41 @@ function formatDate(d){
   return d.toLocaleDateString('ru-RU', {day:'2-digit', month:'2-digit', year:'numeric', timeZone:'UTC'});
 }
 
-function calcPeni(sum, keyRatePercent, daysLate){
-  if(daysLate <= 0) return 0;
-  const dailyRate = (keyRatePercent/100) / 300;
-  return sum * dailyRate * daysLate;
+function keyRateForDate(date){
+  const iso = date.toISOString().slice(0,10);
+  let rate = null;
+  for(const period of KEY_RATE_PERIODS){
+    if(period.from > iso) break;
+    rate = period.rate;
+  }
+  return rate;
+}
+
+// Пени начинаются со следующего календарного дня после крайнего срока.
+// Каждый день считается по ставке, действовавшей именно в этот день.
+function calcPeniByRatePeriods(sum, deadline, today){
+  const oneDay = 24*3600*1000;
+  const firstLateDay = new Date(deadline.getTime() + oneDay);
+  const periods = [];
+  let total = 0;
+
+  for(let d = firstLateDay; d <= today; d = new Date(d.getTime() + oneDay)){
+    const rate = keyRateForDate(d);
+    if(rate === null){
+      return {periods:[], total:0, unsupportedBefore:d};
+    }
+    const amount = sum * (rate/100) / 300;
+    total += amount;
+    const last = periods[periods.length - 1];
+    if(last && last.rate === rate){
+      last.to = new Date(d.getTime());
+      last.days++;
+      last.amount += amount;
+    } else {
+      periods.push({from:new Date(d.getTime()), to:new Date(d.getTime()), rate, days:1, amount});
+    }
+  }
+  return {periods, total, unsupportedBefore:null};
 }
 
 /* Состояние диалога для СБКТС-флоу */
@@ -975,21 +1037,35 @@ function finalizePeniReport(sum, deadline){
   const today = todayUTC();
   const daysToday = daysBetween(deadline, today);
 
-  let html = `<b>Пени (ключевая ставка ЦБ ${KEY_RATE_PERCENT}%, 1/300 в день)</b><br>`;
+  let html = `<b>Пени (1/300 ключевой ставки ЦБ за каждый день)</b><br>`;
 
   if(daysToday <= 0){
     html += `Срок ещё не наступил (сегодня ${formatDate(today)}, крайний срок ${formatDate(deadline)}) — пени нет.`;
     return html;
   }
 
-  const peniPerDay = calcPeni(sum, KEY_RATE_PERCENT, 1);
-  const peniToday = calcPeni(sum, KEY_RATE_PERCENT, daysToday);
+  const result = calcPeniByRatePeriods(sum, deadline, today);
+  if(result.unsupportedBefore){
+    html += `Дата просрочки раньше сохранённой истории ставок (01.01.2023). Для точного расчёта нужно добавить более ранние ставки ЦБ.`;
+    return html;
+  }
 
-  html += `Просрочка на сегодня (${formatDate(today)}): <b>${daysToday}</b> календарных дн.<br>`;
-  html += `Пени за один день: <b>${formatMoney(peniPerDay)}</b><br>`;
-  html += `Пени накоплено на сегодня: <b style="color:var(--accent);">${formatMoney(peniToday)}</b><br>`;
-  html += `<b>Итого к оплате на сегодня: ${formatMoney(sum+peniToday)}</b>`;
-  html += `<br><br><span style="color:var(--muted);font-size:12px;">Ставку меняем в коде вручную при изменении ЦБ РФ (сейчас ${KEY_RATE_PERCENT}%).</span>`;
+  html += `Просрочка на сегодня (${formatDate(today)}): <b>${daysToday}</b> календарных дн.<br><br>`;
+  html += `<b>Расчёт по периодам:</b><br>`;
+  for(const period of result.periods){
+    const dateRange = period.from.getTime() === period.to.getTime()
+      ? formatDate(period.from)
+      : `${formatDate(period.from)}–${formatDate(period.to)}`;
+    const rateLabel = period.rate.toLocaleString('ru-RU', {maximumFractionDigits:2});
+    html += `<span style="font-size:13px;">${dateRange} — ${rateLabel}%, ${period.days} дн.: <b>${formatMoneyPrecise(period.amount)}</b></span><br>`;
+  }
+
+  const todayRate = keyRateForDate(today);
+  const peniPerDay = sum * (todayRate/100) / 300;
+  html += `<br>Пени за один день по текущей ставке ${todayRate.toLocaleString('ru-RU')}%: <b>${formatMoneyPrecise(peniPerDay)}</b><br>`;
+  html += `Пени накоплено на сегодня: <b style="color:var(--accent);">${formatMoneyPrecise(result.total)}</b><br>`;
+  html += `<b>Итого к оплате на сегодня: ${formatMoneyPrecise(sum+result.total)}</b>`;
+  html += `<br><br><span style="color:var(--muted);font-size:12px;">Текущая ставка задаётся вручную в коде: ${CURRENT_KEY_RATE_PERCENT}% с ${formatDate(new Date(CURRENT_KEY_RATE_FROM+'T00:00:00Z'))}. Прошлые периоды рассчитаны по ставкам, действовавшим в соответствующие даты.</span>`;
   return html;
 }
 
