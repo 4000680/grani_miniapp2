@@ -69,15 +69,17 @@
   }
   @media (prefers-reduced-motion:reduce){.msg.is-new{animation:none;}}
   .msg.user{align-self:flex-end; background:var(--bubble-user); color:var(--bubble-user-text); border-bottom-right-radius:4px;}
-  .msg.bot{align-self:flex-start; max-width:94%; padding-right:42px; background:var(--bubble-bot); color:var(--bubble-bot-text); border:1px solid var(--border); border-bottom-left-radius:4px;}
-  .copy-message-btn{
-    position:absolute;top:7px;right:7px;width:28px;height:28px;padding:0;border:0;border-radius:50%;
-    display:flex;align-items:center;justify-content:center;background:transparent;color:var(--muted);
-    cursor:pointer;transition:background 0.15s,color 0.15s,transform 0.1s;
+  .msg.bot{align-self:flex-start; max-width:94%; background:var(--bubble-bot); color:var(--bubble-bot-text); border:1px solid var(--border); border-bottom-left-radius:4px;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}
+  #messageCopyMenu{
+    position:fixed;z-index:30;display:none;padding:5px;border:1px solid var(--border);border-radius:12px;
+    background:var(--panel);box-shadow:0 5px 22px rgba(0,0,0,0.2);
   }
-  .copy-message-btn:hover{background:rgba(44,107,255,0.1);color:var(--accent);}
-  .copy-message-btn:active{transform:scale(0.9);}
-  .copy-message-btn.copied{background:rgba(44,107,255,0.12);color:var(--accent);font-weight:700;}
+  #messageCopyMenu.visible{display:block;}
+  #messageCopyMenu button{
+    border:0;border-radius:8px;padding:9px 13px;background:transparent;color:var(--text);
+    font:inherit;font-size:14px;white-space:nowrap;cursor:pointer;
+  }
+  #messageCopyMenu button:active{background:rgba(44,107,255,0.12);color:var(--accent);}
   .msg.bot table{border-collapse:collapse; width:100%; table-layout:fixed; margin-top:8px; font-size:13px;}
   .msg.bot th, .msg.bot td{border:1px solid var(--border); padding:5px 8px; text-align:left;}
   .msg.bot th, .msg.bot td{white-space:normal;overflow-wrap:anywhere;word-break:normal;}
@@ -141,6 +143,7 @@
 <button id="scrollDownBtn" type="button" aria-label="Прокрутить переписку вниз" title="Ниже есть информация">
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
 </button>
+<div id="messageCopyMenu" role="menu"><button id="copyWholeMessageBtn" type="button" role="menuitem">Копировать сообщение</button></div>
 
 <div id="inputBar">
   <form id="inputForm">
@@ -752,7 +755,7 @@ function formatUtilResult(calc, kw, ccm, carYear){
       html += `Мощность ≤117,68 кВт — применяется льготная ставка для физлица: <b>${formatMoney(r.personalSum)}</b><br>`;
       html += `<span style="color:var(--muted);font-size:12px;">Для справки: коммерческий/юрлицо — ${formatMoney(r.commercialSum)}</span><br>`;
     } else {
-      html += `Сумма утильсбора по общей ставке: <b>${formatMoney(r.personalSum)}</b> <span style="color:var(--muted);font-size:12px;">(мощность выше 117,68 кВт — льготная ставка для личного пользования не применяется)</span><br>`;
+      html += `Сумма утильсбора по коммерческой ставке: <b>${formatMoney(r.personalSum)}</b> <span style="color:var(--muted);font-size:12px;">(мощность выше 117,68 кВт — льготная ставка для личного пользования не применяется)</span><br>`;
     }
     html += `<br>`;
   }
@@ -1047,7 +1050,7 @@ function formatSbktsUtilAndDeadline(calc, carYear, deadline){
       html += `Мощность ≤117,68 кВт — применяется льготная ставка для физлица (личное пользование): <b style="color:var(--accent);">${formatMoney(r.personalSum)}</b><br>`;
       html += `<span style="color:var(--muted);font-size:12px;">Для справки: коммерческий/юрлицо ставка выше — ${formatMoney(r.commercialSum)}</span><br>`;
     } else {
-      html += `Сумма утильсбора по общей ставке: <b>${formatMoney(r.personalSum)}</b> <span style="color:var(--muted);font-size:12px;">(льготная ставка для личного пользования не применяется)</span><br>`;
+      html += `Сумма утильсбора по коммерческой ставке: <b>${formatMoney(r.personalSum)}</b> <span style="color:var(--muted);font-size:12px;">(льготная ставка для личного пользования не применяется)</span><br>`;
     }
     html += `<br>`;
   }
@@ -1304,8 +1307,14 @@ function search(brand, model, year, weight){
 /* ============== UI ============== */
 const chat = document.getElementById('chat');
 const scrollDownBtn = document.getElementById('scrollDownBtn');
+const messageCopyMenu = document.getElementById('messageCopyMenu');
+const copyWholeMessageBtn = document.getElementById('copyWholeMessageBtn');
 let currentReplyAnchor = null;
 let replyScrollFrame = null;
+let copyMenuTarget = null;
+let longPressTimer = null;
+let touchStartPoint = null;
+let copyMenuShownAt = 0;
 
 function updateScrollDownButton(){
   const distanceToBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight;
@@ -1354,13 +1363,8 @@ function addUserMessage(text){
   if(!isRestoringChat){ chatTranscript.push({role:'user', html: escapeHtml(text)}); scheduleSaveChat(); }
 }
 
-function copyIconHtml(){
-  return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
-}
-
-async function copyWholeMessage(message, button){
+async function copyWholeMessage(message){
   const clone = message.cloneNode(true);
-  clone.querySelectorAll('.copy-message-btn').forEach(el => el.remove());
   clone.style.position = 'fixed';
   clone.style.left = '-9999px';
   clone.style.top = '0';
@@ -1389,41 +1393,87 @@ async function copyWholeMessage(message, button){
       area.remove();
     }
     if(!copied) throw new Error('copy failed');
-    button.classList.add('copied');
-    button.textContent = '✓';
-    button.setAttribute('aria-label', 'Сообщение скопировано');
-    setTimeout(() => {
-      if(!button.isConnected) return;
-      button.classList.remove('copied');
-      button.innerHTML = copyIconHtml();
-      button.setAttribute('aria-label', 'Копировать сообщение целиком');
-    }, 1200);
+    return true;
   }catch(e){
     console.warn('Не удалось скопировать сообщение:', e);
+    return false;
   }
 }
 
-function addCopyButton(message){
-  if(!message.classList.contains('bot') || message.querySelector('.copy-message-btn')) return;
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'copy-message-btn';
-  button.setAttribute('aria-label', 'Копировать сообщение целиком');
-  button.title = 'Копировать сообщение';
-  button.innerHTML = copyIconHtml();
-  button.addEventListener('click', function(e){
-    e.preventDefault();
-    e.stopPropagation();
-    copyWholeMessage(message, button);
-  });
-  message.appendChild(button);
+function hideCopyMenu(){
+  messageCopyMenu.classList.remove('visible');
+  copyMenuTarget = null;
 }
+
+function showCopyMenu(message, x, y){
+  copyMenuTarget = message;
+  copyWholeMessageBtn.textContent = 'Копировать сообщение';
+  messageCopyMenu.classList.add('visible');
+  copyMenuShownAt = Date.now();
+  requestAnimationFrame(() => {
+    const width = messageCopyMenu.offsetWidth;
+    const height = messageCopyMenu.offsetHeight;
+    messageCopyMenu.style.left = Math.max(10, Math.min(window.innerWidth-width-10, x-width/2)) + 'px';
+    messageCopyMenu.style.top = Math.max(10, Math.min(window.innerHeight-height-10, y-height-14)) + 'px';
+  });
+}
+
+copyWholeMessageBtn.addEventListener('click', async function(e){
+  e.preventDefault();
+  e.stopPropagation();
+  if(!copyMenuTarget) return;
+  const copied = await copyWholeMessage(copyMenuTarget);
+  copyWholeMessageBtn.textContent = copied ? 'Скопировано ✓' : 'Не удалось скопировать';
+  setTimeout(hideCopyMenu, 700);
+});
+
+chat.addEventListener('touchstart', function(e){
+  const message = e.target.closest('.msg.bot');
+  if(!message || e.target.closest('button,a,.variant-row')) return;
+  const touch = e.touches[0];
+  touchStartPoint = {x:touch.clientX, y:touch.clientY, message};
+  clearTimeout(longPressTimer);
+  longPressTimer = setTimeout(() => {
+    longPressTimer = null;
+    if(!touchStartPoint) return;
+    showCopyMenu(message, touchStartPoint.x, touchStartPoint.y);
+    try{ if(tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light'); }catch(err){}
+  }, 550);
+}, {passive:true});
+
+chat.addEventListener('touchmove', function(e){
+  if(!touchStartPoint) return;
+  const touch = e.touches[0];
+  if(Math.abs(touch.clientX-touchStartPoint.x) > 10 || Math.abs(touch.clientY-touchStartPoint.y) > 10){
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+    touchStartPoint = null;
+  }
+}, {passive:true});
+
+function cancelLongPress(){
+  clearTimeout(longPressTimer);
+  longPressTimer = null;
+  touchStartPoint = null;
+}
+chat.addEventListener('touchend', cancelLongPress, {passive:true});
+chat.addEventListener('touchcancel', cancelLongPress, {passive:true});
+chat.addEventListener('contextmenu', function(e){
+  const message = e.target.closest('.msg.bot');
+  if(!message || e.target.closest('button,a,.variant-row')) return;
+  e.preventDefault();
+  showCopyMenu(message, e.clientX, e.clientY);
+});
+document.addEventListener('click', function(e){
+  if(Date.now()-copyMenuShownAt < 350 || messageCopyMenu.contains(e.target)) return;
+  hideCopyMenu();
+});
+chat.addEventListener('scroll', hideCopyMenu, {passive:true});
 
 function addBotMessage(html){
   const div = document.createElement('div');
   div.className = 'msg bot is-new';
   div.innerHTML = html;
-  addCopyButton(div);
   chat.appendChild(div);
   if(!currentReplyAnchor || !currentReplyAnchor.isConnected) currentReplyAnchor = div;
   positionReply();
@@ -1704,7 +1754,6 @@ async function initChat(){
       const div = document.createElement('div');
       div.className = m.role === 'user' ? 'msg user' : 'msg bot';
       div.innerHTML = m.html;
-      addCopyButton(div);
       chat.appendChild(div);
     }
     chatTranscript = restored.t.slice();
