@@ -832,13 +832,6 @@ function resolveEngineForUtil(parsed){
   return {kw, ccm: parsed.ccm || null, note};
 }
 
-// точный возраст по дате (не только году) на сегодняшний день
-function preciseAgeStatus(issueDate){
-  const now = new Date();
-  const threeYearsAgo = new Date(Date.UTC(now.getUTCFullYear()-3, now.getUTCMonth(), now.getUTCDate()));
-  return issueDate.getTime() <= threeYearsAgo.getTime() ? 'old' : 'new';
-}
-
 // ============== КЛЮЧЕВАЯ СТАВКА И КАЛЕНДАРЬ ПРАЗДНИКОВ РФ ==============
 // Ставку меняем вручную здесь при изменении ЦБ РФ (актуально: 14% с 27.07.2026)
 const KEY_RATE_PERCENT = 14;
@@ -892,13 +885,11 @@ function calcPeni(sum, keyRatePercent, daysLate){
 /* Состояние диалога для СБКТС-флоу */
 let pendingSbkts = null; // {parsed, engine, commercialSum, personalSum, differ, category, deadline}
 
-function calcUtilSborPrecise(kw, ccm, issueDate){
-  const age = preciseAgeStatus(issueDate); // 'new' | 'old'
-  const commercial = getUtilBracket('commercial', kw, ccm);
-  const personal = getUtilBracket('personal', kw, ccm);
-  const commercialSum = age === 'new' ? commercial.sumNew : commercial.sumOld;
-  const personalSum = age === 'new' ? personal.sumNew : personal.sumOld;
-  return {age, commercialSum, personalSum, differ: Math.abs(commercialSum-personalSum) > 1};
+function calcUtilSborForSbkts(kw, ccm, carYear){
+  // Возраст автомобиля определяется по году выпуска, а не по дате оформления СБКТС.
+  // Если автомобилю может быть ровно 3 года и месяц выпуска неизвестен,
+  // calcUtilSbor() вернёт оба возможных варианта.
+  return calcUtilSbor(kw, ccm, carYear);
 }
 
 function formatSbktsExtracted(parsed, engine){
@@ -928,13 +919,21 @@ function formatSbktsExtracted(parsed, engine){
   return html;
 }
 
-function formatSbktsUtilAndDeadline(calc, deadline, today){
-  let html = `<br><br><b>Утильсбор</b> (возраст на сегодня — ${calc.age==='new'?'до 3 лет':'старше 3 лет'}):<br>`;
-  if(calc.differ){
-    html += `Мощность ≤117,68 кВт — применяется льготная ставка для физлица (личное пользование): <b style="color:var(--accent);">${formatMoney(calc.personalSum)}</b><br>`;
-    html += `<span style="color:var(--muted);font-size:12px;">Для справки: коммерческий/юрлицо ставка выше — ${formatMoney(calc.commercialSum)}</span><br>`;
-  } else {
-    html += `Сумма утильсбора: <b>${formatMoney(calc.personalSum)}</b> <span style="color:var(--muted);font-size:12px;">(мощность выше 117,68 кВт — льготная ставка совпадает с коммерческой)</span><br>`;
+function formatSbktsUtilAndDeadline(calc, carYear, deadline){
+  let html = `<br><br><b>Утильсбор</b> (возраст рассчитан по году выпуска ${carYear}):<br>`;
+  if(calc.ageAmbiguous){
+    html += `<span style="color:var(--muted);font-size:12px;">Месяц выпуска неизвестен, поэтому для автомобиля пограничного возраста приведены оба варианта.</span><br><br>`;
+  }
+  const ageLabel = {new:'до 3 лет', old:'старше 3 лет'};
+  for(const r of calc.results){
+    html += `<b>${ageLabel[r.age]}:</b><br>`;
+    if(r.personalDiffers){
+      html += `Мощность ≤117,68 кВт — применяется льготная ставка для физлица (личное пользование): <b style="color:var(--accent);">${formatMoney(r.personalSum)}</b><br>`;
+      html += `<span style="color:var(--muted);font-size:12px;">Для справки: коммерческий/юрлицо ставка выше — ${formatMoney(r.commercialSum)}</span><br>`;
+    } else {
+      html += `Сумма утильсбора: <b>${formatMoney(r.personalSum)}</b> <span style="color:var(--muted);font-size:12px;">(льготная ставка совпадает с коммерческой)</span><br>`;
+    }
+    html += `<br>`;
   }
   html += `<br>Срок подачи документов и уплаты: <b>5 рабочих дней</b> с даты оформления СБКТС (праздники РФ учтены).<br>Крайний срок: <b>${formatDate(deadline)}</b><br>`;
   return html;
@@ -973,17 +972,25 @@ function startSbktsFlow(parsed){
     addBotMessage('Не удалось найти дату оформления СБКТС в документе — не могу рассчитать срок и пени. Проверьте, что PDF содержит текстовый слой (не скан).');
     return;
   }
+  if(!parsed.year){
+    addBotMessage('Не удалось найти год выпуска автомобиля в документе — не могу определить возраст для расчёта утильсбора.');
+    return;
+  }
   if(!engine.kw){
     addBotMessage('Не удалось найти мощность двигателя в документе. Проверьте формат файла.');
     return;
   }
-  const calc = calcUtilSborPrecise(engine.kw, engine.ccm, parsed.issueDate);
+  const calc = calcUtilSborForSbkts(engine.kw, engine.ccm, parsed.year);
   const deadline = addWorkingDays(parsed.issueDate, 5);
-  addBotMessage(formatSbktsExtracted(parsed, engine) + formatSbktsUtilAndDeadline(calc, deadline, todayUTC()));
+  addBotMessage(formatSbktsExtracted(parsed, engine) + formatSbktsUtilAndDeadline(calc, parsed.year, deadline));
 
   // льготная ставка для физлица применяется автоматически (до порога мощности она ниже,
   // выше порога совпадает с коммерческой — так устроена сама таблица ставок)
-  addBotMessage(finalizePeniReport(calc.personalSum, deadline));
+  const ageLabel = {new:'до 3 лет', old:'старше 3 лет'};
+  for(const r of calc.results){
+    const prefix = calc.ageAmbiguous ? `<b>Вариант «${ageLabel[r.age]}»</b><br>` : '';
+    addBotMessage(prefix + finalizePeniReport(r.personalSum, deadline));
+  }
 }
 
 document.getElementById('pdfInput').addEventListener('change', async function(e){
