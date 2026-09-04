@@ -2,83 +2,186 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Брокер ГРАНИ</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-  :root{--bg:#f4f5f7;--surface:#fff;--border:#e3e6eb;--text:#171a21;--muted:#6b7280;--faint:#9aa0aa;--accent:#2c6bff;--accent-soft:#edf2ff;--shadow:0 8px 24px rgba(19,28,45,.07)}
-  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  html,body{min-height:100%;margin:0;overflow-x:hidden;touch-action:pan-y}
-  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-  button{font:inherit}.screen{min-height:100vh;min-height:100dvh;padding-bottom:calc(22px + env(safe-area-inset-bottom,0px))}.hidden{display:none!important}
-  .topbar{position:sticky;top:0;z-index:5;display:grid;grid-template-columns:42px 1fr 42px;align-items:center;min-height:60px;padding:8px 14px;background:rgba(244,245,247,.94);border-bottom:1px solid var(--border);backdrop-filter:blur(14px)}
-  .brand{text-align:center}.brand strong{display:block;font-size:15px}.brand span{display:block;margin-top:2px;color:var(--faint);font-size:11px}
-  .round-btn{width:40px;height:40px;border:1px solid var(--border);border-radius:50%;background:var(--surface);display:grid;place-items:center;color:var(--text);cursor:pointer;font-size:27px}
-  .hero{text-align:center;padding:22px 20px 14px}.logo{width:70px;height:70px;margin:0 auto 13px;border-radius:21px;background:#11151d;color:#fff;display:grid;place-items:center;font-size:31px;font-weight:800;box-shadow:0 10px 24px rgba(14,16,19,.18)}
-  h1{margin:0;font-size:21px;letter-spacing:.045em}.subtitle{max-width:330px;margin:8px auto 0;color:var(--muted);font-size:13.5px;line-height:1.5}
-  .menu{display:grid;gap:10px;padding:10px 16px}.menu-btn{width:100%;min-height:62px;border:1px solid var(--border);border-radius:17px;background:var(--surface);display:grid;grid-template-columns:42px 1fr 18px;align-items:center;gap:12px;padding:10px 14px;text-align:left;cursor:pointer;box-shadow:0 2px 8px rgba(19,28,45,.025)}
-  .menu-btn:active{transform:scale(.988);background:#fafbfc}.menu-btn.primary{color:#fff;border-color:transparent;background:linear-gradient(135deg,#2c6bff,#1f54dc);box-shadow:0 10px 22px rgba(44,107,255,.23)}
-  .menu-icon{width:42px;height:42px;border-radius:13px;background:var(--accent-soft);display:grid;place-items:center;font-size:21px}.primary .menu-icon{background:rgba(255,255,255,.16)}
-  .menu-copy strong{display:block;font-size:15px;line-height:1.25}.menu-copy span{display:block;margin-top:3px;color:var(--muted);font-size:12px;line-height:1.3}.primary .menu-copy span{color:rgba(255,255,255,.76)}
-  .arrow{color:var(--faint);font-size:23px}.primary .arrow{color:rgba(255,255,255,.8)}.section-label{padding:9px 18px 0;color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
-  .detail-head{text-align:center;padding:22px 18px 12px}.detail-icon{width:58px;height:58px;margin:auto;border-radius:18px;background:var(--accent-soft);display:grid;place-items:center;font-size:29px}.detail-head h2{margin:12px 0 4px;font-size:21px}.detail-head p{margin:0;color:var(--muted);font-size:13px}
-  .conversation{padding:10px 16px 24px}.message{position:relative;max-width:100%;padding:17px 17px 16px;border:1px solid var(--border);border-radius:18px 18px 18px 5px;background:var(--surface);box-shadow:var(--shadow);font-size:15px;line-height:1.55;animation:message-in .22s ease-out both;overflow-wrap:anywhere}.message p{margin:0 0 12px}.message p:last-child{margin-bottom:0}.message ul{margin:9px 0 0;padding-left:20px}.message li+li{margin-top:6px}.message-note{color:var(--muted);font-size:13px}.message-title{font-size:17px;font-weight:700}
-  @keyframes message-in{from{opacity:0;transform:translateY(8px) scale(.99)}to{opacity:1;transform:none}}@media(prefers-reduced-motion:reduce){.message{animation:none}}
-  .detail-action{width:100%;margin-top:14px;border:0;border-radius:15px;padding:15px;background:var(--accent);color:#fff;font-weight:650;cursor:pointer}.detail-action:active{filter:brightness(.95)}.footer-note{padding:5px 18px 0;text-align:center;color:var(--faint);font-size:11.5px;line-height:1.45}
+  :root{
+    --h-bg:#F4F5F7; --h-surface:#FFFFFF; --h-border:#E6E8EC;
+    --h-text-primary:#0E1013; --h-text-body:#1F2430; --h-text-secondary:#4B5563;
+    --h-text-muted:#6B7280; --h-text-faint:#9AA0AA;
+    --h-accent:#2C6BFF; --h-accent-tint:#EDF2FF; --h-ink:#0E1013;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%; margin:0;}
+  body{
+    background:var(--h-bg); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    overflow-x:hidden;
+  }
+  #home-screen{min-height:100vh; min-height:100dvh; background:var(--h-bg); -webkit-overflow-scrolling:touch;}
+  .home-topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 8px;}
+  .home-topbar .dots{display:flex;align-items:center;gap:6px;background:rgba(14,16,19,0.06);border-radius:999px;padding:5px 10px;color:var(--h-text-secondary);font-size:13px;letter-spacing:2px;}
+  .home-brand{display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px 24px 20px;}
+  .home-logo{width:76px;height:76px;border-radius:22px;background:var(--h-ink);display:flex;align-items:center;justify-content:center;box-shadow:0 10px 24px rgba(14,16,19,0.18);}
+  .home-logo img{width:44px;height:auto;display:block;}
+  .home-title{font-family:'Unbounded',sans-serif;color:var(--h-text-primary);font-size:21px;font-weight:700;letter-spacing:0.06em;}
+  .home-subtitle{color:var(--h-text-muted);font-size:13.5px;line-height:1.5;text-align:center;max-width:280px;}
+  .home-badges{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;}
+  .home-badge{background:#fff;border:1px solid var(--h-border);color:var(--h-text-secondary);font-size:12px;font-weight:500;border-radius:999px;padding:5px 12px;}
+  .home-cta{display:flex;align-items:center;gap:14px;background:linear-gradient(135deg,#2C6BFF 0%,#1E4FD6 100%);border-radius:18px;padding:16px;margin:4px 16px 0;cursor:pointer;box-shadow:0 10px 24px rgba(44,107,255,0.28);border:none;text-align:left;width:calc(100% - 32px);font-family:inherit;}
+  .home-cta:active{filter:brightness(0.96);}
+  .home-cta-icon{width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.16);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .home-cta-text{display:flex;flex-direction:column;gap:2px;}
+  .home-cta-title{color:#fff;font-size:15px;font-weight:600;}
+  .home-cta-sub{color:rgba(255,255,255,0.78);font-size:12.5px;}
+  .home-cta-arrow{margin-left:auto;flex-shrink:0;}
+  .home-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px 16px 4px;}
+  .home-tile{background:#fff;border:1px solid var(--h-border);border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:10px;cursor:pointer;opacity:0.55;text-align:left;font-family:inherit;}
+  .home-tile.wide{grid-column:1 / -1;flex-direction:row;align-items:center;gap:10px;}
+  .home-tile-icon{width:38px;height:38px;border-radius:11px;background:var(--h-accent-tint);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .home-tile-label{color:var(--h-text-body);font-size:13.5px;font-weight:500;line-height:1.3;}
+  .home-section-head{display:flex;align-items:center;justify-content:space-between;padding:18px 16px 8px;}
+  .home-section-title{color:var(--h-text-primary);font-size:16px;font-weight:600;}
+  .home-section-link{color:var(--h-accent);font-size:13px;font-weight:500;background:none;border:none;font-family:inherit;cursor:pointer;padding:0;}
+  .home-request-card{margin:4px 16px 0;background:#fff;border:1px solid var(--h-border);border-radius:18px;padding:16px;display:flex;flex-direction:column;gap:12px;opacity:0.55;}
+  .home-request-top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+  .home-request-id{color:var(--h-text-primary);font-size:14.5px;font-weight:600;}
+  .home-request-status{background:var(--h-accent-tint);color:var(--h-accent);font-size:12px;font-weight:600;border-radius:999px;padding:4px 10px;}
+  .home-request-meta{display:flex;flex-direction:column;gap:3px;}
+  .home-request-line{color:var(--h-text-secondary);font-size:13.5px;}
+  .home-request-vin{color:var(--h-text-faint);font-size:12px;font-family:ui-monospace,monospace;}
+  .home-progress{display:flex;gap:5px;}
+  .home-progress span{flex:1;height:4px;border-radius:2px;background:var(--h-border);}
+  .home-progress span.filled{background:var(--h-accent);}
+  .home-request-bottom{display:flex;align-items:center;justify-content:space-between;}
+  .home-request-updated{color:var(--h-text-faint);font-size:12px;}
+  .home-request-more{color:var(--h-accent);font-size:12.5px;font-weight:500;background:none;border:none;font-family:inherit;cursor:pointer;padding:0;}
+  .home-new-request{background:var(--h-ink);border-radius:16px;padding:15px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;border:none;width:calc(100% - 32px);margin:0 16px;opacity:0.55;font-family:inherit;}
+  .home-new-request span{color:#fff;font-size:15px;font-weight:600;}
+  .home-footer-pad{padding:16px 16px calc(16px + env(safe-area-inset-bottom,0px));}
 </style>
 </head>
 <body>
-<main id="menuScreen" class="screen">
-  <header class="topbar"><span></span><div class="brand"><strong>Брокер ГРАНИ</strong><span>мини-приложение</span></div><span></span></header>
-  <section class="hero"><div class="logo">Г</div><h1>БРОКЕР ГРАНИ</h1><p class="subtitle">СБКТС, ЭПТС, утильсбор и таможенное оформление автомобилей</p></section>
-  <div class="section-label">Расчёты</div>
-  <nav class="menu" aria-label="Расчёты">
-    <button class="menu-btn primary" type="button" data-link="tabs/utilsbor/index.html"><span class="menu-icon">🧮</span><span class="menu-copy"><strong>Рассчитать утильсбор</strong><span>По автомобилю или документу СБКТС</span></span><span class="arrow">›</span></button>
-    <button class="menu-btn" type="button" data-link="tabs/utilsbor/index.html?mode=peni"><span class="menu-icon">📅</span><span class="menu-copy"><strong>Рассчитать пени</strong><span>Точный расчёт по дате оформления СБКТС</span></span><span class="arrow">›</span></button>
-  </nav>
-  <div class="section-label">Услуги и информация</div>
-  <nav class="menu" aria-label="Услуги и информация">
-    <button class="menu-btn" type="button" data-section="payment"><span class="menu-icon">💳</span><span class="menu-copy"><strong>Как оплатить утильсбор</strong><span>Порядок оплаты и важные проверки</span></span><span class="arrow">›</span></button>
-    <button class="menu-btn" type="button" data-section="sbkts"><span class="menu-icon">📄</span><span class="menu-copy"><strong>Оформить СБКТС</strong><span>Сопровождение оформления документа</span></span><span class="arrow">›</span></button>
-    <button class="menu-btn" type="button" data-section="epts"><span class="menu-icon">🔎</span><span class="menu-copy"><strong>Найти ЭПТС по VIN</strong><span>Проверка электронного паспорта автомобиля</span></span><span class="arrow">›</span></button>
-    <button class="menu-btn" type="button" data-section="owner"><span class="menu-icon">👤</span><span class="menu-copy"><strong>Внести собственника в ЭПТС</strong><span>Помощь с изменением сведений</span></span><span class="arrow">›</span></button>
-    <button class="menu-btn" type="button" data-section="contact"><span class="menu-icon">💬</span><span class="menu-copy"><strong>Написать нам</strong><span>Задать вопрос специалисту</span></span><span class="arrow">›</span></button>
-    <button class="menu-btn" type="button" data-section="donate"><span class="menu-icon">❤️</span><span class="menu-copy"><strong>Поддержать проект</strong><span>Помочь развитию бесплатного сервиса</span></span><span class="arrow">›</span></button>
-  </nav>
-  <p class="footer-note">Расчёты носят информационный характер. Итоговые данные проверяются по документам автомобиля.</p>
-</main>
-<main id="detailScreen" class="screen hidden">
-  <header class="topbar"><button id="backBtn" class="round-btn" type="button" aria-label="Вернуться в меню">‹</button><div class="brand"><strong id="topTitle">Информация</strong><span>Брокер ГРАНИ</span></div><span></span></header>
-  <section class="detail-head"><div id="detailIcon" class="detail-icon"></div><h2 id="detailTitle"></h2><p>Информация по услуге</p></section>
-  <section class="conversation"><article id="detailMessage" class="message"></article><button id="detailAction" class="detail-action hidden" type="button"></button></section>
-</main>
-<script>
-const tg=window.Telegram&&window.Telegram.WebApp?window.Telegram.WebApp:null;
-if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#F4F5F7');tg.setBackgroundColor('#F4F5F7')}catch(e){}tg.BackButton.hide()}
 
-/* Вставьте сюда ссылки, когда они будут готовы. */
-const CONTACT_URL='';
-const DONATE_URL='';
-const STORAGE_KEY='grani_home_v2';
-const sections={
-  payment:{icon:'💳',title:'Как оплатить утильсбор',html:'<p class="message-title">Порядок оплаты утильсбора</p><p>Сначала рассчитайте сумму и проверьте сведения автомобиля в СБКТС и ЭПТС.</p><ul><li>Сверьте плательщика, VIN и характеристики автомобиля.</li><li>Получите актуальные реквизиты и назначение платежа.</li><li>После оплаты сохраните чек или платёжное поручение.</li></ul><p class="message-note">Не переводите деньги по устаревшим реквизитам. Точные данные для платежа зависят от способа оформления.</p>',action:'Получить реквизиты',url:()=>CONTACT_URL},
-  sbkts:{icon:'📄',title:'Оформить СБКТС',html:'<p class="message-title">Поможем оформить СБКТС</p><p>Проверим исходные данные автомобиля, подскажем порядок оформления и сопроводим получение документа.</p><p>Для начала подготовьте VIN и имеющиеся документы на автомобиль. Точный перечень и срок специалист сообщит после проверки вашей ситуации.</p>',action:'Написать специалисту',url:()=>CONTACT_URL},
-  epts:{icon:'🔎',title:'Найти ЭПТС по VIN',html:'<p class="message-title">Проверка ЭПТС по VIN</p><p>Отправьте специалисту VIN автомобиля. Мы проверим наличие электронного паспорта и сообщим результат.</p><p class="message-note">VIN обычно содержит 17 символов. Перед отправкой проверьте, что он введён без пробелов и ошибок.</p>',action:'Отправить VIN',url:()=>CONTACT_URL},
-  owner:{icon:'👤',title:'Внести собственника в ЭПТС',html:'<p class="message-title">Внесение собственника в ЭПТС</p><p>Поможем проверить статус электронного паспорта и внести сведения о собственнике.</p><p>Для предварительной проверки сообщите VIN и номер ЭПТС. Перечень необходимых документов специалист уточнит для вашей ситуации.</p>',action:'Написать специалисту',url:()=>CONTACT_URL},
-  contact:{icon:'💬',title:'Написать нам',html:'<p class="message-title">Свяжитесь со специалистом</p><p>Опишите вопрос и, если он связан с автомобилем, приложите VIN и имеющиеся документы. Так мы сможем ответить точнее.</p><p class="message-note">Контактная ссылка будет доступна после добавления аккаунта менеджера.</p>',action:'Открыть Telegram',url:()=>CONTACT_URL},
-  donate:{icon:'❤️',title:'Поддержать проект',html:'<p class="message-title">Спасибо за поддержку!</p><p>Сервис развивается, чтобы расчёты и информация по оформлению автомобилей оставались удобными и доступными.</p><p>Ваш донат поможет поддерживать справочники в актуальном состоянии и добавлять новые функции.</p><p class="message-note">Ссылка для поддержки появится здесь после подключения выбранного способа оплаты.</p>',action:'Поддержать проект',url:()=>DONATE_URL}
-};
-const menuScreen=document.getElementById('menuScreen'),detailScreen=document.getElementById('detailScreen'),backBtn=document.getElementById('backBtn');let currentSection='';
-function storageSet(value){const json=JSON.stringify(value);if(tg&&tg.CloudStorage)tg.CloudStorage.setItem(STORAGE_KEY,json,()=>{});try{localStorage.setItem(STORAGE_KEY,json)}catch(e){}}
-function storageGet(callback){if(tg&&tg.CloudStorage){tg.CloudStorage.getItem(STORAGE_KEY,(err,value)=>{if(!err&&value){callback(value);return}try{callback(localStorage.getItem(STORAGE_KEY))}catch(e){callback(null)}})}else{try{callback(localStorage.getItem(STORAGE_KEY))}catch(e){callback(null)}}}
-function rememberSection(id){storageGet(raw=>{let state={visited:[]};try{if(raw)state=JSON.parse(raw)||state}catch(e){}const visited=Array.isArray(state.visited)?state.visited.filter(x=>x!==id):[];visited.push(id);storageSet({visited:visited.slice(-20),last:id,updated:Date.now()})})}
-function openSection(id,shouldRemember=true){const section=sections[id];if(!section)return;currentSection=id;document.getElementById('topTitle').textContent=section.title;document.getElementById('detailIcon').textContent=section.icon;document.getElementById('detailTitle').textContent=section.title;const message=document.getElementById('detailMessage');message.innerHTML=section.html;message.style.animation='none';void message.offsetWidth;message.style.animation='';const action=document.getElementById('detailAction'),url=section.url();if(url){action.textContent=section.action;action.dataset.url=url;action.classList.remove('hidden')}else{action.classList.add('hidden');action.dataset.url=''}menuScreen.classList.add('hidden');detailScreen.classList.remove('hidden');window.scrollTo(0,0);if(tg)tg.BackButton.show();if(shouldRemember)rememberSection(id)}
-function showMenu(){currentSection='';detailScreen.classList.add('hidden');menuScreen.classList.remove('hidden');window.scrollTo(0,0);if(tg)tg.BackButton.hide()}
-function haptic(){if(tg&&tg.HapticFeedback)try{tg.HapticFeedback.impactOccurred('light')}catch(e){}}
-document.querySelectorAll('[data-link]').forEach(btn=>btn.addEventListener('click',()=>{haptic();window.location.href=btn.dataset.link}));
-document.querySelectorAll('[data-section]').forEach(btn=>btn.addEventListener('click',()=>{haptic();openSection(btn.dataset.section)}));
-backBtn.addEventListener('click',showMenu);if(tg)tg.BackButton.onClick(()=>{if(currentSection)showMenu()});
-document.getElementById('detailAction').addEventListener('click',function(){const url=this.dataset.url;if(!url)return;if(tg&&tg.openTelegramLink&&url.indexOf('https://t.me/')===0)tg.openTelegramLink(url);else if(tg&&tg.openLink)tg.openLink(url);else window.location.href=url});
+<div id="home-screen">
+  <div class="home-topbar">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6B7280" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"></path></svg>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:1px;">
+      <span style="color:#0E1013;font-size:14px;font-weight:600;">Брокер ГРАНИ</span>
+      <span style="color:#9AA0AA;font-size:11px;">мини-приложение</span>
+    </div>
+    <div class="dots">⋯</div>
+  </div>
+
+  <div class="home-brand">
+    <div class="home-logo">
+      <img src="data:image/png;base64,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" alt="Логотип Грани" style="width:44px;height:auto;display:block;">
+    </div>
+    <div class="home-title">БРОКЕР ГРАНИ</div>
+    <div class="home-subtitle">Таможенное оформление автомобилей: ЭПТС, СБКТС, утильсбор и пошлины — под ключ.</div>
+    <div class="home-badges">
+      <span class="home-badge">ЭПТС</span>
+      <span class="home-badge">СБКТС</span>
+      <span class="home-badge">Утильсбор</span>
+    </div>
+  </div>
+
+  <div style="padding:4px 16px 0;">
+    <button class="home-cta" id="openCalcBtn" type="button">
+      <div class="home-cta-icon">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round"><rect x="5" y="3" width="14" height="18" rx="2"></rect><path d="M8 7h8M8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01M8.5 15h.01M12 15h.01M15.5 15h.01M8.5 18.5h.01M12 18.5h.01M15.5 18.5h.01"></path></svg>
+      </div>
+      <div class="home-cta-text">
+        <span class="home-cta-title">Рассчитать утильсбор</span>
+        <span class="home-cta-sub">Ставки 2026 · физлица и юрлица</span>
+      </div>
+      <svg class="home-cta-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"></path></svg>
+    </button>
+  </div>
+
+  <div class="home-grid">
+    <button class="home-tile" type="button" data-soon="1">
+      <div class="home-tile-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2C6BFF" stroke-width="1.8" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"></path></svg></div>
+      <span class="home-tile-label">Услуги и утильсбор</span>
+    </button>
+    <button class="home-tile" type="button" data-soon="1">
+      <div class="home-tile-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2C6BFF" stroke-width="1.8" stroke-linecap="round"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M12 9h.01M15 9h.01M9 13h6v8"></path></svg></div>
+      <span class="home-tile-label">Реквизиты госпошлины</span>
+    </button>
+    <button class="home-tile" type="button" data-soon="1">
+      <div class="home-tile-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2C6BFF" stroke-width="1.8" stroke-linecap="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5M12 11v6M9.5 14.5L12 17l2.5-2.5"></path></svg></div>
+      <span class="home-tile-label">Выписка из ЭПТС</span>
+    </button>
+    <button class="home-tile" type="button" data-soon="1">
+      <div class="home-tile-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2C6BFF" stroke-width="1.8" stroke-linecap="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM19 8v6M22 11h-6"></path></svg></div>
+      <span class="home-tile-label">Собственник в ЭПТС</span>
+    </button>
+    <button class="home-tile wide" type="button" data-soon="1">
+      <div class="home-tile-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2C6BFF" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 15l4.5-4.5L12 15l3-3 6 6"></path><circle cx="15.5" cy="9.5" r="1.2"></circle></svg></div>
+      <span class="home-tile-label">Запросить скрин СБКТС</span>
+      <svg style="margin-left:auto;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9AA0AA" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"></path></svg>
+    </button>
+  </div>
+
+  <div class="home-section-head">
+    <span class="home-section-title">Мои заявки</span>
+    <button class="home-section-link" type="button" data-soon="1">Все · 3</button>
+  </div>
+  <div class="home-request-card" data-soon="1">
+    <div class="home-request-top">
+      <span class="home-request-id">Заявка №1042</span>
+      <span class="home-request-status">На оформлении</span>
+    </div>
+    <div class="home-request-meta">
+      <span class="home-request-line">Выписка из ЭПТС · Kia Sorento</span>
+      <span class="home-request-vin">VIN KNAPH81BDMK55**14</span>
+    </div>
+    <div class="home-progress">
+      <span class="filled"></span><span class="filled"></span><span class="filled"></span><span></span>
+    </div>
+    <div class="home-request-bottom">
+      <span class="home-request-updated">Обновлено сегодня, 14:20</span>
+      <button class="home-request-more" type="button" data-soon="1">Подробнее →</button>
+    </div>
+  </div>
+
+  <div class="home-footer-pad">
+    <button class="home-new-request" type="button" data-soon="1">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+      <span>Новая заявка</span>
+    </button>
+  </div>
+</div>
+
+<script>
+/* ============== TELEGRAM WEBAPP + НАВИГАЦИЯ ==============
+   Этот файл отвечает ТОЛЬКО за интерфейс главного экрана и переходы между вкладками.
+   Логика расчёта утильсбора живёт отдельно, в /tabs/utilsbor/ — правки здесь её не касаются.
+   Чтобы добавить новую вкладку в будущем: создать папку /tabs/имя-вкладки/ со своим
+   index.html, и в одной из плиток ниже заменить data-soon="1" на
+   onclick="window.location.href='tabs/имя-вкладки/index.html'" — остальной код трогать не нужно. */
+const tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+if(tg){
+  tg.ready();
+  tg.expand();
+  try{ tg.setHeaderColor('#F4F5F7'); }catch(e){}
+  try{ tg.setBackgroundColor('#F4F5F7'); }catch(e){}
+  tg.BackButton.hide();
+}
+
+document.getElementById('openCalcBtn').addEventListener('click', function(){
+  if(tg){ try{ tg.HapticFeedback.impactOccurred('light'); }catch(e){} }
+  window.location.href = 'tabs/utilsbor/index.html';
+});
+
+// заглушки остальных плиток — раздел пока не реализован
+document.querySelectorAll('[data-soon]').forEach(el => {
+  el.addEventListener('click', function(){
+    const msg = 'Этот раздел скоро появится. Пока доступен расчёт утильсбора.';
+    if(tg && tg.showAlert){ tg.showAlert(msg); } else { alert(msg); }
+  });
+});
 </script>
+
 </body>
 </html>
