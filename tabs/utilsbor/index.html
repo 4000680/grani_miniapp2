@@ -180,6 +180,8 @@ document.getElementById('backToHomeBtn').addEventListener('click', () => {
   window.location.href = '../../index.html';
 });
 
+const APP_MODE = new URLSearchParams(window.location.search).get('mode');
+
 /* ---- CloudStorage: сохранение переписки в облаке Telegram (переживает закрытие приложения) ---- */
 function csAvailable(){ return !!(tg && tg.CloudStorage); }
 function csSet(key, value){
@@ -222,7 +224,8 @@ function csRemove(keys){
   });
 }
 
-const CS_PREFIX = 'us1_'; // us1 = utilsbor v1, чтобы не пересекаться с другими вкладками в будущем
+// У обычного расчёта и режима пеней отдельные истории, чтобы они не смешивались.
+const CS_PREFIX = APP_MODE === 'peni' ? 'peni1_' : 'us1_';
 let chatTranscript = []; // [{role:'user'|'bot', html}]
 let isRestoringChat = false;
 let saveTimer = null;
@@ -306,7 +309,9 @@ document.getElementById('resetChatBtn').addEventListener('click', async function
   addBotMessage(WELCOME_HTML);
 });
 
-const WELCOME_HTML = '👋 Привет! Помогу с расчётом <b>мощности и утильсбора</b> для любого авто.<br><br>Есть два способа:<br><br>🔍 <b>По характеристикам</b> — напишите марку, модель и год выпуска<br><i>Например: Mazda CX-5 2026</i><br><br>📄 <b>По СБКТС</b> — прикрепите PDF через скрепку, и я сразу посчитаю утильсбор и пени за просрочку';
+const WELCOME_HTML = APP_MODE === 'peni'
+  ? '📅 <b>Расчёт пеней по СБКТС</b><br><br>Прикрепите PDF-файл СБКТС через скрепку. Я определю дату оформления, срок уплаты и рассчитаю пени по ставке, действовавшей в каждый период.<br><br><span style="color:var(--muted);font-size:12px;">После расчёта можно указать будущую дату подачи документов.</span>'
+  : '👋 Привет! Помогу с расчётом <b>мощности и утильсбора</b> для любого авто.<br><br>Есть два способа:<br><br>🔍 <b>По характеристикам</b> — напишите марку, модель и год выпуска<br><i>Например: Mazda CX-5 2026</i><br><br>📄 <b>По СБКТС</b> — прикрепите PDF через скрепку, и я сразу посчитаю утильсбор и пени за просрочку';
 
 /* ============== ДАННЫЕ ============== */
 let UTIL_TABLE = null; // строится из rates.xlsx функцией loadRates()
