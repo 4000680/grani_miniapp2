@@ -4,7 +4,7 @@ Cloudflare Worker принимает webhook Telegram и показывает м
 
 ## Настройки Cloudflare
 
-Root directory при импорте репозитория: `bot`
+Cloudflare автоматически обнаруживает конфигурацию в корне репозитория.
 
 Runtime secrets:
 
