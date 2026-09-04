@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "grani-telegram-bot",
+  "main": "bot/src/index.js",
+  "compatibility_date": "2026-09-01",
+  "vars": {
+    "MINI_APP_URL": "https://4000680.github.io/grani_miniapp2/",
+    "CONTACT_URL": "",
+    "DONATE_URL": ""
+  }
+}
