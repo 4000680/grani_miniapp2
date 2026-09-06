@@ -10,7 +10,8 @@ Runtime secrets:
 
 - `BOT_TOKEN` — токен из BotFather;
 - `WEBHOOK_SECRET` — случайная строка для проверки запросов Telegram;
-- `SETUP_KEY` — временная случайная строка для запуска настройки webhook.
+- `SETUP_KEY` — временная случайная строка для запуска настройки webhook;
+- `DONATE_CARD` — номер карты, который бот показывает в разделе поддержки.
 
 Runtime variables:
 

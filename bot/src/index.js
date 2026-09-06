@@ -1,28 +1,34 @@
 const MENU_TEXT = [
-  '<b>Здравствуйте! Я помощник компании «Брокер ГРАНИ».</b>',
+  'Здравствуйте! Я — помощник компании «Брокер Грани» 👋',
   '',
-  'Поможем с оформлением автомобиля:',
-  '• СБКТС и ЭПТС;',
-  '• утилизационный сбор и пени;',
-  '• таможенное оформление;',
-  '• внесение собственника в ЭПТС.',
+  'Мы создали этот бот, чтобы автоматизировать ежедневные задачи брокера и упростить оформление автомобилей по параллельному импорту.',
   '',
-  'Выберите нужный раздел 👇'
+  'Выберите нужный раздел ниже 👇',
+  '',
+  'Функционал бота постоянно пополняется.'
 ].join('\n');
 
 const INFO = {
   payment: {
-    title: '💳 <b>Как оплатить утильсбор</b>',
+    title: '💳 <b>Реквизиты для оплаты утильсбора</b>',
     text: [
-      'Перед оплатой необходимо проверить сумму, данные плательщика, VIN и характеристики автомобиля.',
+      'Оплатить пошлину можно в любом отделении банка или в мобильном приложении банка.',
       '',
-      'Актуальные реквизиты и назначение платежа зависят от способа оформления. После оплаты сохраните чек или платёжное поручение.',
+      'Также для моментального зачисления платежа можно воспользоваться <a href="https://edata.customs.ru/FtsPersonalCabinetWeb/Mobile">личным кабинетом ФТС</a>. При оплате взимается комиссия.',
       '',
-      '<i>Не переводите деньги по реквизитам, полученным из старых документов или непроверенных источников.</i>'
+      'Выберите нужный вариант 👇'
     ].join('\n')
   },
+  payment_details: {
+    title: '💳 <b>Реквизиты</b>',
+    text: 'Реквизиты будут добавлены чуть позже.'
+  },
+  payment_qr: {
+    title: '📷 <b>QR-код</b>',
+    text: 'QR-код будет добавлен чуть позже.'
+  },
   sbkts: {
-    title: '📄 <b>Оформить СБКТС</b>',
+    title: '🔎 <b>Запросить скрин СБКТС</b>',
     text: [
       'Поможем проверить исходные данные автомобиля и сопроводим оформление СБКТС.',
       '',
@@ -30,7 +36,7 @@ const INFO = {
     ].join('\n')
   },
   epts: {
-    title: '🔎 <b>Найти ЭПТС по VIN</b>',
+    title: '📄 <b>Получить ЭПТС по VIN</b>',
     text: [
       'Отправьте специалисту VIN автомобиля. Мы проверим наличие электронного паспорта и сообщим результат.',
       '',
@@ -46,32 +52,44 @@ const INFO = {
     ].join('\n')
   },
   contact: {
-    title: '💬 <b>Написать нам</b>',
-    text: 'Опишите вопрос и, если он связан с автомобилем, подготовьте VIN и имеющиеся документы. Так специалист сможет ответить точнее.'
+    title: '💬 <b>Чат</b>',
+    text: 'Если у вас остались вопросы, напишите нам: @grani_broker'
   },
   donate: {
-    title: '❤️ <b>Поддержать проект</b>',
-    text: [
-      'Спасибо, что хотите поддержать развитие сервиса!',
-      '',
-      'Помощь позволит поддерживать справочники в актуальном состоянии и добавлять новые бесплатные функции.'
-    ].join('\n')
+    title: '❤️ <b>Задонатить</b>',
+    text: env => env.DONATE_CARD
+      ? [
+          'Спасибо, что хотите поддержать развитие сервиса!',
+          '',
+          'Номер карты:',
+          `<code>${escapeHtml(env.DONATE_CARD)}</code>`,
+          '',
+          'Спасибо за поддержку ❤️'
+        ].join('\n')
+      : 'Номер карты временно недоступен. Пожалуйста, попробуйте позже.'
   }
 };
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
 
 function menuKeyboard(env) {
   const app = env.MINI_APP_URL || 'https://4000680.github.io/grani_miniapp2/';
   return {
     inline_keyboard: [
-      [{ text: '🧮 Рассчитать утильсбор', web_app: { url: app + 'tabs/utilsbor/index.html' } }],
+      [{ text: '♻️ Рассчитать утильсбор', web_app: { url: app + 'tabs/utilsbor/index.html' } }],
       [{ text: '📅 Рассчитать пени', web_app: { url: app + 'tabs/utilsbor/index.html?mode=peni' } }],
-      [{ text: '💳 Как оплатить утильсбор', callback_data: 'info:payment' }],
-      [{ text: '📄 Оформить СБКТС', callback_data: 'info:sbkts' }],
-      [{ text: '🔎 Найти ЭПТС по VIN', callback_data: 'info:epts' }],
+      [{ text: '💳 Реквизиты для оплаты утильсбора', callback_data: 'info:payment' }],
+      [{ text: '📄 Получить ЭПТС по VIN', callback_data: 'info:epts' }],
+      [{ text: '🔎 Запросить скрин СБКТС', callback_data: 'info:sbkts' }],
       [{ text: '👤 Внести собственника в ЭПТС', callback_data: 'info:owner' }],
       [
-        { text: '💬 Написать нам', callback_data: 'info:contact' },
-        { text: '❤️ Поддержать проект', callback_data: 'info:donate' }
+        { text: '💬 Чат', callback_data: 'info:contact' },
+        { text: '❤️ Задонатить', callback_data: 'info:donate' }
       ]
     ]
   };
@@ -79,11 +97,23 @@ function menuKeyboard(env) {
 
 function infoKeyboard(section, env) {
   const rows = [];
-  const link = section === 'donate' ? env.DONATE_URL : env.CONTACT_URL;
-  if (link && /^https:\/\//i.test(link)) {
-    rows.push([{ text: section === 'donate' ? '❤️ Поддержать' : '💬 Написать специалисту', url: link }]);
+  if (section === 'payment') {
+    rows.push([
+      { text: '💳 Реквизиты', callback_data: 'info:payment_details' },
+      { text: '📷 QR-код', callback_data: 'info:payment_qr' }
+    ]);
   }
-  rows.push([{ text: '‹ Вернуться в меню', callback_data: 'menu' }]);
+  if (section === 'contact') {
+    rows.push([{
+      text: '💬 Написать @grani_broker',
+      url: env.CONTACT_URL || 'https://t.me/grani_broker'
+    }]);
+  }
+  if (section === 'payment_details' || section === 'payment_qr') {
+    rows.push([{ text: '‹ Вернуться к способам оплаты', callback_data: 'info:payment' }]);
+  } else {
+    rows.push([{ text: '‹ Вернуться в меню', callback_data: 'menu' }]);
+  }
   return { inline_keyboard: rows };
 }
 
@@ -121,10 +151,11 @@ async function editMenu(env, message) {
 async function showInfo(env, message, section) {
   const info = INFO[section];
   if (!info) return;
+  const text = typeof info.text === 'function' ? info.text(env) : info.text;
   return telegram(env, 'editMessageText', {
     chat_id: message.chat.id,
     message_id: message.message_id,
-    text: `${info.title}\n\n${info.text}`,
+    text: `${info.title}\n\n${text}`,
     parse_mode: 'HTML',
     disable_web_page_preview: true,
     reply_markup: infoKeyboard(section, env)
