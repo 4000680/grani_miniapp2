@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "grani-telegram-bot",
+  "name": "grani-miniapp2",
   "main": "bot/src/index.js",
   "compatibility_date": "2026-09-01",
   "vars": {

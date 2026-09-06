@@ -81,7 +81,7 @@ function menuKeyboard(env) {
   const app = env.MINI_APP_URL || 'https://4000680.github.io/grani_miniapp2/';
   return {
     inline_keyboard: [
-      [{ text: '🧮 Рассчитать утильсбор', web_app: { url: app + 'tabs/utilsbor/index.html' } }],
+      [{ text: '♻️ Рассчитать утильсбор', web_app: { url: app + 'tabs/utilsbor/index.html' } }],
       [{ text: '📅 Рассчитать пени', web_app: { url: app + 'tabs/utilsbor/index.html?mode=peni' } }],
       [{ text: '💳 Реквизиты для оплаты утильсбора', callback_data: 'info:payment' }],
       [{ text: '📄 Получить ЭПТС по VIN', callback_data: 'info:epts' }],
