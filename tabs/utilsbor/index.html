@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Расчёт утильсбора</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="../../application-api.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
@@ -748,6 +749,16 @@ function calcUtilSbor(kw, ccm, carYear){
   return {results, ageAmbiguous: age === 'both'};
 }
 
+function archiveCompletedCalculation(data, calc){
+  if(!window.GraniApplications || !calc || !calc.results || !calc.results.length) return;
+  const amounts = calc.results.map(r => r.personalDiffers ? r.personalSum : r.commercialSum);
+  const payload = Object.assign({}, data, {
+    amount: amounts.length === 1 ? amounts[0] : null,
+    amountLabel: amounts.length > 1 ? amounts.map(formatMoney).join(' / ') : ''
+  });
+  GraniApplications.add(payload).catch(e => console.warn('Не удалось сохранить заявку:', e));
+}
+
 function formatUtilResult(calc, kw, ccm, carYear){
   let html = `<b>Расчёт утильсбора</b><br>Мощность: ${kw} кВт, объём двигателя: ${ccm === null || ccm===0 ? 'электро/гибрид' : ccm + ' см³'}, год: ${carYear}<br><br>`;
   if(calc.ageAmbiguous){
@@ -822,6 +833,12 @@ function parseSbkts(text){
 
   m = text.match(/КАТЕГОРИЯ\s+(\S+)/);
   if(m) result.category = m[1].trim();
+
+  m = text.match(/НОМЕР\s*\(VIN\)[\s\S]{0,80}?\b([A-HJ-NPR-Z0-9]{17})\b/i);
+  if(m) result.vin = m[1].toUpperCase();
+
+  m = text.match(/ЗАЯВИТЕЛЬ И ЕГО АДРЕС[\s\S]{0,100}?[\r\n]+\s*([А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+)/);
+  if(m) result.surname = m[1].trim();
 
   m = text.match(/Технически допустимая[\s\S]{0,80}?(\d+)\s*[\r\n]/);
   if(m) result.maxMass = parseInt(m[1]);
@@ -1016,35 +1033,19 @@ function calcUtilSborForSbkts(kw, ccm, carYear){
   return calcUtilSbor(kw, ccm, carYear);
 }
 
-function formatSbktsExtracted(parsed, engine){
-  const rows = [
-    ['Марка', parsed.brand || '—'],
-    ['Модель', parsed.model || '—'],
-    ['Год выпуска', parsed.year || '—'],
-    ['Категория', parsed.category || '—'],
-    ['Техн. допустимая масса', (parsed.maxMass ? parsed.maxMass+' кг' : '—')],
-    ['Топливо', parsed.fuel || '—'],
-    ['Объём двигателя', parsed.ccm ? parsed.ccm+' см³' : '—'],
-    ['Мощность ДВС', parsed.kw ? parsed.kw+' кВт' : '—'],
-  ];
-  if(parsed.electricKwList && parsed.electricKwList.length === 1){
-    rows.push(['Мощность электромотора (30-мин)', parsed.electricKwList[0]+' кВт']);
-  } else if(parsed.electricKwList && parsed.electricKwList.length > 1){
-    rows.push(['Электромоторы (30-мин), кВт', parsed.electricKwList.join(' + ')+' = '+parsed.electricKw]);
+function formatSbktsSummary(parsed, engine, calc, deadline){
+  const hybridLabel = parsed.hybridType
+    ? {sequential:'последовательный', parallel:'параллельный', 'unknown-hybrid':'гибрид'}[parsed.hybridType]
+    : null;
+  let html = `✅ <b>СБКТС распознан</b><br><br>`;
+  html += `<b>Автомобиль:</b> ${escapeHtml([parsed.brand, parsed.model].filter(Boolean).join(' ') || '—')}<br>`;
+  html += `<b>Год выпуска:</b> ${parsed.year}<br><b>Категория:</b> ${escapeHtml(parsed.category || '—')}<br>`;
+  if(hybridLabel) html += `<b>Тип гибрида:</b> ${escapeHtml(hybridLabel)}<br>`;
+  html += `<br><b>Объём двигателя:</b> ${engine.ccm || '—'} см³<br><b>Мощность:</b> ${engine.kw} кВт<br>`;
+  if(parsed.electricKwList && parsed.electricKwList.length){
+    html += `<i>${parsed.kw || 0} кВт ДВС + ${parsed.electricKwList.join(' + ')} кВт электромоторы</i><br>`;
   }
-  if(parsed.hybridType) rows.push(['Тип гибрида', {sequential:'последовательный', parallel:'параллельный', 'unknown-hybrid':'гибрид (тип не определён)'}[parsed.hybridType]]);
-  rows.push(['Дата оформления СБКТС', parsed.issueDate ? formatDate(parsed.issueDate) : '—']);
-
-  let html = `<b>Данные из СБКТС распознаны:</b><table class="sbkts-field-table">`;
-  for(const [k,v] of rows) html += `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`;
-  html += `</table>`;
-  if(engine.note) html += `<br><span style="color:var(--muted);font-size:12px;">${escapeHtml(engine.note)}</span>`;
-  html += `<br><span style="color:var(--muted);font-size:12px;">Итоговая мощность для расчёта: <b>${engine.kw} кВт</b>${engine.ccm?', объём '+engine.ccm+' см³':''}</span>`;
-  return html;
-}
-
-function formatSbktsUtilAndDeadline(calc, carYear, deadline){
-  let html = `<br><br><b>Утильсбор</b> (возраст рассчитан по году выпуска ${carYear}):<br>`;
+  html += `<br>`;
   if(calc.ageAmbiguous){
     html += `<span style="color:var(--muted);font-size:12px;">Месяц выпуска неизвестен, поэтому для автомобиля пограничного возраста приведены оба варианта.</span><br><br>`;
   }
@@ -1052,52 +1053,34 @@ function formatSbktsUtilAndDeadline(calc, carYear, deadline){
   for(const r of calc.results){
     html += `<b>${ageLabel[r.age]}:</b><br>`;
     if(r.personalDiffers){
-      html += `Мощность ≤117,68 кВт — применяется льготная ставка для физлица (личное пользование): <b style="color:var(--accent);">${formatMoney(r.personalSum)}</b><br>`;
-      html += `<span style="color:var(--muted);font-size:12px;">Для справки: коммерческий/юрлицо ставка выше — ${formatMoney(r.commercialSum)}</span><br>`;
+      html += `<b>Утилизационный сбор: ${formatMoney(r.personalSum)}</b><br>`;
+      html += `<span style="color:var(--muted);font-size:12px;">Коммерческая ставка: ${formatMoney(r.commercialSum)}</span><br>`;
     } else {
-      html += `Сумма утильсбора по коммерческой ставке: <b>${formatMoney(r.personalSum)}</b> <span style="color:var(--muted);font-size:12px;">(льготная ставка для личного пользования не применяется)</span><br>`;
+      html += `<b>Утилизационный сбор: ${formatMoney(r.commercialSum)}</b><br>`;
+      html += `<span style="color:var(--muted);font-size:12px;">Льготная ставка для личного пользования не применяется.</span><br>`;
     }
     html += `<br>`;
   }
-  html += `<br>Срок подачи документов и уплаты: <b>5 рабочих дней</b> с даты оформления СБКТС (праздники РФ учтены).<br>Крайний срок: <b>${formatDate(deadline)}</b><br>`;
+  html += `<b>Дата оформления СБКТС:</b> ${formatDate(parsed.issueDate)}<br>`;
+  html += `Срок подачи документов и уплаты: <b>5 рабочих дней</b> с даты оформления СБКТС (праздники РФ учтены).<br>`;
+  html += `<b>Крайний срок уплаты: ${formatDate(deadline)}</b><br>`;
   return html;
 }
 
 function finalizePeniReport(sum, deadline, calculationDate){
   const targetDate = calculationDate || todayUTC();
-  const isToday = targetDate.getTime() === todayUTC().getTime();
-  const targetLabel = isToday ? 'сегодня' : `дату ${formatDate(targetDate)}`;
   const daysLate = daysBetween(deadline, targetDate);
 
-  let html = `<b>Пени (1/300 ключевой ставки ЦБ за каждый день)</b><br>`;
-
   if(daysLate <= 0){
-    html += `На ${formatDate(targetDate)} срок ещё не наступил (крайний срок ${formatDate(deadline)}) — пени нет.`;
-    return html;
+    const starts = new Date(deadline.getTime() + 24*3600*1000);
+    return `Пени пока нет. Начнут начисляться с <b>${formatDate(starts)}</b>.`;
   }
 
   const result = calcPeniByRatePeriods(sum, deadline, targetDate);
   if(result.unsupportedBefore){
-    html += `Дата просрочки раньше сохранённой истории ставок (01.01.2023). Для точного расчёта нужно добавить более ранние ставки ЦБ.`;
-    return html;
+    return `Дата просрочки раньше сохранённой истории ставок (01.01.2023). Для точного расчёта нужно добавить более ранние ставки ЦБ.`;
   }
-
-  html += `Просрочка на ${targetLabel}: <b>${daysLate}</b> календарных дн.<br><br>`;
-  html += `<b>Расчёт по периодам:</b><br>`;
-  for(const period of result.periods){
-    const dateRange = period.from.getTime() === period.to.getTime()
-      ? formatDate(period.from)
-      : `${formatDate(period.from)}–${formatDate(period.to)}`;
-    const rateLabel = period.rate.toLocaleString('ru-RU', {maximumFractionDigits:2});
-    html += `<span style="font-size:13px;">${dateRange} — ${rateLabel}%, ${period.days} дн.: <b>${formatMoneyPrecise(period.amount)}</b></span><br>`;
-  }
-
-  const targetRate = keyRateForDate(targetDate);
-  const peniPerDay = sum * (targetRate/100) / 300;
-  html += `<br>Пени за один день по ставке ${targetRate.toLocaleString('ru-RU')}%: <b>${formatMoneyPrecise(peniPerDay)}</b><br>`;
-  html += `Пени накоплено на ${targetLabel}: <b style="color:var(--accent);">${formatMoneyPrecise(result.total)}</b><br>`;
-  html += `<b>Итого к оплате на ${targetLabel}: ${formatMoneyPrecise(sum+result.total)}</b>`;
-  return html;
+  return `<b>Просрочка:</b> ${daysLate} календарных дн.<br><b>Пени на ${formatDate(targetDate)}: ${formatMoneyPrecise(result.total)}</b><br><b>Итого к оплате: ${formatMoneyPrecise(sum+result.total)}</b>`;
 }
 
 function todayUTC(){
@@ -1137,15 +1120,21 @@ function startSbktsFlow(parsed){
   }
   const calc = calcUtilSborForSbkts(engine.kw, engine.ccm, parsed.year);
   const deadline = addWorkingDays(parsed.issueDate, 5);
-  addBotMessage(formatSbktsExtracted(parsed, engine) + formatSbktsUtilAndDeadline(calc, parsed.year, deadline));
+  let summary = formatSbktsSummary(parsed, engine, calc, deadline);
 
   // льготная ставка для физлица применяется автоматически (до порога мощности она ниже,
   // выше порога совпадает с коммерческой — так устроена сама таблица ставок)
   const ageLabel = {new:'до 3 лет', old:'старше 3 лет'};
   for(const r of calc.results){
     const prefix = calc.ageAmbiguous ? `<b>Вариант «${ageLabel[r.age]}»</b><br>` : '';
-    addBotMessage(prefix + finalizePeniReport(r.personalSum, deadline));
+    summary += `<br>${prefix}${finalizePeniReport(r.personalSum, deadline)}`;
   }
+  addBotMessage(summary);
+  archiveCompletedCalculation({
+    source:'СБКТС', vin:parsed.vin || '', surname:parsed.surname || '',
+    brand:parsed.brand || '', model:parsed.model || '', year:parsed.year,
+    category:parsed.category || 'M1', kw:engine.kw, ccm:engine.ccm
+  }, calc);
   pendingPeniContext = {
     deadline: deadline.toISOString().slice(0,10),
     cases: calc.results.map(r => ({
@@ -1508,6 +1497,10 @@ chat.addEventListener('click', function(e){
     addUserMessage(volEl.textContent);
     const calc = calcUtilSbor(pendingUtilContext.kw, ccm, pendingUtilContext.carYear);
     addBotMessage(formatUtilResult(calc, pendingUtilContext.kw, ccm, pendingUtilContext.carYear));
+    archiveCompletedCalculation({
+      source:'Справочник СЭП', brand:pendingUtilContext.brand || '', model:pendingUtilContext.model || '',
+      year:pendingUtilContext.carYear, category:'M1', kw:pendingUtilContext.kw, ccm
+    }, calc);
     pendingUtilContext = null;
     return;
   }
@@ -1528,7 +1521,7 @@ chat.addEventListener('click', function(e){
 
   addUserMessage(`${brand} ${model} ${year}${mass?', '+mass+' кг':''}`);
   addBotMessage(`<b>${escapeHtml(brand)} ${escapeHtml(model)} ${year}</b>${mass?', масса '+mass+' кг':''}<br><br>Мощность: <b style="font-size:18px;">${kw} кВт / ${hp} л.с.</b>`);
-  pendingUtilContext = {kw, carYear: year};
+  pendingUtilContext = {kw, carYear: year, brand, model};
   addBotMessage(`Чтобы рассчитать утильсбор, укажите <b>объём двигателя</b> — в см³ (например 1998) или в литрах (например 2 или 2.0), либо нажмите подходящую группу:${volumeBucketChipsHtml()}`);
 });
 
@@ -1620,7 +1613,7 @@ function handleResult(res, brand, model, year, weight){
     }
     const kw = totalKw(r); const hp = kwToHp(kw);
     addBotMessage(`<b>${escapeHtml(bName)} ${escapeHtml(mName)} ${year}</b>, масса ${weight} кг<br><br>Мощность: <b style="font-size:18px;">${kw} кВт / ${hp} л.с.</b>${kwBreakdown}${note}`);
-    pendingUtilContext = {kw, carYear: year};
+    pendingUtilContext = {kw, carYear: year, brand:bName, model:mName};
     addBotMessage(`Чтобы рассчитать утильсбор, укажите <b>объём двигателя</b> — в см³ (например 1998) или в литрах (например 2 или 2.0), либо нажмите подходящую группу:${volumeBucketChipsHtml()}`);
     return;
   }
@@ -1703,6 +1696,10 @@ document.getElementById('inputForm').addEventListener('submit', function(e){
       const ccm = parsedVol.ccm;
       const calc = calcUtilSbor(pendingUtilContext.kw, ccm, pendingUtilContext.carYear);
       addBotMessage(formatUtilResult(calc, pendingUtilContext.kw, ccm, pendingUtilContext.carYear));
+      archiveCompletedCalculation({
+        source:'Справочник СЭП', brand:pendingUtilContext.brand || '', model:pendingUtilContext.model || '',
+        year:pendingUtilContext.carYear, category:'M1', kw:pendingUtilContext.kw, ccm
+      }, calc);
       pendingUtilContext = null;
       return;
     }
@@ -1734,7 +1731,7 @@ document.getElementById('inputForm').addEventListener('submit', function(e){
       }
     }
       addBotMessage(`<b>${escapeHtml(res.brandName)} ${escapeHtml(res.modelName)} ${parsed.year}</b>${r[6]?', масса '+r[6]+' кг':''}<br><br>Мощность: <b style="font-size:18px;">${kw} кВт / ${hp} л.с.</b>${kwBreakdown}`);
-      pendingUtilContext = {kw, carYear: parsed.year};
+      pendingUtilContext = {kw, carYear: parsed.year, brand:res.brandName, model:res.modelName};
       addBotMessage(`Чтобы рассчитать утильсбор, укажите <b>объём двигателя</b> — в см³ (например 1998) или в литрах (например 2 или 2.0), либо нажмите подходящую группу:${volumeBucketChipsHtml()}`);
       return;
     }

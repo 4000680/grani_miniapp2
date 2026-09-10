@@ -2,11 +2,18 @@
   "name": "grani-telegram-bot",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev",
+    "export:bot-rates": "node scripts/export-bot-rates.cjs",
+    "test": "node --test bot/test/*.test.mjs"
   },
   "devDependencies": {
-    "wrangler": "^4.35.0"
+    "wrangler": "^4.35.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "dependencies": {
+    "unpdf": "^1.8.1"
   }
 }

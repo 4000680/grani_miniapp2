@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Брокер ГРАНИ</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="application-api.js"></script>
 <style>
   :root{
     --h-bg:#F4F5F7; --h-surface:#FFFFFF; --h-border:#E6E8EC;
@@ -44,6 +45,7 @@
   .home-section-title{color:var(--h-text-primary);font-size:16px;font-weight:600;}
   .home-section-link{color:var(--h-accent);font-size:13px;font-weight:500;background:none;border:none;font-family:inherit;cursor:pointer;padding:0;}
   .home-request-card{margin:4px 16px 0;background:#fff;border:1px solid var(--h-border);border-radius:18px;padding:16px;display:flex;flex-direction:column;gap:12px;opacity:0.55;}
+  .home-request-card.saved{opacity:1;margin-bottom:10px;}
   .home-request-top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
   .home-request-id{color:var(--h-text-primary);font-size:14.5px;font-weight:600;}
   .home-request-status{background:var(--h-accent-tint);color:var(--h-accent);font-size:12px;font-weight:600;border-radius:999px;padding:4px 10px;}
@@ -56,9 +58,11 @@
   .home-request-bottom{display:flex;align-items:center;justify-content:space-between;}
   .home-request-updated{color:var(--h-text-faint);font-size:12px;}
   .home-request-more{color:var(--h-accent);font-size:12.5px;font-weight:500;background:none;border:none;font-family:inherit;cursor:pointer;padding:0;}
-  .home-new-request{background:var(--h-ink);border-radius:16px;padding:15px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;border:none;width:calc(100% - 32px);margin:0 16px;opacity:0.55;font-family:inherit;}
+  .home-new-request{background:var(--h-ink);border-radius:16px;padding:15px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;border:none;width:calc(100% - 32px);margin:0 16px;font-family:inherit;}
   .home-new-request span{color:#fff;font-size:15px;font-weight:600;}
   .home-footer-pad{padding:16px 16px calc(16px + env(safe-area-inset-bottom,0px));}
+  .home-empty{margin:4px 16px 0;padding:22px 16px;background:#fff;border:1px solid var(--h-border);border-radius:18px;color:var(--h-text-muted);font-size:13.5px;line-height:1.45;text-align:center;}
+  .home-requests-error{color:#B42318;}
 </style>
 </head>
 <body>
@@ -125,28 +129,12 @@
 
   <div class="home-section-head">
     <span class="home-section-title">Мои заявки</span>
-    <button class="home-section-link" type="button" data-soon="1">Все · 3</button>
+    <button class="home-section-link" id="clearApplicationsBtn" type="button" hidden>Очистить</button>
   </div>
-  <div class="home-request-card" data-soon="1">
-    <div class="home-request-top">
-      <span class="home-request-id">Заявка №1042</span>
-      <span class="home-request-status">На оформлении</span>
-    </div>
-    <div class="home-request-meta">
-      <span class="home-request-line">Выписка из ЭПТС · Kia Sorento</span>
-      <span class="home-request-vin">VIN KNAPH81BDMK55**14</span>
-    </div>
-    <div class="home-progress">
-      <span class="filled"></span><span class="filled"></span><span class="filled"></span><span></span>
-    </div>
-    <div class="home-request-bottom">
-      <span class="home-request-updated">Обновлено сегодня, 14:20</span>
-      <button class="home-request-more" type="button" data-soon="1">Подробнее →</button>
-    </div>
-  </div>
+  <div id="applicationsList"><div class="home-empty">Завершённые расчёты появятся здесь.</div></div>
 
   <div class="home-footer-pad">
-    <button class="home-new-request" type="button" data-soon="1">
+    <button class="home-new-request" id="newCalcBottomBtn" type="button">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
       <span>Новая заявка</span>
     </button>
@@ -173,6 +161,68 @@ document.getElementById('openCalcBtn').addEventListener('click', function(){
   if(tg){ try{ tg.HapticFeedback.impactOccurred('light'); }catch(e){} }
   window.location.href = 'tabs/utilsbor/index.html';
 });
+document.getElementById('newCalcBottomBtn').addEventListener('click', function(){
+  if(tg){ try{ tg.HapticFeedback.impactOccurred('light'); }catch(e){} }
+  window.location.href = 'tabs/utilsbor/index.html';
+});
+
+function escapeHtml(value){
+  const element = document.createElement('div');
+  element.textContent = value == null ? '' : String(value);
+  return element.innerHTML;
+}
+
+function money(value){
+  return Number(value).toLocaleString('ru-RU', {maximumFractionDigits:2}) + ' ₽';
+}
+
+function renderApplications(items){
+  const list = document.getElementById('applicationsList');
+  const clear = document.getElementById('clearApplicationsBtn');
+  clear.hidden = !items.length;
+  if(!items.length){
+    list.innerHTML = '<div class="home-empty">Завершённые расчёты появятся здесь.</div>';
+    return;
+  }
+  list.innerHTML = items.map(item => {
+    const vehicle = [item.brand, item.model].filter(Boolean).join(' ') || 'Автомобиль';
+    const details = [];
+    if(item.year) details.push(item.year + ' год');
+    if(item.category) details.push(item.category);
+    const tech = [];
+    if(item.kw) tech.push(Number(item.kw).toLocaleString('ru-RU') + ' кВт');
+    if(item.ccm) tech.push(Number(item.ccm).toLocaleString('ru-RU') + ' см³');
+    const person = item.surname ? ' · ' + escapeHtml(item.surname) : '';
+    const amount = item.amount ? money(item.amount) : escapeHtml(item.amountLabel || '—');
+    const date = new Date(item.createdAt).toLocaleDateString('ru-RU', {day:'2-digit',month:'2-digit',year:'numeric'});
+    return `<div class="home-request-card saved">
+      <div class="home-request-top"><span class="home-request-id">Расчёт утильсбора</span><span class="home-request-status">${escapeHtml(item.source || 'Расчёт')}</span></div>
+      <div class="home-request-meta">
+        <span class="home-request-line"><b>${escapeHtml(vehicle)}</b>${person}</span>
+        ${details.length ? `<span class="home-request-line">${escapeHtml(details.join(' · '))}</span>` : ''}
+        ${item.vin ? `<span class="home-request-vin">VIN ${escapeHtml(item.vin)}</span>` : ''}
+        ${tech.length ? `<span class="home-request-line">${escapeHtml(tech.join(' · '))}</span>` : ''}
+      </div>
+      <div class="home-request-bottom"><span class="home-request-updated">${date}</span><span class="home-request-more">${amount}</span></div>
+    </div>`;
+  }).join('');
+}
+
+async function loadApplications(){
+  try{ renderApplications(await GraniApplications.list()); }
+  catch(_){ document.getElementById('applicationsList').innerHTML = '<div class="home-empty home-requests-error">Не удалось загрузить заявки. Откройте мини-приложение заново.</div>'; }
+}
+
+document.getElementById('clearApplicationsBtn').addEventListener('click', async function(){
+  const confirmed = tg && tg.showConfirm
+    ? await new Promise(resolve => tg.showConfirm('Очистить все сохранённые расчёты?', resolve))
+    : confirm('Очистить все сохранённые расчёты?');
+  if(!confirmed) return;
+  try{ renderApplications(await GraniApplications.clear()); }
+  catch(_){ if(tg && tg.showAlert) tg.showAlert('Не удалось очистить заявки. Попробуйте ещё раз.'); }
+});
+
+loadApplications();
 
 // заглушки остальных плиток — раздел пока не реализован
 document.querySelectorAll('[data-soon]').forEach(el => {

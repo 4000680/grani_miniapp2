@@ -3,6 +3,20 @@
   "name": "grani-miniapp2",
   "main": "bot/src/index.js",
   "compatibility_date": "2026-09-01",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "APPLICATIONS",
+        "class_name": "ApplicationsStore"
+      }
+    ]
+  },
+  "exports": {
+    "ApplicationsStore": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
   "vars": {
     "MINI_APP_URL": "https://4000680.github.io/grani_miniapp2/",
     "CONTACT_URL": "https://t.me/grani_broker",
