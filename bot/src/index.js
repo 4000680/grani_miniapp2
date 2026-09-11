@@ -1,4 +1,4 @@
-import { calculationPower, getCatalogCandidate, loadCatalog, parseCatalogQuery, searchCatalog } from './catalog-search.js';
+import { calculationPower, getCatalogCandidate, loadCatalog, parseCatalogQuery, parseCatalogWeight, searchCatalog } from './catalog-search.js';
 import {
   addWorkingDays,
   calculatePeni,
@@ -17,7 +17,7 @@ const MENU_TEXT = [
   '',
   'Выберите нужный раздел ниже или отправьте сюда PDF-файл СБКТС или выписку ЭПТС 👇',
   '',
-  'Для поиска по справочнику просто напишите марку, модель и год, например: <code>Kia Niro EV 2022</code>.',
+  'Для поиска по справочнику напишите марку, модель и год выпуска.',
   '',
   'Функционал бота постоянно пополняется.'
 ].join('\n');
@@ -428,53 +428,57 @@ function compactButtonText(value, max = 58) {
   return text.length <= max ? text : text.slice(0, max - 1) + '…';
 }
 
-function catalogCandidateDescription(candidate) {
+function catalogCandidateDescription(candidate, requestedWeight = null) {
   const power = [];
   if (candidate.combustionKw) power.push(candidate.combustionKw + ' кВт макс.');
   if (candidate.electricKw) power.push(candidate.electricKw + ' кВт (30 мин)');
   return [
     '<b>' + escapeHtml([candidate.brand, candidate.model].filter(Boolean).join(' ')) + '</b>, ' + candidate.year,
     power.length ? 'Мощность в справочнике: ' + power.join(' + ') : 'Мощность в справочнике не указана',
-    candidate.mass ? 'Технически допустимая масса: ' + candidate.mass + ' кг' : ''
+    requestedWeight || candidate.mass
+      ? 'Технически допустимая масса: ' + (requestedWeight || candidate.mass) + ' кг'
+      : candidate.massFrom && candidate.massTo
+        ? 'Диапазон массы: ' + candidate.massFrom + '–' + candidate.massTo + ' кг'
+        : ''
   ].filter(Boolean).join('\n');
 }
 
-function catalogVariantsKeyboard(matches) {
+function catalogVariantsKeyboard(matches, weight) {
   return {
     inline_keyboard: [
       ...matches.map(candidate => [{
         text: compactButtonText(
           candidate.brand + ' ' + candidate.model + ' · ' +
           (candidate.combustionKw || 0) +
-          (candidate.electricKw ? ' + ' + candidate.electricKw : '') + ' кВт'
+          (candidate.electricKw ? ' + ' + candidate.electricKw : '') + ' кВт · ' + weight + ' кг'
         ),
-        callback_data: 'catalog:pick:' + candidate.rowIndex
+        callback_data: 'catalog:pick:' + candidate.rowIndex + ':' + weight
       }]),
       [{ text: '🏠 Главное меню', callback_data: 'calc:menu' }]
     ]
   };
 }
 
-function catalogEngineKeyboard(rowIndex) {
+function catalogEngineKeyboard(rowIndex, weight) {
   const buttons = CATALOG_CCM_BUCKETS.map(bucket => ({
     text: bucket.label,
-    callback_data: 'catalog:calc:' + rowIndex + ':' + bucket.value
+    callback_data: 'catalog:calc:' + rowIndex + ':' + bucket.value + ':' + weight
   }));
   return {
     inline_keyboard: [
       buttons.slice(0, 2),
       buttons.slice(2, 4),
-      [buttons[4], { text: '⚡ Электро/гибрид', callback_data: 'catalog:calc:' + rowIndex + ':e' }],
+      [buttons[4], { text: '⚡ Электро/гибрид', callback_data: 'catalog:calc:' + rowIndex + ':e:' + weight }],
       [{ text: '🏠 Главное меню', callback_data: 'calc:menu' }]
     ]
   };
 }
 
-function catalogEnginePrompt(candidate) {
+function catalogEnginePrompt(candidate, weight) {
   return [
     '✅ <b>Автомобиль найден в справочнике</b>',
     '',
-    catalogCandidateDescription(candidate),
+    catalogCandidateDescription(candidate, weight),
     '',
     'Выберите тип автомобиля и группу объёма двигателя.',
     '',
@@ -495,6 +499,7 @@ function formatCatalogResult(candidate, vehicle, util) {
     '',
     '<b>Автомобиль:</b> ' + escapeHtml([candidate.brand, candidate.model].filter(Boolean).join(' ')),
     '<b>Год выпуска:</b> ' + candidate.year,
+    '<b>Технически допустимая масса:</b> ' + (vehicle.maxMass || candidate.mass || '—') + (vehicle.maxMass || candidate.mass ? ' кг' : ''),
     '<b>Тип:</b> ' + (electric ? 'электромобиль / последовательный гибрид' : 'ДВС / параллельный гибрид'),
     '<b>Мощность для расчёта:</b> ' + vehicle.totalKw + ' кВт' + (electric ? ' (30-минутная)' : ''),
   ];
@@ -519,58 +524,81 @@ function formatCatalogResult(candidate, vehicle, util) {
   return lines.join('\n').trim();
 }
 
-async function showCatalogCandidate(env, message, rowIndex) {
+async function showCatalogCandidate(env, message, rowIndex, weight) {
   const catalog = await loadCatalog(env.CATALOG_URL);
   const candidate = getCatalogCandidate(catalog, rowIndex);
   if (!candidate) throw new Error('Выбранная версия автомобиля больше не найдена в справочнике');
   await telegram(env, 'editMessageText', {
     chat_id: message.chat.id,
     message_id: message.message_id,
-    text: catalogEnginePrompt(candidate),
+    text: catalogEnginePrompt(candidate, weight),
     parse_mode: 'HTML',
-    reply_markup: catalogEngineKeyboard(candidate.rowIndex)
+    reply_markup: catalogEngineKeyboard(candidate.rowIndex, weight)
   });
 }
 
-async function handleCatalogText(env, message) {
-  if (message.chat?.type !== 'private' || message.text.startsWith('/')) return false;
-  const parsed = parseCatalogQuery(message.text);
-  if (!parsed) return false;
+async function sendCatalogWeightPrompt(env, chatId, parsed) {
+  return telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: [
+      'Чтобы найти точную модификацию и мощность, укажите <b>технически допустимую максимальную массу</b> автомобиля в килограммах.',
+      '',
+      '<b>Марка и модель:</b> ' + escapeHtml(parsed.vehicleText),
+      '<b>Год выпуска:</b> ' + parsed.year,
+      '',
+      'Ответьте на это сообщение только числом.'
+    ].join('\n'),
+    parse_mode: 'HTML',
+    reply_markup: {
+      force_reply: true,
+      selective: true,
+      input_field_placeholder: 'Масса автомобиля, кг'
+    }
+  });
+}
 
+function catalogQueryFromWeightPrompt(prompt) {
+  const vehicle = prompt.match(/Марка и модель:\s*(.+)/i)?.[1]?.trim();
+  const year = prompt.match(/Год выпуска:\s*((?:19|20)\d{2})/i)?.[1];
+  return vehicle && year ? parseCatalogQuery(vehicle + ' ' + year) : null;
+}
+
+async function runCatalogSearch(env, message, parsed, weight) {
   await telegram(env, 'sendChatAction', { chat_id: message.chat.id, action: 'typing' });
   const status = await telegram(env, 'sendMessage', {
     chat_id: message.chat.id,
-    text: '🔎 Ищу автомобиль в справочнике…'
+    text: '🔎 Ищу автомобиль в справочнике с учётом массы…'
   });
 
   try {
     const catalog = await loadCatalog(env.CATALOG_URL);
-    const matches = searchCatalog(catalog, parsed);
+    const matches = searchCatalog(catalog, parsed, weight);
     if (!matches.length) {
       await telegram(env, 'editMessageText', {
         chat_id: message.chat.id,
         message_id: status.message_id,
         text: [
-          'Не нашёл такой автомобиль в справочнике.',
+          'Не нашёл подходящую модификацию для указанной массы <b>' + weight + ' кг</b>.',
           '',
-          'Попробуйте написать марку и модель точнее, например: <b>Kia Niro EV 2022</b>.'
+          'Проверьте марку, модель, год выпуска и массу, затем начните поиск заново.'
         ].join('\n'),
         parse_mode: 'HTML',
-        reply_markup: { inline_keyboard: [[{ text: '🏠 Главное меню', callback_data: 'calc:menu' }]] }
+        reply_markup: calculationKeyboard()
       });
-      return true;
+      return;
     }
 
     if (matches.length === 1) {
-      await showCatalogCandidate(env, status, matches[0].rowIndex);
-      return true;
+      await showCatalogCandidate(env, status, matches[0].rowIndex, weight);
+      return;
     }
 
     await telegram(env, 'editMessageText', {
       chat_id: message.chat.id,
       message_id: status.message_id,
-      text: 'Нашёл несколько вариантов. Выберите подходящую мощность:',
-      reply_markup: catalogVariantsKeyboard(matches)
+      text: 'Нашёл несколько вариантов для массы <b>' + weight + ' кг</b>. Выберите подходящую мощность:',
+      parse_mode: 'HTML',
+      reply_markup: catalogVariantsKeyboard(matches, weight)
     });
   } catch (error) {
     await telegram(env, 'editMessageText', {
@@ -580,18 +608,42 @@ async function handleCatalogText(env, message) {
       parse_mode: 'HTML'
     });
   }
+}
+
+async function handleCatalogWeightReply(env, message) {
+  const prompt = message.reply_to_message?.text || '';
+  if (!prompt.startsWith('Чтобы найти точную модификацию и мощность')) return false;
+  const parsed = catalogQueryFromWeightPrompt(prompt);
+  const weight = parseCatalogWeight(message.text);
+  if (!parsed || !weight) {
+    await telegram(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: 'Не удалось распознать массу. Укажите технически допустимую максимальную массу одним числом в килограммах.'
+    });
+    if (parsed) await sendCatalogWeightPrompt(env, message.chat.id, parsed);
+    return true;
+  }
+  await runCatalogSearch(env, message, parsed, weight);
+  return true;
+}
+
+async function handleCatalogText(env, message) {
+  if (message.chat?.type !== 'private' || message.text.startsWith('/')) return false;
+  const parsed = parseCatalogQuery(message.text);
+  if (!parsed) return false;
+  await sendCatalogWeightPrompt(env, message.chat.id, parsed);
   return true;
 }
 
 async function handleCatalogCallback(env, query) {
   const message = query.message;
-  const pick = query.data.match(/^catalog:pick:(\d+)$/);
+  const pick = query.data.match(/^catalog:pick:(\d+)(?::(\d+))?$/);
   if (pick) {
-    await showCatalogCandidate(env, message, Number(pick[1]));
+    await showCatalogCandidate(env, message, Number(pick[1]), Number(pick[2]) || null);
     return;
   }
 
-  const calculation = query.data.match(/^catalog:calc:(\d+):(e|\d+)$/);
+  const calculation = query.data.match(/^catalog:calc:(\d+):(e|\d+)(?::(\d+))?$/);
   if (!calculation) return;
   const catalog = await loadCatalog(env.CATALOG_URL);
   const candidate = getCatalogCandidate(catalog, Number(calculation[1]));
@@ -599,6 +651,7 @@ async function handleCatalogCallback(env, query) {
 
   const electric = calculation[2] === 'e';
   const ccm = electric ? null : Number(calculation[2]);
+  const requestedWeight = Number(calculation[3]) || candidate.mass || null;
   const totalKw = calculationPower(candidate, electric);
   const vehicle = {
     type: 'catalog',
@@ -612,7 +665,7 @@ async function handleCatalogCallback(env, query) {
     combustionKw: candidate.combustionKw,
     electricKw: candidate.electricKw ? [candidate.electricKw] : [],
     totalKw,
-    maxMass: candidate.mass,
+    maxMass: requestedWeight,
     issueDate: null,
     hybridType: electric ? 'электромобиль / последовательный гибрид' : 'ДВС / параллельный гибрид'
   };
@@ -791,7 +844,7 @@ async function handleCalculationCallback(env, query) {
     await telegram(env, 'editMessageText', {
       chat_id: message.chat.id,
       message_id: message.message_id,
-      text: '📎 Отправьте новый PDF-файл СБКТС или выписку ЭПТС либо напишите марку, модель и год автомобиля, например: Kia Niro EV 2022.',
+      text: '📎 Отправьте новый PDF-файл СБКТС или выписку ЭПТС либо напишите марку, модель и год выпуска автомобиля.',
       reply_markup: { inline_keyboard: [[{ text: '🏠 Главное меню', callback_data: 'calc:menu' }]] }
     });
     return;
@@ -814,6 +867,7 @@ async function handleUpdate(env, update) {
   }
   if (update.message?.text) {
     if (await handleDateReply(env, update.message)) return;
+    if (await handleCatalogWeightReply(env, update.message)) return;
     const command = update.message.text.split(/\s+/)[0].split('@')[0].toLowerCase();
     if (command === '/start' || command === '/menu' || command === '/help') {
       await sendMenu(env, update.message.chat.id);
@@ -867,7 +921,7 @@ export default {
       if (url.pathname === '/api/applications') return handleApplicationsApi(request, env);
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'catalog-search-v1' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'catalog-search-weight-v2' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
