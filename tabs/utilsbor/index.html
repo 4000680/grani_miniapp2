@@ -786,7 +786,7 @@ function formatUtilResult(calc, kw, ccm, carYear){
       html += `Льготная ставка для физлица: <b>${formatMoney(r.personalSum)}</b><br>`;
       html += `<span style="color:var(--muted);font-size:12px;">Мощность не превышает ${preferentialLimit}.</span><br>`;
     } else {
-      html += `Ставка для физлица (личное пользование): <b>${formatMoney(r.personalSum)}</b><br>`;
+      html += `Сумма утильсбора по коммерческой ставке: <b>${formatMoney(r.personalSum)}</b><br>`;
       html += `<span style="color:var(--muted);font-size:12px;">Льготный коэффициент не применяется: ${calc.noPreferenceReason}.</span><br>`;
     }
     if(r.personalDiffers){
