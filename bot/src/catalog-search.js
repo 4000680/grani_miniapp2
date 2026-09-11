@@ -77,7 +77,9 @@ function candidateFromRow(catalog, row, rowIndex) {
     eco: row[3] >= 0 ? catalog.eco?.[row[3]] || '' : '',
     combustionKw: Number(row[4]) || 0,
     electricKw: Number(row[5]) || 0,
-    mass: Number(row[6]) || null
+    mass: Number(row[6]) || null,
+    massFrom: Number(row[7]) || null,
+    massTo: Number(row[8]) || null
   };
 }
 
@@ -87,12 +89,11 @@ export function getCatalogCandidate(catalog, rowIndex) {
   return candidateFromRow(catalog, row, Number(rowIndex));
 }
 
-export function searchCatalog(catalog, parsedQuery, limit = 8) {
+export function searchCatalog(catalog, parsedQuery, weight = null, limit = 8) {
   if (!parsedQuery) return [];
   const query = normalizeCatalogText(parsedQuery.vehicleText);
   const tokens = query.split(' ').filter(Boolean);
-  const matches = [];
-  const seen = new Set();
+  const namedRows = [];
 
   for (let rowIndex = 0; rowIndex < catalog.rows.length; rowIndex++) {
     const row = catalog.rows[rowIndex];
@@ -102,7 +103,25 @@ export function searchCatalog(catalog, parsedQuery, limit = 8) {
     const combined = `${brand} ${model}`.trim();
     const combinedTokens = new Set(combined.split(' ').filter(Boolean));
     if (!tokens.every(token => combinedTokens.has(token))) continue;
+    namedRows.push({ row, rowIndex, brand, model, combined });
+  }
 
+  let selectedRows = namedRows;
+  if (weight !== null && weight !== undefined) {
+    const value = Number(weight);
+    const exact = namedRows.filter(item => Number(item.row[6]) && Math.abs(Number(item.row[6]) - value) < 1);
+    const inRange = namedRows.filter(item => {
+      const from = Number(item.row[7]);
+      const to = Number(item.row[8]);
+      return from && to && value >= from && value <= to;
+    });
+    selectedRows = exact.length ? exact : inRange;
+  }
+
+  const matches = [];
+  const seen = new Set();
+  for (const item of selectedRows) {
+    const { row, rowIndex, brand, combined } = item;
     const key = [row[0], row[1], row[2], Number(row[4]) || 0, Number(row[5]) || 0].join(':');
     if (seen.has(key)) continue;
     seen.add(key);
@@ -118,6 +137,14 @@ export function searchCatalog(catalog, parsedQuery, limit = 8) {
   return matches
     .sort((left, right) => right.score - left.score || left.model.localeCompare(right.model, 'ru'))
     .slice(0, limit);
+}
+
+export function parseCatalogWeight(value) {
+  const normalized = String(value || '').replace(/\s+/g, '');
+  const match = normalized.match(/\d{3,5}/);
+  if (!match) return null;
+  const weight = Number(match[0]);
+  return weight >= 500 && weight <= 10000 ? weight : null;
 }
 
 export function calculationPower(candidate, electric) {
