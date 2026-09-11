@@ -68,7 +68,7 @@ function numberValue(lines, label, minX) {
 }
 
 function parseRussianDateFromText(text) {
-  let match = normalize(text).match(/(?:Дата оформления[^\d]{0,20})["«]?\s*(\d{1,2})["»]?\s+([а-яё]+)\s+(\d{4})/i);
+  let match = normalize(text).match(/Дата\s+оформления[^\d]{0,40}(\d{1,2})[\s"'«»]*([а-яё]+)\s+(\d{4})/i);
   if (!match) return null;
   const month = monthNumber(match[2]);
   return month ? validDate(Number(match[3]), month, Number(match[1])) : null;
