@@ -1,3 +1,4 @@
+import { calculationPower, getCatalogCandidate, loadCatalog, parseCatalogQuery, searchCatalog } from './catalog-search.js';
 import {
   addWorkingDays,
   calculatePeni,
@@ -15,6 +16,8 @@ const MENU_TEXT = [
   'Мы создали этот бот, чтобы автоматизировать ежедневные задачи брокера и упростить оформление автомобилей по параллельному импорту.',
   '',
   'Выберите нужный раздел ниже или отправьте сюда PDF-файл СБКТС или выписку ЭПТС 👇',
+  '',
+  'Для поиска по справочнику просто напишите марку, модель и год, например: <code>Kia Niro EV 2022</code>.',
   '',
   'Функционал бота постоянно пополняется.'
 ].join('\n');
@@ -242,7 +245,7 @@ function extractCases(text) {
 function applicationFromVehicle(vehicle, util) {
   const amounts = util.map(item => item.personal !== item.commercial ? item.personal : item.commercial);
   return {
-    source: vehicle.type === 'sbkts' ? 'СБКТС' : 'ЭПТС',
+    source: vehicle.type === 'sbkts' ? 'СБКТС' : vehicle.type === 'catalog' ? 'Справочник' : 'ЭПТС',
     vin: vehicle.vin,
     surname: vehicle.surname,
     brand: vehicle.brand,
@@ -411,6 +414,219 @@ async function handleDateReply(env, message) {
   return true;
 }
 
+
+const CATALOG_CCM_BUCKETS = [
+  { value: 800, label: 'до 1000 см³' },
+  { value: 1500, label: '1001–2000 см³' },
+  { value: 2500, label: '2001–3000 см³' },
+  { value: 3200, label: '3001–3500 см³' },
+  { value: 4000, label: 'свыше 3500 см³' }
+];
+
+function compactButtonText(value, max = 58) {
+  const text = String(value);
+  return text.length <= max ? text : text.slice(0, max - 1) + '…';
+}
+
+function catalogCandidateDescription(candidate) {
+  const power = [];
+  if (candidate.combustionKw) power.push(candidate.combustionKw + ' кВт макс.');
+  if (candidate.electricKw) power.push(candidate.electricKw + ' кВт (30 мин)');
+  return [
+    '<b>' + escapeHtml([candidate.brand, candidate.model].filter(Boolean).join(' ')) + '</b>, ' + candidate.year,
+    power.length ? 'Мощность в справочнике: ' + power.join(' + ') : 'Мощность в справочнике не указана',
+    candidate.mass ? 'Технически допустимая масса: ' + candidate.mass + ' кг' : ''
+  ].filter(Boolean).join('\n');
+}
+
+function catalogVariantsKeyboard(matches) {
+  return {
+    inline_keyboard: [
+      ...matches.map(candidate => [{
+        text: compactButtonText(
+          candidate.brand + ' ' + candidate.model + ' · ' +
+          (candidate.combustionKw || 0) +
+          (candidate.electricKw ? ' + ' + candidate.electricKw : '') + ' кВт'
+        ),
+        callback_data: 'catalog:pick:' + candidate.rowIndex
+      }]),
+      [{ text: '🏠 Главное меню', callback_data: 'calc:menu' }]
+    ]
+  };
+}
+
+function catalogEngineKeyboard(rowIndex) {
+  const buttons = CATALOG_CCM_BUCKETS.map(bucket => ({
+    text: bucket.label,
+    callback_data: 'catalog:calc:' + rowIndex + ':' + bucket.value
+  }));
+  return {
+    inline_keyboard: [
+      buttons.slice(0, 2),
+      buttons.slice(2, 4),
+      [buttons[4], { text: '⚡ Электро/гибрид', callback_data: 'catalog:calc:' + rowIndex + ':e' }],
+      [{ text: '🏠 Главное меню', callback_data: 'calc:menu' }]
+    ]
+  };
+}
+
+function catalogEnginePrompt(candidate) {
+  return [
+    '✅ <b>Автомобиль найден в справочнике</b>',
+    '',
+    catalogCandidateDescription(candidate),
+    '',
+    'Выберите тип автомобиля и группу объёма двигателя.',
+    '',
+    '<i>Для электромобиля или последовательного гибрида выберите «Электро/гибрид»: в расчёт пойдёт только 30-минутная мощность.</i>'
+  ].join('\n');
+}
+
+function catalogNoPreferenceReason(ccm, kw) {
+  if (!ccm) return 'мощность выше 58,84 кВт (80 л.с.)';
+  if (ccm > 3000) return 'объём двигателя превышает 3000 см³';
+  return 'мощность выше 117,68 кВт (160 л.с.)';
+}
+
+function formatCatalogResult(candidate, vehicle, util) {
+  const electric = !vehicle.ccm;
+  const lines = [
+    '✅ <b>Расчёт утильсбора</b>',
+    '',
+    '<b>Автомобиль:</b> ' + escapeHtml([candidate.brand, candidate.model].filter(Boolean).join(' ')),
+    '<b>Год выпуска:</b> ' + candidate.year,
+    '<b>Тип:</b> ' + (electric ? 'электромобиль / последовательный гибрид' : 'ДВС / параллельный гибрид'),
+    '<b>Мощность для расчёта:</b> ' + vehicle.totalKw + ' кВт' + (electric ? ' (30-минутная)' : ''),
+  ];
+  if (!electric) {
+    lines.push('<b>Объём двигателя:</b> группа ' + vehicle.ccm + ' см³');
+    if (candidate.electricKw) {
+      lines.push('<i>' + candidate.combustionKw + ' кВт максимальная + ' + candidate.electricKw + ' кВт 30-минутная</i>');
+    }
+  }
+  lines.push('');
+  for (const item of util) {
+    lines.push('<b>' + ageLabel(item.age) + ':</b>');
+    if (item.personal !== item.commercial) {
+      lines.push('<b>Льготный утильсбор для физлица: ' + formatMoney(item.personal) + '</b>');
+      lines.push('Коммерческий утильсбор: ' + formatMoney(item.commercial));
+    } else {
+      lines.push('<b>Коммерческий утильсбор: ' + formatMoney(item.commercial) + '</b>');
+      lines.push('<i>Льготный коэффициент не применяется: ' + catalogNoPreferenceReason(vehicle.ccm, vehicle.totalKw) + '.</i>');
+    }
+    lines.push('');
+  }
+  return lines.join('\n').trim();
+}
+
+async function showCatalogCandidate(env, message, rowIndex) {
+  const catalog = await loadCatalog(env.CATALOG_URL);
+  const candidate = getCatalogCandidate(catalog, rowIndex);
+  if (!candidate) throw new Error('Выбранная версия автомобиля больше не найдена в справочнике');
+  await telegram(env, 'editMessageText', {
+    chat_id: message.chat.id,
+    message_id: message.message_id,
+    text: catalogEnginePrompt(candidate),
+    parse_mode: 'HTML',
+    reply_markup: catalogEngineKeyboard(candidate.rowIndex)
+  });
+}
+
+async function handleCatalogText(env, message) {
+  if (message.chat?.type !== 'private' || message.text.startsWith('/')) return false;
+  const parsed = parseCatalogQuery(message.text);
+  if (!parsed) return false;
+
+  await telegram(env, 'sendChatAction', { chat_id: message.chat.id, action: 'typing' });
+  const status = await telegram(env, 'sendMessage', {
+    chat_id: message.chat.id,
+    text: '🔎 Ищу автомобиль в справочнике…'
+  });
+
+  try {
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const matches = searchCatalog(catalog, parsed);
+    if (!matches.length) {
+      await telegram(env, 'editMessageText', {
+        chat_id: message.chat.id,
+        message_id: status.message_id,
+        text: [
+          'Не нашёл такой автомобиль в справочнике.',
+          '',
+          'Попробуйте написать марку и модель точнее, например: <b>Kia Niro EV 2022</b>.'
+        ].join('\n'),
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[{ text: '🏠 Главное меню', callback_data: 'calc:menu' }]] }
+      });
+      return true;
+    }
+
+    if (matches.length === 1) {
+      await showCatalogCandidate(env, status, matches[0].rowIndex);
+      return true;
+    }
+
+    await telegram(env, 'editMessageText', {
+      chat_id: message.chat.id,
+      message_id: status.message_id,
+      text: 'Нашёл несколько вариантов. Выберите подходящую мощность:',
+      reply_markup: catalogVariantsKeyboard(matches)
+    });
+  } catch (error) {
+    await telegram(env, 'editMessageText', {
+      chat_id: message.chat.id,
+      message_id: status.message_id,
+      text: 'Не удалось выполнить поиск: ' + escapeHtml(error.message || error) + '. Попробуйте ещё раз немного позже.',
+      parse_mode: 'HTML'
+    });
+  }
+  return true;
+}
+
+async function handleCatalogCallback(env, query) {
+  const message = query.message;
+  const pick = query.data.match(/^catalog:pick:(\d+)$/);
+  if (pick) {
+    await showCatalogCandidate(env, message, Number(pick[1]));
+    return;
+  }
+
+  const calculation = query.data.match(/^catalog:calc:(\d+):(e|\d+)$/);
+  if (!calculation) return;
+  const catalog = await loadCatalog(env.CATALOG_URL);
+  const candidate = getCatalogCandidate(catalog, Number(calculation[1]));
+  if (!candidate) throw new Error('Автомобиль больше не найден в справочнике');
+
+  const electric = calculation[2] === 'e';
+  const ccm = electric ? null : Number(calculation[2]);
+  const totalKw = calculationPower(candidate, electric);
+  const vehicle = {
+    type: 'catalog',
+    brand: candidate.brand,
+    model: candidate.model,
+    vin: null,
+    surname: null,
+    year: candidate.year,
+    category: 'M1',
+    ccm,
+    combustionKw: candidate.combustionKw,
+    electricKw: candidate.electricKw ? [candidate.electricKw] : [],
+    totalKw,
+    maxMass: candidate.mass,
+    issueDate: null,
+    hybridType: electric ? 'электромобиль / последовательный гибрид' : 'ДВС / параллельный гибрид'
+  };
+  const util = calculateUtil(vehicle);
+  await saveApplication(env, query.from?.id, applicationFromVehicle(vehicle, util));
+  await telegram(env, 'editMessageText', {
+    chat_id: message.chat.id,
+    message_id: message.message_id,
+    text: formatCatalogResult(candidate, vehicle, util),
+    parse_mode: 'HTML',
+    reply_markup: calculationKeyboard()
+  });
+}
+
 async function handleDocument(env, message) {
   const document = message.document;
   const isPdf = document.mime_type === 'application/pdf' || /\.pdf$/i.test(document.file_name || '');
@@ -575,7 +791,7 @@ async function handleCalculationCallback(env, query) {
     await telegram(env, 'editMessageText', {
       chat_id: message.chat.id,
       message_id: message.message_id,
-      text: '📎 Отправьте сюда новый PDF-файл СБКТС или выписку ЭПТС. Можно просто переслать его из другого чата.',
+      text: '📎 Отправьте новый PDF-файл СБКТС или выписку ЭПТС либо напишите марку, модель и год автомобиля, например: Kia Niro EV 2022.',
       reply_markup: { inline_keyboard: [[{ text: '🏠 Главное меню', callback_data: 'calc:menu' }]] }
     });
     return;
@@ -601,7 +817,9 @@ async function handleUpdate(env, update) {
     const command = update.message.text.split(/\s+/)[0].split('@')[0].toLowerCase();
     if (command === '/start' || command === '/menu' || command === '/help') {
       await sendMenu(env, update.message.chat.id);
+      return;
     }
+    if (await handleCatalogText(env, update.message)) return;
     return;
   }
 
@@ -613,7 +831,8 @@ async function handleUpdate(env, update) {
   }
   await telegram(env, 'answerCallbackQuery', { callback_query_id: query.id });
   if (!query.message) return;
-  if (query.data?.startsWith('calc:')) await handleCalculationCallback(env, query);
+  if (query.data?.startsWith('catalog:')) await handleCatalogCallback(env, query);
+  else if (query.data?.startsWith('calc:')) await handleCalculationCallback(env, query);
   else if (query.data === 'menu') await editMenu(env, query.message);
   else if (query.data?.startsWith('info:')) await showInfo(env, query.message, query.data.slice(5));
 }
