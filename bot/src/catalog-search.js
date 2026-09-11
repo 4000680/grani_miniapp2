@@ -71,6 +71,8 @@ export async function loadCatalog(url = DEFAULT_CATALOG_URL) {
 function candidateFromRow(catalog, row, rowIndex) {
   return {
     rowIndex,
+    brandIndex: row[0],
+    modelIndex: row[1],
     brand: catalog.brands[row[0]] || '',
     model: catalog.models[row[1]] || '',
     year: Number(row[2]),
@@ -89,10 +91,11 @@ export function getCatalogCandidate(catalog, rowIndex) {
   return candidateFromRow(catalog, row, Number(rowIndex));
 }
 
-export function searchCatalog(catalog, parsedQuery, weight = null, limit = 8) {
+function namedCatalogRows(catalog, parsedQuery) {
   if (!parsedQuery) return [];
   const query = normalizeCatalogText(parsedQuery.vehicleText);
   const tokens = query.split(' ').filter(Boolean);
+  const compactQuery = query.replace(/\s/g, '');
   const namedRows = [];
 
   for (let rowIndex = 0; rowIndex < catalog.rows.length; rowIndex++) {
@@ -102,9 +105,63 @@ export function searchCatalog(catalog, parsedQuery, weight = null, limit = 8) {
     const model = normalizeCatalogText(catalog.models[row[1]]);
     const combined = `${brand} ${model}`.trim();
     const combinedTokens = new Set(combined.split(' ').filter(Boolean));
-    if (!tokens.every(token => combinedTokens.has(token))) continue;
-    namedRows.push({ row, rowIndex, brand, model, combined });
+    const compactMatch = combined.replace(/\s/g, '').startsWith(compactQuery);
+    const tokenMatch = tokens.every(token => combinedTokens.has(token));
+    if (!compactMatch && !tokenMatch) continue;
+
+    let score = 0;
+    if (combined === query) score += 1000;
+    if (compactMatch) score += 500;
+    if (brand === tokens[0]) score += 200;
+    score -= Math.abs(combined.length - query.length);
+    namedRows.push({ row, rowIndex, brand, model, combined, score });
   }
+  return namedRows;
+}
+
+export function listCatalogModifications(catalog, parsedQuery) {
+  const modifications = new Map();
+  for (const item of namedCatalogRows(catalog, parsedQuery)) {
+    const key = `${item.row[0]}:${item.row[1]}:${item.row[2]}`;
+    const current = modifications.get(key);
+    if (current) {
+      current.rowsCount++;
+      current.score = Math.max(current.score, item.score);
+      continue;
+    }
+    modifications.set(key, {
+      brandIndex: item.row[0],
+      modelIndex: item.row[1],
+      brand: catalog.brands[item.row[0]] || '',
+      model: catalog.models[item.row[1]] || '',
+      year: Number(item.row[2]),
+      rowsCount: 1,
+      score: item.score
+    });
+  }
+  return [...modifications.values()]
+    .sort((left, right) => right.score - left.score || left.model.localeCompare(right.model, 'ru'));
+}
+
+export function getCatalogVariants(catalog, brandIndex, modelIndex, year) {
+  const variants = [];
+  const seen = new Set();
+  for (let rowIndex = 0; rowIndex < catalog.rows.length; rowIndex++) {
+    const row = catalog.rows[rowIndex];
+    if (row[0] !== Number(brandIndex) || row[1] !== Number(modelIndex) || Number(row[2]) !== Number(year)) continue;
+    const key = [Number(row[4]) || 0, Number(row[5]) || 0, Number(row[6]) || 0, Number(row[7]) || 0, Number(row[8]) || 0].join(':');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    variants.push(candidateFromRow(catalog, row, rowIndex));
+  }
+  return variants.sort((left, right) =>
+    (left.mass || left.massFrom || Infinity) - (right.mass || right.massFrom || Infinity) ||
+    (left.combustionKw + left.electricKw) - (right.combustionKw + right.electricKw)
+  );
+}
+
+export function searchCatalog(catalog, parsedQuery, weight = null, limit = 8) {
+  const namedRows = namedCatalogRows(catalog, parsedQuery);
 
   let selectedRows = namedRows;
   if (weight !== null && weight !== undefined) {
@@ -121,17 +178,12 @@ export function searchCatalog(catalog, parsedQuery, weight = null, limit = 8) {
   const matches = [];
   const seen = new Set();
   for (const item of selectedRows) {
-    const { row, rowIndex, brand, combined } = item;
+    const { row, rowIndex } = item;
     const key = [row[0], row[1], row[2], Number(row[4]) || 0, Number(row[5]) || 0].join(':');
     if (seen.has(key)) continue;
     seen.add(key);
 
-    let score = 0;
-    if (combined === query) score += 1000;
-    if (combined.startsWith(query)) score += 500;
-    if (brand === tokens[0]) score += 200;
-    score -= Math.abs(combined.length - query.length);
-    matches.push({ ...candidateFromRow(catalog, row, rowIndex), score });
+    matches.push({ ...candidateFromRow(catalog, row, rowIndex), score: item.score });
   }
 
   return matches
