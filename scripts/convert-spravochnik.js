@@ -7,9 +7,12 @@
  *
  * Использование: node scripts/convert-spravochnik.js <путь-к-xlsx> <путь-для-результата>
  */
-const fs = require('fs');
-const zlib = require('zlib');
-const XLSX = require('xlsx');
+import fs from 'node:fs';
+import zlib from 'node:zlib';
+import * as XLSX from 'xlsx';
+
+// В ESM-версии SheetJS доступ к файловой системе подключается явно.
+XLSX.set_fs(fs);
 
 const inputPath = process.argv[2] || 'tabs/utilsbor/spravochnik.xlsx';
 const outputPath = process.argv[3] || 'tabs/utilsbor/spravochnik.json.gz.b64';
