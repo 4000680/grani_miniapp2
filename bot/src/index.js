@@ -455,6 +455,82 @@ async function handleDocument(env, message) {
   }
 }
 
+function isGroupChat(chat) {
+  return chat?.type === 'group' || chat?.type === 'supergroup';
+}
+
+function isPdfDocument(document) {
+  return document && (document.mime_type === 'application/pdf' || /\.pdf$/i.test(document.file_name || ''));
+}
+
+async function offerGroupCalculation(env, message) {
+  if (!isPdfDocument(message.document)) return;
+  const tooLarge = message.document.file_size > 20 * 1024 * 1024;
+  return telegram(env, 'sendMessage', {
+    chat_id: message.chat.id,
+    text: tooLarge
+      ? '📄 PDF-файл больше 20 МБ — бот не сможет скачать его для расчёта.'
+      : '📄 PDF-документ получен. Рассчитать утилизационный сбор?',
+    reply_parameters: {
+      message_id: message.message_id,
+      allow_sending_without_reply: false
+    },
+    reply_markup: tooLarge ? undefined : {
+      inline_keyboard: [[{ text: '🧮 Рассчитать утильсбор', callback_data: 'group:calculate' }]]
+    }
+  });
+}
+
+async function handleGroupCalculation(env, query) {
+  const botMessage = query.message;
+  const sourceMessage = botMessage?.reply_to_message;
+  if (!isGroupChat(botMessage?.chat) || !isPdfDocument(sourceMessage?.document)) {
+    await telegram(env, 'answerCallbackQuery', {
+      callback_query_id: query.id,
+      text: 'Исходный PDF-файл больше недоступен.',
+      show_alert: true
+    });
+    return;
+  }
+
+  await telegram(env, 'answerCallbackQuery', { callback_query_id: query.id, text: 'Рассчитываю…' });
+  await telegram(env, 'editMessageText', {
+    chat_id: botMessage.chat.id,
+    message_id: botMessage.message_id,
+    text: '📄 Читаю документ и рассчитываю утильсбор…',
+    reply_markup: { inline_keyboard: [] }
+  });
+
+  try {
+    const document = sourceMessage.document;
+    if (document.file_size > 20 * 1024 * 1024) throw new Error('Файл больше 20 МБ');
+    const file = await telegram(env, 'getFile', { file_id: document.file_id });
+    const response = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`);
+    if (!response.ok) throw new Error('Telegram не отдал файл для скачивания');
+    const parsedDocument = await readPdf(new Uint8Array(await response.arrayBuffer()));
+    if (parsedDocument.text.replace(/\s/g, '').length < 40) throw new Error('В PDF нет текстового слоя');
+    const vehicle = parseVehicleDocument(parsedDocument);
+    const util = calculateUtil(vehicle);
+    const deadline = vehicle.issueDate ? addWorkingDays(vehicle.issueDate, 5) : null;
+    await saveApplication(env, query.from?.id, applicationFromVehicle(vehicle, util));
+    await telegram(env, 'editMessageText', {
+      chat_id: botMessage.chat.id,
+      message_id: botMessage.message_id,
+      text: formatDocumentResult(vehicle, util, deadline),
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [] }
+    });
+  } catch (error) {
+    await telegram(env, 'editMessageText', {
+      chat_id: botMessage.chat.id,
+      message_id: botMessage.message_id,
+      text: `Не удалось обработать документ: ${escapeHtml(error.message || error)}. Убедитесь, что это СБКТС или выписка ЭПТС с текстовым слоем.`,
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [] }
+    });
+  }
+}
+
 async function sendMenu(env, chatId) {
   return telegram(env, 'sendMessage', {
     chat_id: chatId,
@@ -516,7 +592,8 @@ async function handleCalculationCallback(env, query) {
 
 async function handleUpdate(env, update) {
   if (update.message?.document) {
-    await handleDocument(env, update.message);
+    if (isGroupChat(update.message.chat)) await offerGroupCalculation(env, update.message);
+    else await handleDocument(env, update.message);
     return;
   }
   if (update.message?.text) {
@@ -530,6 +607,10 @@ async function handleUpdate(env, update) {
 
   const query = update.callback_query;
   if (!query) return;
+  if (query.data === 'group:calculate') {
+    await handleGroupCalculation(env, query);
+    return;
+  }
   await telegram(env, 'answerCallbackQuery', { callback_query_id: query.id });
   if (!query.message) return;
   if (query.data?.startsWith('calc:')) await handleCalculationCallback(env, query);
