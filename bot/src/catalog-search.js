@@ -27,8 +27,9 @@ export function parseCatalogQuery(text) {
   if (years.length !== 1) return null;
   const year = Number(years[0][1]);
   const vehicleText = normalizeCatalogText(source.replace(years[0][0], ''));
-  if (!vehicleText || vehicleText.split(' ').length < 2) return null;
-  const words = vehicleText.split(' ');
+  if (!vehicleText) return null;
+  const words = vehicleText.split(' ').filter(word => !['ГОД', 'ГОДА', 'Г', 'YEAR'].includes(word));
+  if (words.length < 2) return null;
   if (BRAND_ALIASES[words[0]]) words[0] = BRAND_ALIASES[words[0]];
   return { year, vehicleText: words.join(' '), tokens: words };
 }
@@ -99,7 +100,8 @@ export function searchCatalog(catalog, parsedQuery, limit = 8) {
     const brand = normalizeCatalogText(catalog.brands[row[0]]);
     const model = normalizeCatalogText(catalog.models[row[1]]);
     const combined = `${brand} ${model}`.trim();
-    if (!tokens.every(token => combined.includes(token))) continue;
+    const combinedTokens = new Set(combined.split(' ').filter(Boolean));
+    if (!tokens.every(token => combinedTokens.has(token))) continue;
 
     const key = [row[0], row[1], row[2], Number(row[4]) || 0, Number(row[5]) || 0].join(':');
     if (seen.has(key)) continue;
