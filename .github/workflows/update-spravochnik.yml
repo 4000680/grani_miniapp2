@@ -6,6 +6,11 @@ on:
     # чтобы не попадать в пиковую нагрузку ровно в начале часа.
     - cron: "17 * * * *"
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/convert-spravochnik.js"
+      - ".github/workflows/update-spravochnik.yml"
 
 permissions:
   contents: write
