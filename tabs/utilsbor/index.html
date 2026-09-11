@@ -731,6 +731,15 @@ function formatMoneyPrecise(v){
 
 function calcUtilSbor(kw, ccm, carYear){
   const age = ageStatus(carYear);
+  const isElectric = ccm === null || ccm === 0;
+  // Для электромобилей и последовательных гибридов льготный порог — 58,84 кВт.
+  // Порог 117,68 кВт применяется только к ДВС/параллельным гибридам объёмом до 3 л.
+  const personalPreferential = isElectric
+    ? kw <= 58.84
+    : ccm <= 3000 && kw <= 117.68;
+  const noPreferenceReason = !isElectric && ccm > 3000
+    ? 'объём двигателя превышает 3000 см³'
+    : `мощность выше ${isElectric ? '58,84 кВт (80 л.с.)' : '117,68 кВт (160 л.с.)'}`;
   const commercial = getUtilBracket('commercial', kw, ccm);
   const personal = getUtilBracket('personal', kw, ccm);
 
@@ -743,10 +752,11 @@ function calcUtilSbor(kw, ccm, carYear){
       age: a,
       commercialSum: comSum,
       personalSum: perSum,
-      personalDiffers: Math.abs(comSum - perSum) > 1
+      personalDiffers: Math.abs(comSum - perSum) > 1,
+      personalPreferential
     });
   }
-  return {results, ageAmbiguous: age === 'both'};
+  return {results, ageAmbiguous: age === 'both', isElectric, noPreferenceReason};
 }
 
 function archiveCompletedCalculation(data, calc){
@@ -760,18 +770,27 @@ function archiveCompletedCalculation(data, calc){
 }
 
 function formatUtilResult(calc, kw, ccm, carYear){
-  let html = `<b>Расчёт утильсбора</b><br>Мощность: ${kw} кВт, объём двигателя: ${ccm === null || ccm===0 ? 'электро/гибрид' : ccm + ' см³'}, год: ${carYear}<br><br>`;
+  const isElectric = calc.isElectric;
+  const vehicleType = isElectric ? 'электромобиль / последовательный гибрид' : 'ДВС / параллельный гибрид';
+  const preferentialLimit = isElectric ? '58,84 кВт (80 л.с.)' : '117,68 кВт (160 л.с.)';
+  let html = `<b>Расчёт утильсбора</b><br>`;
+  html += `Тип: <b>${vehicleType}</b><br>`;
+  html += `Мощность: ${kw} кВт${isElectric ? '' : `, объём двигателя: ${ccm} см³`}, год: ${carYear}<br><br>`;
   if(calc.ageAmbiguous){
     html += `<span style="color:var(--muted);font-size:12px;">Год ${carYear} — авто может быть как младше, так и старше 3 лет в зависимости от месяца выпуска, поэтому привожу оба варианта:</span><br><br>`;
   }
   const ageLabel = {new:'до 3 лет (новое)', old:'старше 3 лет'};
   for(const r of calc.results){
     html += `<b>${ageLabel[r.age]}:</b><br>`;
-    if(r.personalDiffers){
-      html += `Мощность ≤117,68 кВт — применяется льготная ставка для физлица: <b>${formatMoney(r.personalSum)}</b><br>`;
-      html += `<span style="color:var(--muted);font-size:12px;">Для справки: коммерческий/юрлицо — ${formatMoney(r.commercialSum)}</span><br>`;
+    if(r.personalPreferential){
+      html += `Льготная ставка для физлица: <b>${formatMoney(r.personalSum)}</b><br>`;
+      html += `<span style="color:var(--muted);font-size:12px;">Мощность не превышает ${preferentialLimit}.</span><br>`;
     } else {
-      html += `Сумма утильсбора по коммерческой ставке: <b>${formatMoney(r.personalSum)}</b> <span style="color:var(--muted);font-size:12px;">(мощность выше 117,68 кВт — льготная ставка для личного пользования не применяется)</span><br>`;
+      html += `Ставка для физлица (личное пользование): <b>${formatMoney(r.personalSum)}</b><br>`;
+      html += `<span style="color:var(--muted);font-size:12px;">Льготный коэффициент не применяется: ${calc.noPreferenceReason}.</span><br>`;
+    }
+    if(r.personalDiffers){
+      html += `<span style="color:var(--muted);font-size:12px;">Для справки: коммерческая ставка — ${formatMoney(r.commercialSum)}</span><br>`;
     }
     html += `<br>`;
   }
