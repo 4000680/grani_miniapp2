@@ -229,7 +229,7 @@ function customsIntroKeyboard() {
 }
 
 async function showCustomsIntro(env, message) {
-  await clearCustomsState(env, message.chat.id);
+  await cleanupCustomsMessages(env, message.chat.id, message.chat.id, message.message_id);
   return telegram(env, 'editMessageText', {
     chat_id: message.chat.id,
     message_id: message.message_id,
@@ -250,13 +250,21 @@ async function editCustomsScreen(env, message, text, rows, back = 'customs:start
 }
 
 async function sendCustomsPrompt(env, chatId, lines, placeholder, state = null) {
-  if (state) await setCustomsState(env, chatId, state);
-  return telegram(env, 'sendMessage', {
+  const previous = await getCustomsState(env, chatId);
+  const sent = await telegram(env, 'sendMessage', {
     chat_id: chatId,
     text: lines.join('\n'),
     parse_mode: 'HTML',
     reply_markup: { force_reply: true, selective: true, input_field_placeholder: placeholder }
   });
+  if (state) {
+    await setCustomsState(env, chatId, {
+      ...previous,
+      ...state,
+      cleanupMessageIds: mergeCustomsMessageIds(previous?.cleanupMessageIds, sent.message_id)
+    });
+  }
+  return sent;
 }
 
 function formatDate(date) {
@@ -377,6 +385,39 @@ async function setCustomsState(env, userId, state) {
 async function clearCustomsState(env, userId) {
   const stub = applicationsStub(env, userId);
   if (stub) await stub.clearCustomsState();
+}
+
+function mergeCustomsMessageIds(current, ...messageIds) {
+  return [...new Set([
+    ...(Array.isArray(current) ? current : []),
+    ...messageIds.flat().filter(id => Number.isInteger(id) && id > 0)
+  ])].slice(-50);
+}
+
+async function trackCustomsMessages(env, userId, state, ...messageIds) {
+  await setCustomsState(env, userId, {
+    ...state,
+    cleanupMessageIds: mergeCustomsMessageIds(state?.cleanupMessageIds, messageIds)
+  });
+}
+
+async function finishCustomsSession(env, userId, state, ...messageIds) {
+  await setCustomsState(env, userId, {
+    cleanupMessageIds: mergeCustomsMessageIds(state?.cleanupMessageIds, messageIds)
+  });
+}
+
+async function cleanupCustomsMessages(env, userId, chatId, exceptMessageId = null) {
+  const state = await getCustomsState(env, userId);
+  for (const messageId of mergeCustomsMessageIds(state?.cleanupMessageIds)) {
+    if (messageId === exceptMessageId) continue;
+    try {
+      await telegram(env, 'deleteMessage', { chat_id: chatId, message_id: messageId });
+    } catch (error) {
+      console.warn('Customs message cleanup:', error.message || error);
+    }
+  }
+  await clearCustomsState(env, userId);
 }
 
 async function saveApplication(env, userId, application) {
@@ -545,6 +586,7 @@ async function handleCustomsCallback(env, query) {
   const data = query.data;
   if (data === 'customs:start') return showCustomsIntro(env, message);
   if (data === 'customs:under3') {
+    await cleanupCustomsMessages(env, query.from?.id || message.chat.id, message.chat.id, message.message_id);
     return editCustomsScreen(env, message, [
       '🚗 <b>Автомобили до 3 лет</b>',
       '',
@@ -562,6 +604,7 @@ async function handleCustomsCallback(env, query) {
     ], 'Стоимость в рублях', { stage: 'under3-value' });
   }
   if (data === 'customs:over3') {
+    await cleanupCustomsMessages(env, query.from?.id || message.chat.id, message.chat.id, message.message_id);
     return editCustomsScreen(env, message, [
       '🚙 <b>Автомобили старше 3 лет</b>',
       '',
@@ -581,6 +624,7 @@ async function handleCustomsCallback(env, query) {
     ], 'Объём двигателя, см³', { stage: 'over3-volume', ageGroup: over3[1] });
   }
   if (data === 'customs:electric') {
+    await cleanupCustomsMessages(env, query.from?.id || message.chat.id, message.chat.id, message.message_id);
     return editCustomsScreen(env, message, [
       '⚡ <b>Электромобили и последовательные гибриды</b>',
       '',
@@ -593,6 +637,7 @@ async function handleCustomsCallback(env, query) {
   }
   if (data === 'customs:electric:car') return sendCustomsCatalogPrompt(env, message.chat.id, null, 'electric');
   if (data === 'customs:pickup') {
+    await cleanupCustomsMessages(env, query.from?.id || message.chat.id, message.chat.id, message.message_id);
     return editCustomsScreen(env, message, [
       '🛻 <b>Пикапы категории N1/N1G до 5 тонн</b>',
       '',
@@ -641,6 +686,13 @@ async function handleCustomsReply(env, message) {
   const stage = state?.stage;
   const mode = state?.mode;
   if (!stage) return false;
+  await trackCustomsMessages(
+    env,
+    userId,
+    state,
+    message.message_id,
+    message.reply_to_message?.message_id
+  );
 
   if (stage === 'catalog-input' && ['passenger', 'electric'].includes(mode)) {
     const parsed = parseCatalogQuery(message.text);
@@ -690,7 +742,7 @@ async function handleCustomsReply(env, message) {
     }
     const rate = await euroRate(env);
     const result = calculatePassengerUnder3({ customsValueRub: value, engineCc: ccm, euroRate: rate });
-    await telegram(env, 'sendMessage', {
+    const sent = await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
       text: [
         '✅ <b>Таможенный платёж рассчитан</b>',
@@ -706,7 +758,7 @@ async function handleCustomsReply(env, message) {
       parse_mode: 'HTML',
       reply_markup: customsKeyboard([[{ text: 'Продолжить к утильсбору', callback_data: `customs:catalog:${result.duty}:${ccm}` }]], 'customs:under3')
     });
-    await clearCustomsState(env, userId);
+    await finishCustomsSession(env, userId, await getCustomsState(env, userId), sent.message_id);
     return true;
   }
 
@@ -719,7 +771,7 @@ async function handleCustomsReply(env, message) {
     }
     const rate = await euroRate(env);
     const result = calculatePassengerOver3({ ageGroup, engineCc: ccm, euroRate: rate });
-    await telegram(env, 'sendMessage', {
+    const sent = await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
       text: [
         '✅ <b>Таможенный платёж рассчитан</b>',
@@ -735,7 +787,7 @@ async function handleCustomsReply(env, message) {
       parse_mode: 'HTML',
       reply_markup: customsKeyboard([[{ text: 'Продолжить к утильсбору', callback_data: `customs:catalog:${result.duty}:${ccm}` }]], 'customs:over3')
     });
-    await clearCustomsState(env, userId);
+    await finishCustomsSession(env, userId, await getCustomsState(env, userId), sent.message_id);
     return true;
   }
 
@@ -781,13 +833,13 @@ async function handleCustomsReply(env, message) {
       lines.push(`<b>Итого: ${formatMoney(customs.customsTotal + utilAmount)}</b>`);
     }
     lines.push('', '<i>Расчёт предварительный. Таможенный сбор за операции не включён.</i>');
-    await telegram(env, 'sendMessage', {
+    const sent = await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
       text: lines.join('\n'),
       parse_mode: 'HTML',
       reply_markup: customsKeyboard([[{ text: '🔄 Новый расчёт', callback_data: 'customs:electric' }]], 'customs:electric')
     });
-    await clearCustomsState(env, userId);
+    await finishCustomsSession(env, userId, await getCustomsState(env, userId), sent.message_id);
     return true;
   }
 
@@ -832,7 +884,7 @@ async function handleCustomsReply(env, message) {
     try {
       const rate = await euroRate(env);
       const result = calculatePickup({ customsValueRub: value, fuel, ageGroup, engineCc: ccm, maxMassKg: mass, euroRate: rate });
-      await telegram(env, 'sendMessage', {
+      const sent = await telegram(env, 'sendMessage', {
         chat_id: message.chat.id,
         text: [
           '✅ <b>Предварительный расчёт пикапа</b>',
@@ -848,7 +900,7 @@ async function handleCustomsReply(env, message) {
         parse_mode: 'HTML',
         reply_markup: customsKeyboard([[{ text: '🔄 Новый расчёт', callback_data: 'customs:pickup' }]], 'customs:pickup')
       });
-      await clearCustomsState(env, userId);
+      await finishCustomsSession(env, userId, await getCustomsState(env, userId), sent.message_id);
     } catch (error) {
       await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: escapeHtml(error.message || error), parse_mode: 'HTML' });
     }
@@ -1575,7 +1627,7 @@ async function handleGroupCalculation(env, query) {
 }
 
 async function sendMenu(env, chatId) {
-  await clearCustomsState(env, chatId);
+  await cleanupCustomsMessages(env, chatId, chatId);
   return telegram(env, 'sendMessage', {
     chat_id: chatId,
     text: MENU_TEXT,
@@ -1585,7 +1637,7 @@ async function sendMenu(env, chatId) {
 }
 
 async function editMenu(env, message) {
-  await clearCustomsState(env, message.chat.id);
+  await cleanupCustomsMessages(env, message.chat.id, message.chat.id, message.message_id);
   return telegram(env, 'editMessageText', {
     chat_id: message.chat.id,
     message_id: message.message_id,
@@ -1642,14 +1694,14 @@ async function handleUpdate(env, update) {
     return;
   }
   if (update.message?.text) {
-    if (await handleDateReply(env, update.message)) return;
-    if (await handleCustomsReply(env, update.message)) return;
-    if (await handleCatalogWeightReply(env, update.message)) return;
     const command = update.message.text.split(/\s+/)[0].split('@')[0].toLowerCase();
     if (command === '/start' || command === '/menu' || command === '/help') {
       await sendMenu(env, update.message.chat.id);
       return;
     }
+    if (await handleDateReply(env, update.message)) return;
+    if (await handleCustomsReply(env, update.message)) return;
+    if (await handleCatalogWeightReply(env, update.message)) return;
     if (await handleCatalogText(env, update.message)) return;
     return;
   }
@@ -1699,7 +1751,7 @@ export default {
       if (url.pathname === '/api/applications') return handleApplicationsApi(request, env);
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'customs-calculator-v2-state' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'customs-calculator-v3-cleanup' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
