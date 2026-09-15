@@ -42,4 +42,17 @@ export class ApplicationsStore extends DurableObject {
     await this.ctx.storage.delete('items');
     return [];
   }
+
+  async getCustomsState() {
+    return (await this.ctx.storage.get('customs-state')) || null;
+  }
+
+  async setCustomsState(state) {
+    await this.ctx.storage.put('customs-state', state);
+    return state;
+  }
+
+  async clearCustomsState() {
+    await this.ctx.storage.delete('customs-state');
+  }
 }
