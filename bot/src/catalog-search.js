@@ -160,6 +160,19 @@ export function getCatalogVariants(catalog, brandIndex, modelIndex, year) {
   );
 }
 
+export function paginateCatalogVariants(variants, page = 0, pageSize = 8) {
+  const selectable = variants.filter(candidate => candidate.mass);
+  const safePageSize = Math.max(1, Math.floor(Number(pageSize)) || 8);
+  const pageCount = Math.max(1, Math.ceil(selectable.length / safePageSize));
+  const currentPage = Math.min(Math.max(0, Math.floor(Number(page)) || 0), pageCount - 1);
+  return {
+    items: selectable.slice(currentPage * safePageSize, (currentPage + 1) * safePageSize),
+    currentPage,
+    pageCount,
+    total: selectable.length
+  };
+}
+
 export function searchCatalog(catalog, parsedQuery, weight = null, limit = 8) {
   const namedRows = namedCatalogRows(catalog, parsedQuery);
 

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  calculateCustomsProcessingFee,
   calculateElectricCustoms,
   calculatePassengerOver3,
   calculatePassengerUnder3,
@@ -18,34 +19,36 @@ function selectedUtil(year, totalKw, ccm) {
 
 test('два полных расчёта автомобилей до 3 лет', () => {
   const firstCustoms = calculatePassengerUnder3({ customsValueRub: 2500000, engineCc: 1998, euroRate: EURO }).duty;
-  assert.equal(firstCustoms + selectedUtil(2025, 110, 1998), 1203400);
+  assert.equal(firstCustoms + calculateCustomsProcessingFee(2500000) + selectedUtil(2025, 110, 1998), 1216941);
 
   const secondCustoms = calculatePassengerUnder3({ customsValueRub: 1000000, engineCc: 1500, euroRate: EURO }).duty;
-  assert.equal(secondCustoms + selectedUtil(2024, 150, 1500), 1466054);
+  assert.equal(secondCustoms + calculateCustomsProcessingFee(1000000) + selectedUtil(2024, 150, 1500), 1470978);
 });
 
 test('два полных расчёта автомобилей старше 3 лет', () => {
   const firstCustoms = calculatePassengerOver3({ ageGroup: '3-5', engineCc: 1500, euroRate: EURO }).duty;
-  assert.equal(firstCustoms + selectedUtil(2022, 100, 1500), 254495);
+  assert.equal(firstCustoms + calculateCustomsProcessingFee(2500000) + selectedUtil(2022, 100, 1500), 268036);
 
   const secondCustoms = calculatePassengerOver3({ ageGroup: '5+', engineCc: 2998, euroRate: EURO }).duty;
-  assert.equal(secondCustoms + selectedUtil(2018, 200, 2998), 5125461);
+  assert.equal(secondCustoms + calculateCustomsProcessingFee(6000000) + selectedUtil(2018, 200, 2998), 5174701);
 });
 
 test('два полных расчёта электро и последовательного гибрида', () => {
   const electric = calculateElectricCustoms({ customsValueRub: 3000000, excisePowerKw: 70 });
-  assert.equal(electric.customsTotal + selectedUtil(2025, 70, null), 2207487);
+  assert.equal(electric.customsTotal + calculateCustomsProcessingFee(3000000) + selectedUtil(2025, 70, null), 2225952);
 
   const series = calculateElectricCustoms({ customsValueRub: 4000000, excisePowerKw: 100 + 80 });
-  assert.equal(series.customsTotal + selectedUtil(2022, 80, null), 3818771);
+  assert.equal(series.customsTotal + calculateCustomsProcessingFee(4000000) + selectedUtil(2022, 80, null), 3837236);
 });
 
 test('два полных расчёта пикапов', () => {
-  assert.equal(calculatePickup({
+  const first = calculatePickup({
     customsValueRub: 5000000, fuel: 'petrol', ageGroup: '0-3', engineCc: 3500, maxMassKg: 3000, euroRate: EURO
-  }).total, 2852500);
+  });
+  assert.equal(first.total + calculateCustomsProcessingFee(5000000), 2873844);
 
-  assert.equal(calculatePickup({
+  const second = calculatePickup({
     customsValueRub: 2000000, fuel: 'diesel', ageGroup: '7+', engineCc: 2755, maxMassKg: 2800, euroRate: EURO
-  }).total, 2210090);
+  });
+  assert.equal(second.total + calculateCustomsProcessingFee(2000000), 2223631);
 });

@@ -5,6 +5,7 @@ import {
   getCatalogCandidate,
   getCatalogVariants,
   listCatalogModifications,
+  paginateCatalogVariants,
   parseCatalogQuery,
   parseCatalogWeight,
   searchCatalog
@@ -78,4 +79,18 @@ test('matches a modification written with spaces when the catalog stores it toge
 test('uses 30-minute power for electric and the sum for an ICE/parallel hybrid', () => {
   assert.equal(calculationPower(getCatalogCandidate(catalog, 0), true), 70);
   assert.equal(calculationPower(getCatalogCandidate(catalog, 1), false), 109.2);
+});
+
+test('paginates ready power and mass variants instead of requesting mass manually', () => {
+  const variants = Array.from({ length: 19 }, (_, index) => ({ rowIndex: index, mass: 1500 + index }));
+  variants.push({ rowIndex: 99, mass: null });
+
+  const first = paginateCatalogVariants(variants, 0);
+  const last = paginateCatalogVariants(variants, 99);
+
+  assert.equal(first.items.length, 8);
+  assert.equal(first.total, 19);
+  assert.equal(first.pageCount, 3);
+  assert.equal(last.currentPage, 2);
+  assert.deepEqual(last.items.map(item => item.rowIndex), [16, 17, 18]);
 });

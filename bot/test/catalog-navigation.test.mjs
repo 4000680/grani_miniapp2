@@ -15,3 +15,14 @@ test('keeps a separate back action on every catalog selection step', () => {
   }
   assert.ok((workerSource.match(/text: '← Назад'/g) || []).length >= 4);
 });
+
+test('shows large catalog results as selectable pages without an automatic mass prompt', () => {
+  assert.match(workerSource, /catalog:variants:/);
+  assert.match(workerSource, /paginateCatalogVariants\(variants, page\)/);
+  const modificationFlow = workerSource.slice(
+    workerSource.indexOf('async function showCatalogModification'),
+    workerSource.indexOf('async function sendCatalogWeightPrompt')
+  );
+  assert.doesNotMatch(modificationFlow, /sendCatalogWeightPrompt/);
+  assert.doesNotMatch(modificationFlow, /variants\.length > 10/);
+});

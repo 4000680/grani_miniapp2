@@ -38,6 +38,17 @@ const ELECTRIC_DUTY_RATE = 0.15;
 // Article 193 of the Russian Tax Code expresses excise as rubles per 0.75 kW (1 hp).
 const KW_PER_EXCISE_UNIT = 0.75;
 
+const CUSTOMS_PROCESSING_FEES_2026 = [
+  { maxRub: 200000, fee: 1231 },
+  { maxRub: 450000, fee: 2462 },
+  { maxRub: 1200000, fee: 4924 },
+  { maxRub: 2700000, fee: 13541 },
+  { maxRub: 4200000, fee: 18465 },
+  { maxRub: 5500000, fee: 21344 },
+  { maxRub: 10000000, fee: 49240 },
+  { maxRub: Infinity, fee: 73860 }
+];
+
 function positiveNumber(value, label) {
   const number = Number(value);
   if (!Number.isFinite(number) || number <= 0) throw new Error(`${label} должно быть больше нуля`);
@@ -46,6 +57,11 @@ function positiveNumber(value, label) {
 
 function roundRubles(value) {
   return Math.round(value);
+}
+
+export function calculateCustomsProcessingFee(customsValueRub) {
+  const value = positiveNumber(customsValueRub, 'Таможенная стоимость');
+  return CUSTOMS_PROCESSING_FEES_2026.find(item => value <= item.maxRub).fee;
 }
 
 export function calculatePassengerUnder3({ customsValueRub, engineCc, euroRate }) {

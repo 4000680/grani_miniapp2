@@ -19,6 +19,11 @@ export function normalizeApplication(input) {
     category: cleanText(input.category, 12).toUpperCase(),
     kw: Number(input.kw) || null,
     ccm: Number(input.ccm) || null,
+    calculationType: cleanText(input.calculationType, 20),
+    customsValue: Number(input.customsValue) || null,
+    customsDuty: Number(input.customsDuty) || null,
+    customsFee: Number(input.customsFee) || null,
+    utilAmount: Number(input.utilAmount) || null,
     amount: Number(input.amount) || null,
     amountLabel: cleanText(input.amountLabel, 80)
   };

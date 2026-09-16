@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  calculateCustomsProcessingFee,
   calculateElectricCustoms,
   calculatePassengerOver3,
   calculatePassengerUnder3,
@@ -10,6 +11,14 @@ import {
 } from '../src/customs-calculation.js';
 
 const EURO = 97.7626;
+
+test('таможенный сбор за операции использует шкалу 2026 года', () => {
+  assert.equal(calculateCustomsProcessingFee(1200000), 4924);
+  assert.equal(calculateCustomsProcessingFee(1200000.01), 13541);
+  assert.equal(calculateCustomsProcessingFee(5500000), 21344);
+  assert.equal(calculateCustomsProcessingFee(5500000.01), 49240);
+  assert.equal(calculateCustomsProcessingFee(10000000.01), 73860);
+});
 
 test('автомобиль до 3 лет: выбирается минимальная ставка за см³', () => {
   const result = calculatePassengerUnder3({ customsValueRub: 120000, engineCc: 1500, euroRate: EURO });

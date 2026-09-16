@@ -38,6 +38,7 @@
   .home-cta-arrow{margin-left:auto;flex-shrink:0;}
   .home-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px 16px 4px;}
   .home-tile{background:#fff;border:1px solid var(--h-border);border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:10px;cursor:pointer;opacity:0.55;text-align:left;font-family:inherit;}
+  .home-tile.enabled{opacity:1;}
   .home-tile.wide{grid-column:1 / -1;flex-direction:row;align-items:center;gap:10px;}
   .home-tile-icon{width:38px;height:38px;border-radius:11px;background:var(--h-accent-tint);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
   .home-tile-label{color:var(--h-text-body);font-size:13.5px;font-weight:500;line-height:1.3;}
@@ -104,9 +105,9 @@
   </div>
 
   <div class="home-grid">
-    <button class="home-tile" type="button" data-soon="1">
+    <button class="home-tile enabled" type="button" id="openCustomsBtn">
       <div class="home-tile-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2C6BFF" stroke-width="1.8" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"></path></svg></div>
-      <span class="home-tile-label">Услуги и утильсбор</span>
+      <span class="home-tile-label">Таможенное оформление</span>
     </button>
     <button class="home-tile" type="button" data-soon="1">
       <div class="home-tile-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2C6BFF" stroke-width="1.8" stroke-linecap="round"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M12 9h.01M15 9h.01M9 13h6v8"></path></svg></div>
@@ -165,6 +166,10 @@ document.getElementById('newCalcBottomBtn').addEventListener('click', function()
   if(tg){ try{ tg.HapticFeedback.impactOccurred('light'); }catch(e){} }
   window.location.href = 'tabs/utilsbor/index.html';
 });
+document.getElementById('openCustomsBtn').addEventListener('click', function(){
+  if(tg){ try{ tg.HapticFeedback.impactOccurred('light'); }catch(e){} }
+  window.location.href = 'tabs/customs/index.html';
+});
 
 function escapeHtml(value){
   const element = document.createElement('div');
@@ -185,6 +190,7 @@ function renderApplications(items){
     return;
   }
   list.innerHTML = items.map(item => {
+    const isCustoms = item.calculationType === 'customs';
     const vehicle = [item.brand, item.model].filter(Boolean).join(' ') || 'Автомобиль';
     const details = [];
     if(item.year) details.push(item.year + ' год');
@@ -196,12 +202,15 @@ function renderApplications(items){
     const amount = item.amount ? money(item.amount) : escapeHtml(item.amountLabel || '—');
     const date = new Date(item.createdAt).toLocaleDateString('ru-RU', {day:'2-digit',month:'2-digit',year:'numeric'});
     return `<div class="home-request-card saved">
-      <div class="home-request-top"><span class="home-request-id">Расчёт утильсбора</span><span class="home-request-status">${escapeHtml(item.source || 'Расчёт')}</span></div>
+      <div class="home-request-top"><span class="home-request-id">${isCustoms ? 'Таможенный расчёт' : 'Расчёт утильсбора'}</span><span class="home-request-status">${escapeHtml(item.source || 'Расчёт')}</span></div>
       <div class="home-request-meta">
         <span class="home-request-line"><b>${escapeHtml(vehicle)}</b>${person}</span>
         ${details.length ? `<span class="home-request-line">${escapeHtml(details.join(' · '))}</span>` : ''}
         ${item.vin ? `<span class="home-request-vin">VIN ${escapeHtml(item.vin)}</span>` : ''}
         ${tech.length ? `<span class="home-request-line">${escapeHtml(tech.join(' · '))}</span>` : ''}
+        ${isCustoms && item.customsDuty ? `<span class="home-request-line">Таможенные платежи: ${money(item.customsDuty)}</span>` : ''}
+        ${isCustoms && item.customsFee ? `<span class="home-request-line">Таможенный сбор: ${money(item.customsFee)}</span>` : ''}
+        ${isCustoms && item.utilAmount ? `<span class="home-request-line">Утильсбор: ${money(item.utilAmount)}</span>` : ''}
       </div>
       <div class="home-request-bottom"><span class="home-request-updated">${date}</span><span class="home-request-more">${amount}</span></div>
     </div>`;
