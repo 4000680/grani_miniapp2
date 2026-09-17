@@ -947,6 +947,55 @@ async function sendElectricCustomsCurrencyPrompt(env, chatId, userId, candidate,
   return sent;
 }
 
+function under3ElectricRedirectText(candidate, requestedWeight = null, sourceParsed = null) {
+  const lines = [
+    '⚠️ <b>Неправильно выбран раздел для расчёта</b>',
+    '',
+    catalogCandidateDescription(candidate, requestedWeight),
+    '',
+    'Выбранный автомобиль — <b>электромобиль</b>. Объём двигателя для него не используется.',
+    '',
+    'Для правильного расчёта перейдите в раздел «Электро и последовательные гибриды».'
+  ];
+  if (sourceParsed) lines.push('', catalogNavigationLine(sourceParsed));
+  return lines.join('\n');
+}
+
+function under3ElectricRedirectKeyboard(candidate, requestedWeight = null, backCallback = 'customs:under3') {
+  return customsKeyboard([[
+    {
+      text: '🪫 Перейти в «Электро/гибриды»',
+      callback_data: `customs:electric:route:${candidate.rowIndex}:${requestedWeight || candidate.mass || 0}`
+    }
+  ]], backCallback);
+}
+
+async function showUnder3ElectricRedirect(env, message, candidate, requestedWeight, backCallback, sourceParsed) {
+  return telegram(env, 'editMessageText', {
+    chat_id: message.chat.id,
+    message_id: message.message_id,
+    text: under3ElectricRedirectText(candidate, requestedWeight, sourceParsed),
+    parse_mode: 'HTML',
+    reply_markup: under3ElectricRedirectKeyboard(candidate, requestedWeight, backCallback)
+  });
+}
+
+async function sendUnder3ElectricRedirect(env, chatId, userId, candidate, requestedWeight, sourceParsed) {
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: under3ElectricRedirectText(candidate, requestedWeight, sourceParsed),
+    parse_mode: 'HTML',
+    reply_markup: under3ElectricRedirectKeyboard(candidate, requestedWeight)
+  });
+  await setCustomsState(env, userId, {
+    stage: 'catalog-input',
+    mode: 'under3',
+    cleanupMessageIds: [sent.message_id]
+  });
+  await trackTemporaryMessage(env, userId, sent.message_id);
+  return sent;
+}
+
 async function sendElectricCustomsValuePrompt(env, chatId, candidate, requestedWeight, currencyCode, cleanupMessageIds = []) {
   const currency = electricCustomsCurrency(currencyCode);
   if (!currency) throw new Error('Неизвестная валюта стоимости');
@@ -1000,6 +1049,26 @@ async function handleCustomsCallback(env, query) {
       candidate,
       Number(electricCurrency[2]) || candidate.mass || null,
       electricCurrency[3]
+    );
+  }
+  const electricRoute = data.match(/^customs:electric:route:(\d+):(\d+(?:\.\d+)?)$/);
+  if (electricRoute) {
+    const userId = query.from?.id || message.chat.id;
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const candidate = getCatalogCandidate(catalog, Number(electricRoute[1]));
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
+    electricCustomsPowerDetails(candidate);
+    const requestedWeight = Number(electricRoute[2]) || candidate.mass || null;
+    const source = parseCatalogQuery(candidate.brand + ' ' + candidate.model + ' ' + candidate.year);
+    source.customsMode = 'electric';
+    await setCustomsState(env, userId, { stage: 'catalog-input', mode: 'electric' });
+    return showElectricCustomsCurrencyPrompt(
+      env,
+      message,
+      candidate,
+      requestedWeight,
+      `catalog:back:variants:${candidate.rowIndex}`,
+      source
     );
   }
   const under3Volume = data.match(/^customs:under3:volume:(\d+):(\d+(?:\.\d+)?)$/);
@@ -1190,7 +1259,12 @@ async function handleCustomsReply(env, message) {
     const candidate = getCatalogCandidate(catalog, rowIndex);
     if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
     if (!candidate.combustionKw && candidate.electricKw) {
-      await sendCustomsNotice(env, message.chat.id, 'Для электромобиля выберите раздел «Электро и последовательные гибриды».');
+      const requestedWeight = parsePositiveNumber(state.requestedWeight) || candidate.mass || null;
+      const source = parseCatalogQuery(candidate.brand + ' ' + candidate.model + ' ' + candidate.year);
+      source.customsMode = 'under3';
+      await cleanupCustomsMessages(env, userId, message.chat.id);
+      await cleanupTemporaryMessages(env, userId, message.chat.id);
+      await sendUnder3ElectricRedirect(env, message.chat.id, userId, candidate, requestedWeight, source);
       return true;
     }
     const requestedWeight = parsePositiveNumber(state.requestedWeight) || candidate.mass || null;
@@ -1748,6 +1822,9 @@ async function showCatalogCandidate(env, message, rowIndex, weight, sourceParsed
   const source = sourceParsed || parseCatalogQuery(candidate.brand + ' ' + candidate.model + ' ' + candidate.year);
   const back = backCallback || 'catalog:back:variants:' + candidate.rowIndex;
   if (source?.customsMode === 'under3') {
+    if (!candidate.combustionKw && candidate.electricKw) {
+      return showUnder3ElectricRedirect(env, message, candidate, weight, back, source);
+    }
     await telegram(env, 'editMessageText', {
       chat_id: message.chat.id,
       message_id: message.message_id,
@@ -2496,7 +2573,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'under3-direct-search-v13' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'under3-electric-route-v14' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
