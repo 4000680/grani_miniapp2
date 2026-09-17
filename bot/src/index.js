@@ -243,6 +243,28 @@ function formatCbrRate(rate) {
   return `Курс ЦБ РФ${rate.date ? ` на ${rate.date}` : ''}: ${nominal} ${rate.code} = ${value} ₽`;
 }
 
+function customsValueLines(enteredValue, currency, currencyRate, valueRub) {
+  return [
+    `<b>Указанная стоимость:</b> ${formatCurrencyAmount(enteredValue, currency.code)}`,
+    ...(currency.code === 'RUB' ? [] : [
+      formatCbrRate(currencyRate),
+      `<b>Таможенная стоимость в рублях:</b> ${formatMoney(valueRub)}`
+    ])
+  ];
+}
+
+async function resolveCustomsValue(enteredValue, currencyCode) {
+  const currency = electricCustomsCurrency(currencyCode || 'RUB');
+  if (!currency) throw new Error('неизвестная валюта стоимости');
+  const currencyRate = await cbrCurrencyRate(currency.code);
+  return {
+    enteredValue,
+    currency,
+    currencyRate,
+    valueRub: convertCurrencyToRub(enteredValue, currencyRate)
+  };
+}
+
 function customsKeyboard(rows = [], back = 'customs:start') {
   return {
     inline_keyboard: [
@@ -291,7 +313,7 @@ function customsResultKeyboard(firstRow = null) {
   };
 }
 
-function under3CustomsResultText(candidate, vehicle, customs, customsFee, util, euroRate) {
+function under3CustomsResultText(candidate, vehicle, customs, customsFee, util, euroRate, valueDetails) {
   const lines = [
     '✅ <b>Полный расчёт автомобиля до 3 лет</b>',
     '',
@@ -300,7 +322,12 @@ function under3CustomsResultText(candidate, vehicle, customs, customsFee, util, 
     `<b>Мощность:</b> ${vehicle.totalKw} кВт`,
     `<b>Технически допустимая масса:</b> ${vehicle.maxMass || '—'}${vehicle.maxMass ? ' кг' : ''}`,
     `<b>Объём двигателя:</b> ${vehicle.ccm} см³`,
-    `<b>Таможенная стоимость:</b> ${formatMoney(customs.customsValueRub)}`,
+    ...customsValueLines(
+      valueDetails.enteredValue,
+      valueDetails.currency,
+      valueDetails.currencyRate,
+      customs.customsValueRub
+    ),
     ''
   ];
 
@@ -924,6 +951,41 @@ function electricCustomsCurrencyKeyboard(rowIndex, requestedWeight, backCallback
   ], backCallback);
 }
 
+function customsCurrencyKeyboard(flow, backCallback = 'customs:start') {
+  const callback = code => `customs:currency:${flow}:${code}`;
+  return customsKeyboard([
+    [
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.RUB.button, callback_data: callback('RUB') },
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.USD.button, callback_data: callback('USD') }
+    ],
+    [
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.EUR.button, callback_data: callback('EUR') },
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.CNY.button, callback_data: callback('CNY') }
+    ],
+    [{ text: ELECTRIC_CUSTOMS_CURRENCIES.KRW.button, callback_data: callback('KRW') }]
+  ], backCallback);
+}
+
+async function sendCustomsCurrencyPrompt(env, chatId, userId, flow, lines, state, backCallback) {
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: [
+      ...lines,
+      '',
+      '<b>Выберите валюту, в которой будете указывать стоимость автомобиля.</b>',
+      'Бот автоматически пересчитает сумму в рубли по курсу ЦБ РФ.'
+    ].join('\n'),
+    parse_mode: 'HTML',
+    reply_markup: customsCurrencyKeyboard(flow, backCallback)
+  });
+  await setCustomsState(env, userId, {
+    ...state,
+    stage: `${flow}-currency`,
+    cleanupMessageIds: mergeCustomsMessageIds(state?.cleanupMessageIds, sent.message_id)
+  });
+  return sent;
+}
+
 async function showElectricCustomsCurrencyPrompt(env, message, candidate, requestedWeight = null, backCallback = 'catalog:back:search', sourceParsed = null) {
   return telegram(env, 'editMessageText', {
     chat_id: message.chat.id,
@@ -1051,6 +1113,31 @@ async function handleCustomsCallback(env, query) {
       electricCurrency[3]
     );
   }
+  const customsCurrency = data.match(/^customs:currency:(under3|over3|pickup):(RUB|USD|EUR|CNY|KRW)$/);
+  if (customsCurrency) {
+    const userId = query.from?.id || message.chat.id;
+    const flow = customsCurrency[1];
+    const currency = electricCustomsCurrency(customsCurrency[2]);
+    const state = await getCustomsState(env, userId);
+    if (!currency || state?.stage !== `${flow}-currency`) {
+      throw new Error('Шаг выбора валюты устарел. Начните расчёт заново.');
+    }
+    const valueStage = {
+      under3: 'under3-selected-value',
+      over3: 'over3-value',
+      pickup: 'pickup-value'
+    }[flow];
+    const objectName = flow === 'pickup' ? 'пикапа' : 'автомобиля';
+    await discardWorkingCard(env, message, userId);
+    return sendCustomsPrompt(env, message.chat.id, [
+      `<b>Введите предполагаемую таможенную стоимость ${objectName} в ${currency.name}.</b>`,
+      `<i>Выбрано: ${currency.button} (${currency.code}). Укажите сумму одним числом.</i>`
+    ], `Стоимость в ${currency.code}`, {
+      ...state,
+      stage: valueStage,
+      currency: currency.code
+    });
+  }
   const electricRoute = data.match(/^customs:electric:route:(\d+):(\d+(?:\.\d+)?)$/);
   if (electricRoute) {
     const userId = query.from?.id || message.chat.id;
@@ -1163,14 +1250,17 @@ async function handleCustomsCallback(env, query) {
   }
   const pickupFuel = data.match(/^customs:pickup:fuel:(0-3|3-5|5-7|7\+):(petrol|diesel)$/);
   if (pickupFuel) {
-    await discardWorkingCard(env, message, query.from?.id || message.chat.id);
-    return sendCustomsPrompt(env, message.chat.id, [
-      '<b>Укажите предполагаемую стоимость пикапа в рублях.</b>',
-      '<i>Например: 3 500 000</i>'
-    ], 'Стоимость в рублях', {
-      stage: 'pickup-value', ageGroup: pickupFuel[1], fuel: pickupFuel[2],
-      cleanupMessageIds: [message.message_id]
-    });
+    const userId = query.from?.id || message.chat.id;
+    await discardWorkingCard(env, message, userId);
+    return sendCustomsCurrencyPrompt(env, message.chat.id, userId, 'pickup', [
+      '🛻 <b>Стоимость пикапа</b>',
+      '',
+      `Возрастная группа: ${escapeHtml(pickupFuel[1])}`,
+      `Топливо: ${pickupFuel[2] === 'petrol' ? 'бензин' : 'дизель'}`
+    ], {
+      ageGroup: pickupFuel[1],
+      fuel: pickupFuel[2]
+    }, `customs:pickup:age:${pickupFuel[1]}`);
   }
   const catalog = data.match(/^customs:catalog:(\d+):(\d+(?:\.\d+)?)$/);
   if (catalog) {
@@ -1269,31 +1359,38 @@ async function handleCustomsReply(env, message) {
     }
     const requestedWeight = parsePositiveNumber(state.requestedWeight) || candidate.mass || null;
     await cleanupCustomsMessages(env, userId, message.chat.id);
-    await sendCustomsPrompt(env, message.chat.id, [
+    await sendCustomsCurrencyPrompt(env, message.chat.id, userId, 'under3', [
       '✅ <b>Данные автомобиля получены</b>',
       '',
       catalogCandidateDescription(candidate, requestedWeight),
       `Объём двигателя: ${ccm} см³`,
       '',
-      '<b>Укажите предполагаемую стоимость автомобиля в рублях.</b>',
       'Для автомобиля до 3 лет таможенный платёж рассчитывается от стоимости.'
-    ], 'Стоимость в рублях', {
-      stage: 'under3-selected-value',
+    ], {
       rowIndex,
       requestedWeight,
       engineCc: ccm
-    });
+    }, `customs:under3:volume:${rowIndex}:${requestedWeight || 0}`);
     return true;
   }
 
   if (stage === 'under3-selected-value') {
-    const value = parsePositiveNumber(message.text);
+    const enteredValue = parsePositiveNumber(message.text);
+    const currency = electricCustomsCurrency(state.currency || 'RUB');
     const ccm = parsePositiveNumber(state.engineCc);
     const rowIndex = Number(state.rowIndex);
-    if (!value || !ccm || !Number.isInteger(rowIndex) || rowIndex < 0) {
-      await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать стоимость. Введите сумму одним числом в рублях.');
+    if (!enteredValue || !currency || !ccm || !Number.isInteger(rowIndex) || rowIndex < 0) {
+      await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать стоимость. Введите сумму одним числом в выбранной валюте.');
       return true;
     }
+    let valueDetails;
+    try {
+      valueDetails = await resolveCustomsValue(enteredValue, currency.code);
+    } catch (error) {
+      await sendCustomsNotice(env, message.chat.id, `Не удалось получить курс ЦБ РФ: ${escapeHtml(error.message || error)}. Попробуйте ещё раз позже.`);
+      return true;
+    }
+    const value = valueDetails.valueRub;
     const catalog = await loadCatalog(env.CATALOG_URL);
     const candidate = getCatalogCandidate(catalog, rowIndex);
     if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
@@ -1322,7 +1419,7 @@ async function handleCustomsReply(env, message) {
     await cleanupCustomsMessages(env, userId, message.chat.id);
     await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
-      text: under3CustomsResultText(candidate, vehicle, customs, customsFee, util, rate),
+      text: under3CustomsResultText(candidate, vehicle, customs, customsFee, util, rate, valueDetails),
       parse_mode: 'HTML',
       reply_markup: customsResultKeyboard()
     });
@@ -1345,26 +1442,35 @@ async function handleCustomsReply(env, message) {
     const rate = await euroRate(env);
     const result = calculatePassengerOver3({ ageGroup, engineCc: ccm, euroRate: rate });
     await cleanupCustomsMessages(env, userId, message.chat.id);
-    await sendCustomsPrompt(env, message.chat.id, [
+    await sendCustomsCurrencyPrompt(env, message.chat.id, userId, 'over3', [
       '<b>Пошлина по объёму двигателя рассчитана.</b>',
       `Сумма пошлины: ${formatMoney(result.duty)}`,
       '',
-      'Укажите предполагаемую таможенную стоимость автомобиля — она нужна для расчёта государственного таможенного сбора.'
-    ], 'Стоимость автомобиля в рублях', {
-      stage: 'over3-value', ageGroup, engineCc: ccm, customsDuty: result.duty, euroRate: rate
-    });
+      'Таможенная стоимость нужна для расчёта государственного таможенного сбора.'
+    ], {
+      ageGroup, engineCc: ccm, customsDuty: result.duty, euroRate: rate
+    }, `customs:over3:${ageGroup}`);
     return true;
   }
 
   if (stage === 'over3-value') {
-    const value = parsePositiveNumber(message.text);
+    const enteredValue = parsePositiveNumber(message.text);
+    const currency = electricCustomsCurrency(state.currency || 'RUB');
     const ccm = parsePositiveNumber(state.engineCc);
     const duty = parsePositiveNumber(state.customsDuty);
     const ageGroup = state.ageGroup;
-    if (!value || !ccm || !duty || !['3-5', '5+'].includes(ageGroup)) {
-      await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать стоимость. Введите сумму одним числом в рублях.');
+    if (!enteredValue || !currency || !ccm || !duty || !['3-5', '5+'].includes(ageGroup)) {
+      await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать стоимость. Введите сумму одним числом в выбранной валюте.');
       return true;
     }
+    let valueDetails;
+    try {
+      valueDetails = await resolveCustomsValue(enteredValue, currency.code);
+    } catch (error) {
+      await sendCustomsNotice(env, message.chat.id, `Не удалось получить курс ЦБ РФ: ${escapeHtml(error.message || error)}. Попробуйте ещё раз позже.`);
+      return true;
+    }
+    const value = valueDetails.valueRub;
     const customsFee = calculateCustomsProcessingFee(value);
     const rate = parsePositiveNumber(state.euroRate) || await euroRate(env);
     const result = calculatePassengerOver3({ ageGroup, engineCc: ccm, euroRate: rate });
@@ -1376,6 +1482,7 @@ async function handleCustomsReply(env, message) {
         '',
         `Возраст: ${ageGroup === '3-5' ? 'от 3 до 5 лет' : 'старше 5 лет'}`,
         `Объём двигателя: ${ccm} см³`,
+        ...customsValueLines(enteredValue, currency, valueDetails.currencyRate, value),
         `Ставка: ${result.euroPerCc} €/см³`,
         `<b>Таможенная пошлина: ${formatMoney(duty)}</b>`,
         `Таможенный сбор за операции: ${formatMoney(customsFee)}`,
@@ -1468,21 +1575,40 @@ async function handleCustomsReply(env, message) {
   }
 
   if (stage === 'pickup-value') {
-    const value = parsePositiveNumber(message.text);
+    const enteredValue = parsePositiveNumber(message.text);
+    const currency = electricCustomsCurrency(state.currency || 'RUB');
     const age = state.ageGroup;
     const fuel = state.fuel;
-    if (!value || !age || !fuel) return true;
+    if (!enteredValue || !currency || !age || !fuel) {
+      await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать стоимость. Введите сумму одним числом в выбранной валюте.');
+      return true;
+    }
+    let valueDetails;
+    try {
+      valueDetails = await resolveCustomsValue(enteredValue, currency.code);
+    } catch (error) {
+      await sendCustomsNotice(env, message.chat.id, `Не удалось получить курс ЦБ РФ: ${escapeHtml(error.message || error)}. Попробуйте ещё раз позже.`);
+      return true;
+    }
+    const valueState = {
+      customsValueRub: valueDetails.valueRub,
+      enteredValue,
+      currency: currency.code,
+      currencyRate: valueDetails.currencyRate,
+      ageGroup: age,
+      fuel
+    };
     const needsCcm = age === '7+' || (fuel === 'petrol' && age === '0-3') || (fuel === 'diesel' && age === '5-7');
     await cleanupCustomsMessages(env, userId, message.chat.id);
     if (needsCcm) {
       await sendCustomsPrompt(env, message.chat.id, [
         '<b>Для выбранной ставки нужен объём двигателя.</b>',
         'Укажите точный объём в см³.'
-      ], 'Объём двигателя, см³', { stage: 'pickup-volume', customsValueRub: value, ageGroup: age, fuel });
+      ], 'Объём двигателя, см³', { stage: 'pickup-volume', ...valueState });
     } else {
       await sendCustomsPrompt(env, message.chat.id, [
         '<b>Укажите полную технически допустимую массу по шильдику.</b>'
-      ], 'Полная масса, кг', { stage: 'pickup-mass', customsValueRub: value, ageGroup: age, fuel, engineCc: 1 });
+      ], 'Полная масса, кг', { stage: 'pickup-mass', ...valueState, engineCc: 1 });
     }
     return true;
   }
@@ -1495,6 +1621,7 @@ async function handleCustomsReply(env, message) {
       '<b>Укажите полную технически допустимую массу по шильдику.</b>'
     ], 'Полная масса, кг', {
       stage: 'pickup-mass', customsValueRub: state.customsValueRub,
+      enteredValue: state.enteredValue, currency: state.currency, currencyRate: state.currencyRate,
       ageGroup: state.ageGroup, fuel: state.fuel, engineCc: ccm
     });
     return true;
@@ -1506,7 +1633,10 @@ async function handleCustomsReply(env, message) {
     const ccm = parsePositiveNumber(state.engineCc);
     const ageGroup = state.ageGroup;
     const fuel = state.fuel;
-    if (!mass || !value || !ccm) return true;
+    const enteredValue = parsePositiveNumber(state.enteredValue) || value;
+    const currency = electricCustomsCurrency(state.currency || 'RUB');
+    const currencyRate = state.currencyRate || parseCbrCurrencyRate('', 'RUB');
+    if (!mass || !value || !ccm || !enteredValue || !currency || !currencyRate) return true;
     try {
       const rate = await euroRate(env);
       const result = calculatePickup({ customsValueRub: value, fuel, ageGroup, engineCc: ccm, maxMassKg: mass, euroRate: rate });
@@ -1516,6 +1646,8 @@ async function handleCustomsReply(env, message) {
         chat_id: message.chat.id,
         text: [
           '✅ <b>Предварительный расчёт пикапа</b>',
+          '',
+          ...customsValueLines(enteredValue, currency, currencyRate, value),
           '',
           `Ввозная пошлина: ${formatMoney(result.duty)}`,
           `НДС 22%: ${formatMoney(result.vat)}`,
@@ -2573,7 +2705,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'under3-electric-route-v14' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'customs-currency-all-v15' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
