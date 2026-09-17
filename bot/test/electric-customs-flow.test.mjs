@@ -34,7 +34,19 @@ test('recognizes a sequential hybrid and separates combustion and 30-minute powe
 test('electric customs flow skips the repeated type confirmation and can correct the value', () => {
   assert.doesNotMatch(workerSource, /Это электро\/последовательный гибрид/);
   assert.doesNotMatch(workerSource, /Подтвердите, что это электромобиль или последовательный гибрид/);
-  assert.match(workerSource, /Указанная таможенная стоимость/);
+  assert.match(workerSource, /Указанная стоимость/);
   assert.match(workerSource, /Исправить стоимость/);
   assert.match(workerSource, /customs:electric:edit:/);
+});
+
+test('electric customs flow asks for currency before the amount', () => {
+  for (const code of ['RUB', 'USD', 'EUR', 'CNY', 'KRW']) {
+    assert.match(workerSource, new RegExp(`callback\\('${code}'\\)`));
+  }
+  assert.match(workerSource, /customs:electric:currency:/);
+  assert.match(workerSource, /Бот автоматически пересчитает сумму в рубли по курсу ЦБ РФ/);
+  assert.match(workerSource, /Таможенная стоимость в рублях/);
+  assert.match(workerSource, /formatCbrRate\(currencyRate\)/);
+  assert.match(workerSource, /catalogNavigationLine\(sourceParsed\)/);
+  assert.match(workerSource, /stage: 'catalog-input', mode: 'electric'/);
 });

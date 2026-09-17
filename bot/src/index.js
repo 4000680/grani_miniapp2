@@ -25,6 +25,8 @@ import {
   calculatePassengerOver3,
   calculatePassengerUnder3,
   calculatePickup,
+  convertCurrencyToRub,
+  parseCbrCurrencyRate,
   parseCbrEuroRate,
   parsePositiveNumber
 } from './customs-calculation.js';
@@ -184,6 +186,16 @@ function formatMoney(value, precise = false) {
 
 let cachedEuroRate = null;
 let cachedEuroRateAt = 0;
+let cachedCurrencyXml = null;
+let cachedCurrencyXmlAt = 0;
+
+const ELECTRIC_CUSTOMS_CURRENCIES = {
+  RUB: { button: '🇷🇺 Рубли', name: 'российских рублях', code: 'RUB', symbol: '₽' },
+  USD: { button: '🇺🇸 Доллары', name: 'долларах США', code: 'USD', symbol: '$' },
+  EUR: { button: '🇪🇺 Евро', name: 'евро', code: 'EUR', symbol: '€' },
+  CNY: { button: '🇨🇳 Юани', name: 'китайских юанях', code: 'CNY', symbol: '¥' },
+  KRW: { button: '🇰🇷 Воны', name: 'корейских вонах', code: 'KRW', symbol: '₩' }
+};
 
 async function euroRate(env) {
   const configured = parsePositiveNumber(env.EUR_RATE);
@@ -196,6 +208,37 @@ async function euroRate(env) {
   cachedEuroRate = parsed;
   cachedEuroRateAt = Date.now();
   return parsed;
+}
+
+function electricCustomsCurrency(code) {
+  return ELECTRIC_CUSTOMS_CURRENCIES[String(code || '').toUpperCase()] || null;
+}
+
+async function cbrCurrencyRate(code) {
+  const currency = electricCustomsCurrency(code);
+  if (!currency) throw new Error('неизвестная валюта');
+  if (currency.code === 'RUB') return parseCbrCurrencyRate('', 'RUB');
+  if (!cachedCurrencyXml || Date.now() - cachedCurrencyXmlAt >= 6 * 60 * 60 * 1000) {
+    const response = await fetch('https://www.cbr.ru/scripts/XML_daily.asp');
+    if (!response.ok) throw new Error('не удалось получить курс валют ЦБ РФ');
+    cachedCurrencyXml = await response.text();
+    cachedCurrencyXmlAt = Date.now();
+  }
+  const rate = parseCbrCurrencyRate(cachedCurrencyXml, currency.code);
+  if (!rate) throw new Error(`не удалось прочитать курс ${currency.code} ЦБ РФ`);
+  return rate;
+}
+
+function formatCurrencyAmount(value, code) {
+  const currency = electricCustomsCurrency(code);
+  const amount = Number(value).toLocaleString('ru-RU', { maximumFractionDigits: 2 });
+  return currency?.code === 'RUB' ? `${amount} ₽` : `${amount} ${currency?.code || code}`;
+}
+
+function formatCbrRate(rate) {
+  const nominal = Number(rate.nominal).toLocaleString('ru-RU');
+  const value = Number(rate.value).toLocaleString('ru-RU', { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+  return `Курс ЦБ РФ${rate.date ? ` на ${rate.date}` : ''}: ${nominal} ${rate.code} = ${value} ₽`;
 }
 
 function customsKeyboard(rows = [], back = 'customs:start') {
@@ -758,16 +801,67 @@ function electricCustomsVehicleLines(candidate, requestedWeight = null) {
   return lines;
 }
 
-async function sendElectricCustomsValuePrompt(env, chatId, candidate, requestedWeight = null, cleanupMessageIds = []) {
-  return sendCustomsPrompt(env, chatId, [
+function electricCustomsCurrencyText(candidate, requestedWeight = null, sourceParsed = null) {
+  const lines = [
     '✅ <b>Автомобиль и мощности определены</b>',
     '',
     ...electricCustomsVehicleLines(candidate, requestedWeight),
     '',
-    '<b>Укажите предполагаемую таможенную стоимость в рублях.</b>'
-  ], 'Стоимость в рублях', {
+    '<b>Выберите валюту, в которой будете указывать стоимость автомобиля.</b>',
+    'Бот автоматически пересчитает сумму в рубли по курсу ЦБ РФ.'
+  ];
+  if (sourceParsed) lines.push('', catalogNavigationLine(sourceParsed));
+  return lines.join('\n');
+}
+
+function electricCustomsCurrencyKeyboard(rowIndex, requestedWeight, backCallback = 'catalog:back:search') {
+  const callback = code => `customs:electric:currency:${rowIndex}:${requestedWeight || 0}:${code}`;
+  return customsKeyboard([
+    [
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.RUB.button, callback_data: callback('RUB') },
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.USD.button, callback_data: callback('USD') }
+    ],
+    [
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.EUR.button, callback_data: callback('EUR') },
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.CNY.button, callback_data: callback('CNY') }
+    ],
+    [{ text: ELECTRIC_CUSTOMS_CURRENCIES.KRW.button, callback_data: callback('KRW') }]
+  ], backCallback);
+}
+
+async function showElectricCustomsCurrencyPrompt(env, message, candidate, requestedWeight = null, backCallback = 'catalog:back:search', sourceParsed = null) {
+  return telegram(env, 'editMessageText', {
+    chat_id: message.chat.id,
+    message_id: message.message_id,
+    text: electricCustomsCurrencyText(candidate, requestedWeight, sourceParsed),
+    parse_mode: 'HTML',
+    reply_markup: electricCustomsCurrencyKeyboard(candidate.rowIndex, requestedWeight || candidate.mass, backCallback)
+  });
+}
+
+async function sendElectricCustomsCurrencyPrompt(env, chatId, userId, candidate, requestedWeight = null) {
+  const source = parseCatalogQuery(candidate.brand + ' ' + candidate.model + ' ' + candidate.year);
+  await setCustomsState(env, userId, { stage: 'catalog-input', mode: 'electric' });
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: electricCustomsCurrencyText(candidate, requestedWeight, source),
+    parse_mode: 'HTML',
+    reply_markup: electricCustomsCurrencyKeyboard(candidate.rowIndex, requestedWeight || candidate.mass)
+  });
+  await trackTemporaryMessage(env, userId, sent.message_id);
+  return sent;
+}
+
+async function sendElectricCustomsValuePrompt(env, chatId, candidate, requestedWeight, currencyCode, cleanupMessageIds = []) {
+  const currency = electricCustomsCurrency(currencyCode);
+  if (!currency) throw new Error('Неизвестная валюта стоимости');
+  return sendCustomsPrompt(env, chatId, [
+    `<b>Введите предполагаемую стоимость автомобиля в ${currency.name}.</b>`,
+    `<i>Выбрано: ${currency.button} (${currency.code}). Укажите сумму одним числом.</i>`
+  ], `Стоимость в ${currency.code}`, {
     stage: 'electric-value', rowIndex: candidate.rowIndex,
     requestedWeight: requestedWeight || candidate.mass || null,
+    currency: currency.code,
     cleanupMessageIds
   });
 }
@@ -792,11 +886,25 @@ async function handleCustomsCallback(env, query) {
     electricCustomsPowerDetails(candidate);
     await cleanupCustomsMessages(env, userId, message.chat.id);
     await cleanupTemporaryMessages(env, userId, message.chat.id);
+    return sendElectricCustomsCurrencyPrompt(
+      env, message.chat.id, userId, candidate,
+      Number(editElectricValue[2]) || candidate.mass || null
+    );
+  }
+  const electricCurrency = data.match(/^customs:electric:currency:(\d+):(\d+(?:\.\d+)?):(RUB|USD|EUR|CNY|KRW)$/);
+  if (electricCurrency) {
+    const userId = query.from?.id || message.chat.id;
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const candidate = getCatalogCandidate(catalog, Number(electricCurrency[1]));
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в справочнике');
+    electricCustomsPowerDetails(candidate);
+    await discardWorkingCard(env, message, userId);
     return sendElectricCustomsValuePrompt(
       env,
       message.chat.id,
       candidate,
-      Number(editElectricValue[2]) || candidate.mass || null
+      Number(electricCurrency[2]) || candidate.mass || null,
+      electricCurrency[3]
     );
   }
   if (data === 'customs:start') return showCustomsIntro(env, message);
@@ -1075,13 +1183,22 @@ async function handleCustomsReply(env, message) {
   }
 
   if (stage === 'electric-value') {
-    const value = parsePositiveNumber(message.text);
+    const enteredValue = parsePositiveNumber(message.text);
+    const currency = electricCustomsCurrency(state.currency || 'RUB');
     const rowIndex = Number(state.rowIndex);
     const requestedWeight = parsePositiveNumber(state.requestedWeight);
-    if (!value || !Number.isInteger(rowIndex) || rowIndex < 0) {
-      await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать стоимость. Введите сумму одним числом в рублях.');
+    if (!enteredValue || !currency || !Number.isInteger(rowIndex) || rowIndex < 0) {
+      await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать стоимость. Введите сумму одним числом в выбранной валюте.');
       return true;
     }
+    let currencyRate;
+    try {
+      currencyRate = await cbrCurrencyRate(currency.code);
+    } catch (error) {
+      await sendCustomsNotice(env, message.chat.id, `Не удалось получить курс ЦБ РФ: ${escapeHtml(error.message || error)}. Попробуйте ещё раз позже.`);
+      return true;
+    }
+    const value = convertCurrencyToRub(enteredValue, currencyRate);
     const catalog = await loadCatalog(env.CATALOG_URL);
     const candidate = getCatalogCandidate(catalog, rowIndex);
     const power = electricCustomsPowerDetails(candidate);
@@ -1102,7 +1219,11 @@ async function handleCustomsReply(env, message) {
       '✅ <b>Предварительный таможенный расчёт</b>',
       '',
       ...electricCustomsVehicleLines(candidate, requestedWeight),
-      `<b>Указанная таможенная стоимость:</b> ${formatMoney(value)}`,
+      `<b>Указанная стоимость:</b> ${formatCurrencyAmount(enteredValue, currency.code)}`,
+      ...(currency.code === 'RUB' ? [] : [
+        formatCbrRate(currencyRate),
+        `<b>Таможенная стоимость в рублях:</b> ${formatMoney(value)}`
+      ]),
       '',
       `Ввозная пошлина 15%: ${formatMoney(customs.duty)}`,
       `Акциз (${customs.excisePerHp} ₽ за 0,75 кВт): ${formatMoney(customs.excise)}`,
@@ -1489,8 +1610,7 @@ async function showCatalogCandidate(env, message, rowIndex, weight, sourceParsed
   const back = backCallback || 'catalog:back:variants:' + candidate.rowIndex;
   if (source?.customsMode === 'electric') {
     electricCustomsPowerDetails(candidate);
-    await cleanupTemporaryMessages(env, message.chat.id, message.chat.id);
-    return sendElectricCustomsValuePrompt(env, message.chat.id, candidate, weight);
+    return showElectricCustomsCurrencyPrompt(env, message, candidate, weight, back, source);
   }
   await telegram(env, 'editMessageText', {
     chat_id: message.chat.id,
@@ -1880,8 +2000,14 @@ async function handleCatalogCallback(env, query) {
   };
   const util = calculateUtil(vehicle);
   if (sourceParsed?.customsMode === 'electric') {
-    await cleanupTemporaryMessages(env, query.from?.id || message.chat.id, message.chat.id);
-    await sendElectricCustomsValuePrompt(env, message.chat.id, candidate, requestedWeight);
+    await showElectricCustomsCurrencyPrompt(
+      env,
+      message,
+      candidate,
+      requestedWeight,
+      `catalog:back:variants:${candidate.rowIndex}`,
+      sourceParsed
+    );
     return;
   }
   const customs = sourceParsed?.customsDuty ? {
@@ -2195,7 +2321,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'electric-customs-flow-v8' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'electric-customs-currencies-v9' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {

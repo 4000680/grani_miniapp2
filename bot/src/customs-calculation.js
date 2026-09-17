@@ -194,17 +194,42 @@ export function calculatePickup({ customsValueRub, fuel, ageGroup, engineCc, max
 
 export function parsePositiveNumber(value) {
   const normalized = String(value || '')
-    .replace(/[₽€$]/g, '')
+    .replace(/\b(?:RUB|USD|EUR|CNY|KRW)\b/gi, '')
+    .replace(/[₽€$¥₩]/g, '')
     .replace(/[\s\u00a0]/g, '')
     .replace(',', '.');
   const number = Number(normalized);
   return Number.isFinite(number) && number > 0 ? number : null;
 }
 
-export function parseCbrEuroRate(xml) {
-  const block = String(xml || '').match(/<Valute[^>]*>[\s\S]*?<CharCode>EUR<\/CharCode>[\s\S]*?<Nominal>([^<]+)<\/Nominal>[\s\S]*?<Value>([^<]+)<\/Value>[\s\S]*?<\/Valute>/i);
+export function parseCbrCurrencyRate(xml, currencyCode) {
+  const code = String(currencyCode || '').trim().toUpperCase();
+  if (code === 'RUB') {
+    return { code, nominal: 1, value: 1, unitRate: 1, date: null };
+  }
+  if (!/^[A-Z]{3}$/.test(code)) return null;
+  const source = String(xml || '');
+  const blocks = source.match(/<Valute[^>]*>[\s\S]*?<\/Valute>/gi) || [];
+  const block = blocks.find(item => new RegExp(`<CharCode>${code}<\\/CharCode>`, 'i').test(item));
   if (!block) return null;
-  const nominal = parsePositiveNumber(block[1]);
-  const value = parsePositiveNumber(block[2]);
-  return nominal && value ? value / nominal : null;
+  const nominal = parsePositiveNumber(block.match(/<Nominal>([^<]+)<\/Nominal>/i)?.[1]);
+  const value = parsePositiveNumber(block.match(/<Value>([^<]+)<\/Value>/i)?.[1]);
+  if (!nominal || !value) return null;
+  return {
+    code,
+    nominal,
+    value,
+    unitRate: Number((value / nominal).toFixed(10)),
+    date: source.match(/<ValCurs[^>]*\bDate="([^"]+)"/i)?.[1] || null
+  };
+}
+
+export function convertCurrencyToRub(amount, rate) {
+  const sourceAmount = positiveNumber(amount, 'Стоимость');
+  const unitRate = positiveNumber(rate?.unitRate ?? rate, 'Курс валюты');
+  return roundRubles(sourceAmount * unitRate);
+}
+
+export function parseCbrEuroRate(xml) {
+  return parseCbrCurrencyRate(xml, 'EUR')?.unitRate || null;
 }

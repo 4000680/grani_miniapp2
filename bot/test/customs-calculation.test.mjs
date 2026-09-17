@@ -6,6 +6,8 @@ import {
   calculatePassengerOver3,
   calculatePassengerUnder3,
   calculatePickup,
+  convertCurrencyToRub,
+  parseCbrCurrencyRate,
   parseCbrEuroRate,
   parsePositiveNumber
 } from '../src/customs-calculation.js';
@@ -94,10 +96,26 @@ test('пикап: бензин до 3 лет и дизель старше 7 ле
 test('денежные суммы принимаются с пробелами и запятой', () => {
   assert.equal(parsePositiveNumber('2 500 000'), 2500000);
   assert.equal(parsePositiveNumber('97,7626'), 97.7626);
+  assert.equal(parsePositiveNumber('30 000 USD'), 30000);
+  assert.equal(parsePositiveNumber('50 000 000 ₩'), 50000000);
   assert.equal(parsePositiveNumber('ошибка'), null);
 });
 
 test('курс евро читается из официального XML ЦБ', () => {
   const xml = '<ValCurs><Valute ID="R01239"><CharCode>EUR</CharCode><Nominal>1</Nominal><Value>97,7626</Value></Valute></ValCurs>';
   assert.equal(parseCbrEuroRate(xml), 97.7626);
+});
+
+test('курсы ЦБ учитывают номинал валюты, включая 1000 корейских вон', () => {
+  const xml = [
+    '<ValCurs Date="17.09.2026">',
+    '<Valute><CharCode>USD</CharCode><Nominal>1</Nominal><Value>84,1732</Value></Valute>',
+    '<Valute><CharCode>KRW</CharCode><Nominal>1000</Nominal><Value>62,1985</Value></Valute>',
+    '</ValCurs>'
+  ].join('');
+  assert.deepEqual(parseCbrCurrencyRate(xml, 'KRW'), {
+    code: 'KRW', nominal: 1000, value: 62.1985, unitRate: 0.0621985, date: '17.09.2026'
+  });
+  assert.equal(convertCurrencyToRub(30000, parseCbrCurrencyRate(xml, 'USD')), 2525196);
+  assert.equal(convertCurrencyToRub(50000000, parseCbrCurrencyRate(xml, 'KRW')), 3109925);
 });
