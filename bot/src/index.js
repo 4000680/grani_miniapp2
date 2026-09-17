@@ -35,15 +35,17 @@ import { isPermanentResultText } from './message-policy.js';
 export { ApplicationsStore } from './applications-store.js';
 
 const MENU_TEXT = [
-  'Здравствуйте! Я — помощник компании «Брокер Грани» 👋',
+  'Здравствуйте! Я — помощник компании «Брокер Грани» 🚗',
   '',
   'Мы создали этот бот, чтобы автоматизировать ежедневные задачи брокера и упростить оформление автомобилей по параллельному импорту.',
   '',
-  'Выберите нужный раздел ниже или отправьте сюда PDF-файл СБКТС или выписку ЭПТС 👇',
+  '📟 Для расчёта утильсбора отправьте PDF-файл СБКТС или выписку ЭПТС.',
   '',
-  'Для поиска по справочнику напишите марку, модель и год выпуска.',
+  '🎛️ Для поиска по справочнику СЭП напишите марку, модель и год выпуска.',
   '',
-  'Функционал бота постоянно пополняется.'
+  'Также вы можете выбрать нужный раздел в меню ниже.',
+  '',
+  'Функционал бота постоянно пополняется 🎮'
 ].join('\n');
 
 const INFO = {
@@ -98,7 +100,7 @@ const INFO = {
     ].join('\n')
   },
   contact: {
-    title: '💬 <b>Чат</b>',
+    title: '☎️ <b>Техподдержка</b>',
     text: 'Если у вас остались вопросы, напишите нам: @grani_broker'
   },
   donate: {
@@ -127,16 +129,16 @@ function menuKeyboard(env) {
   const app = env.MINI_APP_URL || 'https://4000680.github.io/grani_miniapp2/';
   return {
     inline_keyboard: [
-      [{ text: '🛃 Таможенное оформление', callback_data: 'customs:start' }],
-      [{ text: '♻️ Рассчитать утильсбор', web_app: { url: app + 'tabs/utilsbor/index.html' } }],
+      [{ text: '🚗 Таможенное оформление', callback_data: 'customs:start' }],
+      [{ text: '🛞 Рассчитать утильсбор', web_app: { url: app + 'tabs/utilsbor/index.html' } }],
       [{ text: '📅 Рассчитать пени', web_app: { url: app + 'tabs/utilsbor/index.html?mode=peni' } }],
-      [{ text: '📎 Рассчитать по СБКТС или ЭПТС', callback_data: 'info:pdf' }],
+      [{ text: '📟 Рассчитать по СБКТС или ЭПТС', callback_data: 'info:pdf' }],
       [{ text: '💳 Реквизиты для оплаты утильсбора', callback_data: 'info:payment' }],
       [{ text: '📄 Получить ЭПТС по VIN', callback_data: 'info:epts' }],
       [{ text: '🔎 Запросить скрин СБКТС', callback_data: 'info:sbkts' }],
       [{ text: '👤 Внести собственника в ЭПТС', callback_data: 'info:owner' }],
       [
-        { text: '💬 Чат', callback_data: 'info:contact' },
+        { text: '☎️ Техподдержка', callback_data: 'info:contact' },
         { text: '❤️ Задонатить', callback_data: 'info:donate' }
       ]
     ]
@@ -153,7 +155,7 @@ function infoKeyboard(section, env) {
   }
   if (section === 'contact') {
     rows.push([{
-      text: '💬 Написать @grani_broker',
+      text: '☎️ Написать @grani_broker',
       url: env.CONTACT_URL || 'https://t.me/grani_broker'
     }]);
   }
@@ -269,11 +271,11 @@ function customsIntroText() {
 function customsIntroKeyboard() {
   return customsKeyboard([
     [{ text: '🚗 Автомобили до 3 лет', callback_data: 'customs:under3' }],
-    [{ text: '🚙 Автомобили старше 3 лет', callback_data: 'customs:over3' }],
-    [{ text: '⚡ Электро и последовательные гибриды', callback_data: 'customs:electric' }],
+    [{ text: '🛞 Автомобили старше 3 лет', callback_data: 'customs:over3' }],
+    [{ text: '🪫 Электро и последовательные гибриды', callback_data: 'customs:electric' }],
     [{ text: '🛻 Пикапы', callback_data: 'customs:pickup' }],
-    [{ text: '💡 Какой автомобиль выгоднее?', callback_data: 'customs:advice' }],
-    [{ text: '💬 Получить консультацию', callback_data: 'info:contact' }]
+    [{ text: '🎛️ Какой автомобиль выгоднее?', callback_data: 'customs:advice' }],
+    [{ text: '☎️ Получить консультацию', callback_data: 'info:contact' }]
   ], 'menu');
 }
 
@@ -1018,7 +1020,7 @@ async function handleCustomsCallback(env, query) {
       'Корректное сравнение — это таможенный платёж + утильсбор по конкретной модели, году, объёму и мощности.',
       '',
       'ИИ-консультанта добавим отдельным следующим этапом.'
-    ].join('\n'), [[{ text: '💬 Получить консультацию', callback_data: 'info:contact' }]]);
+    ].join('\n'), [[{ text: '☎️ Получить консультацию', callback_data: 'info:contact' }]]);
   }
 }
 
@@ -2321,7 +2323,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'electric-customs-currencies-v9' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'menu-emojis-support-v10' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
