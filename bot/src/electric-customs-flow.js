@@ -11,7 +11,7 @@ export function electricCustomsPowerDetails(candidate) {
   const combustionKw = positivePower(candidate?.combustionKw);
   const electricKw = positivePower(candidate?.electricKw);
   if (!electricKw) {
-    throw new Error('В справочнике не найдена 30-минутная мощность выбранного автомобиля');
+    throw new Error('В шаблоне СЭП не найдена 30-минутная мощность выбранного автомобиля');
   }
   return {
     vehicleType: combustionKw ? 'последовательный гибрид' : 'электромобиль',
