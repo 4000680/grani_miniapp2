@@ -4,6 +4,7 @@ import {
   getCatalogVariants,
   listCatalogModifications,
   loadCatalog,
+  paginateCatalogModifications,
   paginateCatalogVariants,
   parseCatalogQuery,
   parseCatalogWeight,
@@ -943,7 +944,7 @@ async function handleCustomsReply(env, message) {
         '<i>Применена большая из двух сумм. Расчёт предварительный.</i>'
       ].join('\n'),
       parse_mode: 'HTML',
-      reply_markup: customsKeyboard([[{ text: 'Продолжить к утильсбору', callback_data: `customs:catalog:${result.duty}:${ccm}` }]], 'customs:under3')
+      reply_markup: customsKeyboard([[{ text: 'Перейти к расчёту утильсбора', callback_data: `customs:catalog:${result.duty}:${ccm}` }]], 'customs:under3')
     });
     await setCustomsState(env, userId, {
       stage: 'customs-duty-ready', mode: 'passenger', customsDuty: result.duty,
@@ -1003,7 +1004,7 @@ async function handleCustomsReply(env, message) {
         '<i>Расчёт предварительный.</i>'
       ].join('\n'),
       parse_mode: 'HTML',
-      reply_markup: customsKeyboard([[{ text: 'Продолжить к утильсбору', callback_data: `customs:catalog:${duty}:${ccm}` }]], 'customs:over3')
+      reply_markup: customsKeyboard([[{ text: 'Перейти к расчёту утильсбора', callback_data: `customs:catalog:${duty}:${ccm}` }]], 'customs:over3')
     });
     await setCustomsState(env, userId, {
       stage: 'customs-duty-ready', mode: 'passenger', customsDuty: duty,
@@ -1202,16 +1203,20 @@ function catalogSearchPrompt() {
   ].join('\n');
 }
 
-function catalogModificationsText(modifications, parsed) {
+function catalogModificationsText(modifications, parsed, page = 0) {
+  const pagination = paginateCatalogModifications(modifications, page);
   return [
     modifications.length === 1
       ? 'Для запроса найдена одна модификация.'
       : 'Найдено несколько модификаций — <b>' + modifications.length + '</b>.',
     '',
     'Выберите точную модификацию автомобиля:',
+    pagination.pageCount > 1
+      ? `Показаны варианты ${pagination.startIndex + 1}–${pagination.startIndex + pagination.items.length} из ${pagination.total}.`
+      : '',
     '',
     catalogNavigationLine(parsed)
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 function catalogCandidateDescription(candidate, requestedWeight = null) {
@@ -1248,13 +1253,25 @@ function catalogVariantsKeyboard(matches, weight) {
   };
 }
 
-function catalogModificationKeyboard(modifications) {
+function catalogModificationKeyboard(modifications, page = 0) {
+  const pagination = paginateCatalogModifications(modifications, page);
+  const pageButtons = [];
+  if (pagination.pageCount > 1) {
+    if (pagination.currentPage > 0) {
+      pageButtons.push({ text: '‹ Предыдущие', callback_data: `catalog:mods:${pagination.currentPage - 1}` });
+    }
+    pageButtons.push({ text: `${pagination.currentPage + 1}/${pagination.pageCount}`, callback_data: 'catalog:noop' });
+    if (pagination.currentPage < pagination.pageCount - 1) {
+      pageButtons.push({ text: 'Следующие ›', callback_data: `catalog:mods:${pagination.currentPage + 1}` });
+    }
+  }
   return {
     inline_keyboard: [
-      ...modifications.map(item => [{
+      ...pagination.items.map(item => [{
         text: compactButtonText(item.model),
-        callback_data: 'catalog:model:' + item.brandIndex + ':' + item.modelIndex + ':' + item.year
+        callback_data: 'catalog:model:' + item.brandIndex + ':' + item.modelIndex + ':' + item.year + ':' + pagination.currentPage
       }]),
+      ...(pageButtons.length ? [pageButtons] : []),
       [
         { text: '← Назад', callback_data: 'catalog:back:search' },
         { text: '🏠 Главное меню', callback_data: 'calc:menu' }
@@ -1267,21 +1284,21 @@ function catalogVariantPower(candidate) {
   return Math.round((candidate.combustionKw + candidate.electricKw) * 100) / 100;
 }
 
-function catalogPowerMassKeyboard(variants, brandIndex, modelIndex, year, page = 0) {
+function catalogPowerMassKeyboard(variants, brandIndex, modelIndex, year, page = 0, modificationsPage = 0) {
   const pagination = paginateCatalogVariants(variants, page);
   const pageButtons = [];
   if (pagination.pageCount > 1) {
     if (pagination.currentPage > 0) {
       pageButtons.push({
         text: '‹ Предыдущие',
-        callback_data: `catalog:variants:${brandIndex}:${modelIndex}:${year}:${pagination.currentPage - 1}`
+        callback_data: `catalog:variants:${brandIndex}:${modelIndex}:${year}:${pagination.currentPage - 1}:${modificationsPage}`
       });
     }
     pageButtons.push({ text: `${pagination.currentPage + 1}/${pagination.pageCount}`, callback_data: 'catalog:noop' });
     if (pagination.currentPage < pagination.pageCount - 1) {
       pageButtons.push({
         text: 'Следующие ›',
-        callback_data: `catalog:variants:${brandIndex}:${modelIndex}:${year}:${pagination.currentPage + 1}`
+        callback_data: `catalog:variants:${brandIndex}:${modelIndex}:${year}:${pagination.currentPage + 1}:${modificationsPage}`
       });
     }
   }
@@ -1292,12 +1309,12 @@ function catalogPowerMassKeyboard(variants, brandIndex, modelIndex, year, page =
         const hp = Math.round(kw / 0.7355);
         return [{
           text: compactButtonText(kw + ' кВт / ' + hp + ' л.с. — ' + candidate.mass + ' кг'),
-          callback_data: 'catalog:pick:' + candidate.rowIndex + ':' + candidate.mass + ':' + pagination.currentPage
+          callback_data: 'catalog:pick:' + candidate.rowIndex + ':' + candidate.mass + ':' + pagination.currentPage + ':' + modificationsPage
         }];
       }),
       ...(pageButtons.length ? [pageButtons] : []),
       [
-        { text: '← Назад', callback_data: 'catalog:back:mods' },
+        { text: '← Назад', callback_data: `catalog:mods:${modificationsPage}` },
         { text: '🏠 Главное меню', callback_data: 'calc:menu' }
       ]
     ]
@@ -1353,17 +1370,19 @@ function catalogEnginePrompt(candidate, weight, sourceParsed) {
     : sourceParsed?.customsMode === 'passenger' && sourceParsed.customsCcm
       ? 'Объём двигателя уже указан. Продолжите расчёт утильсбора.'
       : 'Выберите тип автомобиля и группу объёма двигателя.';
-  return [
+  const lines = [
     '✅ <b>Автомобиль найден в справочнике</b>',
     '',
     catalogCandidateDescription(candidate, weight),
     '',
     instruction,
-    '',
-    '<i>Для электромобиля или последовательного гибрида выберите «Электро/гибрид»: в расчёт пойдёт только 30-минутная мощность.</i>',
-    '',
-    catalogNavigationLine(sourceParsed)
-  ].join('\n');
+    ''
+  ];
+  if (!(sourceParsed?.customsMode === 'passenger' && sourceParsed.customsCcm)) {
+    lines.push('<i>Для электромобиля или последовательного гибрида выберите «Электро/гибрид»: в расчёт пойдёт только 30-минутная мощность.</i>', '');
+  }
+  lines.push(catalogNavigationLine(sourceParsed));
+  return lines.join('\n');
 }
 
 function catalogNoPreferenceReason(ccm, kw) {
@@ -1431,7 +1450,7 @@ async function showCatalogCandidate(env, message, rowIndex, weight, sourceParsed
   });
 }
 
-async function showCatalogModification(env, message, brandIndex, modelIndex, year, sourceParsed = null, page = 0) {
+async function showCatalogModification(env, message, brandIndex, modelIndex, year, sourceParsed = null, page = 0, modificationsPage = 0) {
   const catalog = await loadCatalog(env.CATALOG_URL);
   const variants = getCatalogVariants(catalog, brandIndex, modelIndex, year);
   if (!variants.length) throw new Error('Варианты выбранной модификации не найдены');
@@ -1455,7 +1474,7 @@ async function showCatalogModification(env, message, brandIndex, modelIndex, yea
       parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [[
-          { text: '← Назад', callback_data: 'catalog:back:mods' },
+          { text: '← Назад', callback_data: `catalog:mods:${modificationsPage}` },
           { text: '🏠 Главное меню', callback_data: 'calc:menu' }
         ]]
       }
@@ -1477,7 +1496,7 @@ async function showCatalogModification(env, message, brandIndex, modelIndex, yea
       catalogNavigationLine(source)
     ].filter(Boolean).join('\n'),
     parse_mode: 'HTML',
-    reply_markup: catalogPowerMassKeyboard(variants, brandIndex, modelIndex, year, pagination.currentPage)
+    reply_markup: catalogPowerMassKeyboard(variants, brandIndex, modelIndex, year, pagination.currentPage, modificationsPage)
   });
 }
 
@@ -1606,7 +1625,7 @@ async function runCatalogTextSearch(env, message, parsed) {
       });
       return true;
     }
-    if (modifications.length > 12) {
+    if (modifications.length > 25) {
       await telegram(env, 'editMessageText', {
         chat_id: message.chat.id,
         message_id: status.message_id,
@@ -1624,9 +1643,9 @@ async function runCatalogTextSearch(env, message, parsed) {
       await telegram(env, 'editMessageText', {
         chat_id: message.chat.id,
         message_id: status.message_id,
-        text: catalogModificationsText(modifications, parsed),
+        text: catalogModificationsText(modifications, parsed, 0),
         parse_mode: 'HTML',
-        reply_markup: catalogModificationKeyboard(modifications)
+        reply_markup: catalogModificationKeyboard(modifications, 0)
       });
       return true;
     }
@@ -1648,6 +1667,30 @@ async function handleCatalogText(env, message) {
   const parsed = parseCatalogQuery(message.text);
   if (!parsed) return false;
   return runCatalogTextSearch(env, message, parsed);
+}
+
+async function showCatalogModificationsPage(env, message, sourceParsed, page = 0) {
+  if (!sourceParsed) throw new Error('Не удалось восстановить исходный запрос');
+  const catalog = await loadCatalog(env.CATALOG_URL);
+  const modifications = listCatalogModifications(catalog, sourceParsed);
+  if (!modifications.length || modifications.length > 25) {
+    await telegram(env, 'editMessageText', {
+      chat_id: message.chat.id,
+      message_id: message.message_id,
+      text: catalogSearchPrompt(),
+      parse_mode: 'HTML',
+      reply_markup: catalogSearchKeyboard()
+    });
+    return;
+  }
+  const pagination = paginateCatalogModifications(modifications, page);
+  await telegram(env, 'editMessageText', {
+    chat_id: message.chat.id,
+    message_id: message.message_id,
+    text: catalogModificationsText(modifications, sourceParsed, pagination.currentPage),
+    parse_mode: 'HTML',
+    reply_markup: catalogModificationKeyboard(modifications, pagination.currentPage)
+  });
 }
 
 async function handleCatalogCallback(env, query) {
@@ -1679,26 +1722,12 @@ async function handleCatalogCallback(env, query) {
     return;
   }
   if (query.data === 'catalog:back:mods') {
-    if (!sourceParsed) throw new Error('Не удалось восстановить исходный запрос');
-    const catalog = await loadCatalog(env.CATALOG_URL);
-    const modifications = listCatalogModifications(catalog, sourceParsed);
-    if (!modifications.length || modifications.length > 12) {
-      await telegram(env, 'editMessageText', {
-        chat_id: message.chat.id,
-        message_id: message.message_id,
-        text: catalogSearchPrompt(),
-        parse_mode: 'HTML',
-        reply_markup: catalogSearchKeyboard()
-      });
-      return;
-    }
-    await telegram(env, 'editMessageText', {
-      chat_id: message.chat.id,
-      message_id: message.message_id,
-      text: catalogModificationsText(modifications, sourceParsed),
-      parse_mode: 'HTML',
-      reply_markup: catalogModificationKeyboard(modifications)
-    });
+    await showCatalogModificationsPage(env, message, sourceParsed, 0);
+    return;
+  }
+  const modificationsPage = query.data.match(/^catalog:mods:(\d+)$/);
+  if (modificationsPage) {
+    await showCatalogModificationsPage(env, message, sourceParsed, Number(modificationsPage[1]));
     return;
   }
   if (query.data === 'catalog:back:weight') {
@@ -1725,12 +1754,21 @@ async function handleCatalogCallback(env, query) {
     );
     return;
   }
-  const model = query.data.match(/^catalog:model:(\d+):(\d+):(\d{4})$/);
+  const model = query.data.match(/^catalog:model:(\d+):(\d+):(\d{4})(?::(\d+))?$/);
   if (model) {
-    await showCatalogModification(env, message, Number(model[1]), Number(model[2]), Number(model[3]), sourceParsed);
+    await showCatalogModification(
+      env,
+      message,
+      Number(model[1]),
+      Number(model[2]),
+      Number(model[3]),
+      sourceParsed,
+      0,
+      Number(model[4]) || 0
+    );
     return;
   }
-  const variantsPage = query.data.match(/^catalog:variants:(\d+):(\d+):(\d{4}):(\d+)$/);
+  const variantsPage = query.data.match(/^catalog:variants:(\d+):(\d+):(\d{4}):(\d+)(?::(\d+))?$/);
   if (variantsPage) {
     await showCatalogModification(
       env,
@@ -1739,18 +1777,19 @@ async function handleCatalogCallback(env, query) {
       Number(variantsPage[2]),
       Number(variantsPage[3]),
       sourceParsed,
-      Number(variantsPage[4])
+      Number(variantsPage[4]),
+      Number(variantsPage[5]) || 0
     );
     return;
   }
-  const pick = query.data.match(/^catalog:pick:(\d+)(?::(\d+))?(?::(\d+))?$/);
+  const pick = query.data.match(/^catalog:pick:(\d+)(?::(\d+))?(?::(\d+))?(?::(\d+))?$/);
   if (pick) {
     const catalog = await loadCatalog(env.CATALOG_URL);
     const candidate = getCatalogCandidate(catalog, Number(pick[1]));
     if (!candidate) throw new Error('Автомобиль больше не найден в справочнике');
     const backCallback = message.text?.startsWith('Нашёл несколько вариантов для массы')
       ? 'catalog:back:weight'
-      : `catalog:variants:${candidate.brandIndex}:${candidate.modelIndex}:${candidate.year}:${Number(pick[3]) || 0}`;
+      : `catalog:variants:${candidate.brandIndex}:${candidate.modelIndex}:${candidate.year}:${Number(pick[3]) || 0}:${Number(pick[4]) || 0}`;
     await showCatalogCandidate(
       env,
       message,
@@ -2117,7 +2156,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'unified-message-flow-v6' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'catalog-model-pages-v7' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {

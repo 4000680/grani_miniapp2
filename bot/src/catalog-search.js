@@ -143,6 +143,20 @@ export function listCatalogModifications(catalog, parsedQuery) {
     .sort((left, right) => right.score - left.score || left.model.localeCompare(right.model, 'ru'));
 }
 
+export function paginateCatalogModifications(modifications, page = 0, pageSize = 8) {
+  const safePageSize = Math.max(1, Math.floor(Number(pageSize)) || 8);
+  const pageCount = Math.max(1, Math.ceil(modifications.length / safePageSize));
+  const currentPage = Math.min(Math.max(0, Math.floor(Number(page)) || 0), pageCount - 1);
+  const startIndex = currentPage * safePageSize;
+  return {
+    items: modifications.slice(startIndex, startIndex + safePageSize),
+    currentPage,
+    pageCount,
+    total: modifications.length,
+    startIndex
+  };
+}
+
 export function getCatalogVariants(catalog, brandIndex, modelIndex, year) {
   const variants = [];
   const seen = new Set();

@@ -5,6 +5,7 @@ import {
   getCatalogCandidate,
   getCatalogVariants,
   listCatalogModifications,
+  paginateCatalogModifications,
   paginateCatalogVariants,
   parseCatalogQuery,
   parseCatalogWeight,
@@ -93,4 +94,15 @@ test('paginates ready power and mass variants instead of requesting mass manuall
   assert.equal(first.pageCount, 3);
   assert.equal(last.currentPage, 2);
   assert.deepEqual(last.items.map(item => item.rowIndex), [16, 17, 18]);
+});
+
+test('paginates up to 25 catalog modifications for button selection', () => {
+  const modifications = Array.from({ length: 21 }, (_, index) => ({ model: `COOPER ${index + 1}` }));
+  const first = paginateCatalogModifications(modifications, 0);
+  const last = paginateCatalogModifications(modifications, 99);
+
+  assert.equal(first.items.length, 8);
+  assert.equal(first.pageCount, 3);
+  assert.equal(last.currentPage, 2);
+  assert.deepEqual(last.items.map(item => item.model), ['COOPER 17', 'COOPER 18', 'COOPER 19', 'COOPER 20', 'COOPER 21']);
 });

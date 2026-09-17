@@ -26,3 +26,15 @@ test('shows large catalog results as selectable pages without an automatic mass 
   assert.doesNotMatch(modificationFlow, /sendCatalogWeightPrompt/);
   assert.doesNotMatch(modificationFlow, /variants\.length > 10/);
 });
+
+test('shows up to 25 modifications as paginated buttons', () => {
+  assert.match(workerSource, /modifications\.length > 25/);
+  assert.match(workerSource, /catalog:mods:/);
+  assert.doesNotMatch(workerSource, /modifications\.length > 12/);
+});
+
+test('uses the approved customs transition label and hides the electric hint for a known ICE volume', () => {
+  assert.match(workerSource, /Перейти к расчёту утильсбора/);
+  assert.doesNotMatch(workerSource, /Продолжить к утильсбору/);
+  assert.match(workerSource, /!\(sourceParsed\?\.customsMode === 'passenger' && sourceParsed\.customsCcm\)/);
+});
