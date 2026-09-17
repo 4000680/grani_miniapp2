@@ -54,10 +54,10 @@ export async function loadCatalog(url = DEFAULT_CATALOG_URL) {
     headers: { accept: 'text/plain' },
     cf: { cacheTtl: 3600, cacheEverything: true }
   }).then(async response => {
-    if (!response.ok) throw new Error(`справочник недоступен (HTTP ${response.status})`);
+    if (!response.ok) throw new Error(`шаблон СЭП недоступен (HTTP ${response.status})`);
     const parsed = await inflateJson(await response.text());
     if (!Array.isArray(parsed?.brands) || !Array.isArray(parsed?.models) || !Array.isArray(parsed?.rows)) {
-      throw new Error('неверный формат справочника');
+      throw new Error('неверный формат шаблона СЭП');
     }
     return parsed;
   }).catch(error => {
@@ -228,10 +228,10 @@ export function parseCatalogWeight(value) {
 
 export function calculationPower(candidate, electric) {
   if (electric) {
-    if (!candidate.electricKw) throw new Error('В справочнике не указана 30-минутная мощность для электрорасчёта');
+    if (!candidate.electricKw) throw new Error('В шаблоне СЭП не указана 30-минутная мощность для электрорасчёта');
     return Math.round(candidate.electricKw * 100) / 100;
   }
   const total = candidate.combustionKw + candidate.electricKw;
-  if (!total) throw new Error('В справочнике не указана мощность автомобиля');
+  if (!total) throw new Error('В шаблоне СЭП не указана мощность автомобиля');
   return Math.round(total * 100) / 100;
 }
