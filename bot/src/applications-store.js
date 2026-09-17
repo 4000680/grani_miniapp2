@@ -60,4 +60,17 @@ export class ApplicationsStore extends DurableObject {
   async clearCustomsState() {
     await this.ctx.storage.delete('customs-state');
   }
+
+  async getMessageFlowState() {
+    return (await this.ctx.storage.get('message-flow-state')) || null;
+  }
+
+  async setMessageFlowState(state) {
+    await this.ctx.storage.put('message-flow-state', state);
+    return state;
+  }
+
+  async clearMessageFlowState() {
+    await this.ctx.storage.delete('message-flow-state');
+  }
 }

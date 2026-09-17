@@ -1,0 +1,12 @@
+const PERMANENT_RESULT_MARKERS = [
+  '✅ Расчёт утильсбора',
+  '✅ СБКТС распознан',
+  '✅ Выписка ЭПТС распознана',
+  '✅ Предварительный таможенный расчёт',
+  'Крайний срок уплаты:'
+];
+
+export function isPermanentResultText(text) {
+  const value = String(text || '').trim();
+  return PERMANENT_RESULT_MARKERS.some(marker => value.includes(marker));
+}

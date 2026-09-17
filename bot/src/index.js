@@ -27,6 +27,7 @@ import {
   parseCbrEuroRate,
   parsePositiveNumber
 } from './customs-calculation.js';
+import { isPermanentResultText } from './message-policy.js';
 export { ApplicationsStore } from './applications-store.js';
 
 const MENU_TEXT = [
@@ -241,34 +242,42 @@ function customsResultKeyboard() {
 }
 
 async function sendCustomsIntro(env, chatId) {
+  await cleanupTemporaryMessages(env, chatId, chatId);
   await clearCustomsState(env, chatId);
-  return telegram(env, 'sendMessage', {
+  const sent = await telegram(env, 'sendMessage', {
     chat_id: chatId,
     text: customsIntroText(),
     parse_mode: 'HTML',
     reply_markup: customsIntroKeyboard()
   });
+  await trackTemporaryMessage(env, chatId, sent.message_id);
+  return sent;
 }
 
 async function showCustomsIntro(env, message) {
   await cleanupCustomsMessages(env, message.chat.id, message.chat.id, message.message_id);
-  return telegram(env, 'editMessageText', {
+  await cleanupTemporaryMessages(env, message.chat.id, message.chat.id, message.message_id);
+  const edited = await telegram(env, 'editMessageText', {
     chat_id: message.chat.id,
     message_id: message.message_id,
     text: customsIntroText(),
     parse_mode: 'HTML',
     reply_markup: customsIntroKeyboard()
   });
+  await trackTemporaryMessage(env, message.chat.id, message.message_id);
+  return edited;
 }
 
 async function editCustomsScreen(env, message, text, rows, back = 'customs:start') {
-  return telegram(env, 'editMessageText', {
+  const edited = await telegram(env, 'editMessageText', {
     chat_id: message.chat.id,
     message_id: message.message_id,
     text,
     parse_mode: 'HTML',
     reply_markup: customsKeyboard(rows, back)
   });
+  await trackTemporaryMessage(env, message.chat.id, message.message_id);
+  return edited;
 }
 
 async function sendCustomsPrompt(env, chatId, lines, placeholder, state = null) {
@@ -440,6 +449,68 @@ async function clearCustomsState(env, userId) {
   if (stub) await stub.clearCustomsState();
 }
 
+async function getMessageFlowState(env, userId) {
+  const stub = applicationsStub(env, userId);
+  return stub ? stub.getMessageFlowState() : null;
+}
+
+async function setMessageFlowState(env, userId, state) {
+  const stub = applicationsStub(env, userId);
+  if (stub) await stub.setMessageFlowState(state);
+}
+
+async function clearMessageFlowState(env, userId) {
+  const stub = applicationsStub(env, userId);
+  if (stub) await stub.clearMessageFlowState();
+}
+
+function mergeTemporaryMessageIds(current, ...messageIds) {
+  return [...new Set([
+    ...(Array.isArray(current) ? current : []),
+    ...messageIds.flat().filter(id => Number.isInteger(id) && id > 0)
+  ])].slice(-20);
+}
+
+async function trackTemporaryMessage(env, userId, ...messageIds) {
+  const current = await getMessageFlowState(env, userId);
+  await setMessageFlowState(env, userId, {
+    temporaryMessageIds: mergeTemporaryMessageIds(current?.temporaryMessageIds, messageIds)
+  });
+}
+
+async function releaseTemporaryMessage(env, userId, messageId) {
+  const current = await getMessageFlowState(env, userId);
+  const temporaryMessageIds = mergeTemporaryMessageIds(current?.temporaryMessageIds)
+    .filter(id => id !== messageId);
+  if (temporaryMessageIds.length) await setMessageFlowState(env, userId, { temporaryMessageIds });
+  else await clearMessageFlowState(env, userId);
+}
+
+async function deleteBotMessage(env, chatId, messageId, label = 'Temporary message cleanup') {
+  if (!Number.isInteger(messageId) || messageId <= 0) return;
+  try {
+    await telegram(env, 'deleteMessage', { chat_id: chatId, message_id: messageId });
+  } catch (error) {
+    console.warn(label + ':', error.message || error);
+  }
+}
+
+async function discardWorkingCard(env, message, userId = message?.chat?.id) {
+  if (!message?.from?.is_bot) return;
+  await releaseTemporaryMessage(env, userId, message.message_id);
+  await deleteBotMessage(env, message.chat.id, message.message_id, 'Working card cleanup');
+}
+
+async function cleanupTemporaryMessages(env, userId, chatId, exceptMessageId = null) {
+  const state = await getMessageFlowState(env, userId);
+  for (const messageId of mergeTemporaryMessageIds(state?.temporaryMessageIds)) {
+    if (messageId === exceptMessageId) continue;
+    await deleteBotMessage(env, chatId, messageId);
+  }
+  if (exceptMessageId) await setMessageFlowState(env, userId, { temporaryMessageIds: [exceptMessageId] });
+  else await clearMessageFlowState(env, userId);
+}
+
 function mergeCustomsMessageIds(current, ...messageIds) {
   return [...new Set([
     ...(Array.isArray(current) ? current : []),
@@ -542,67 +613,93 @@ function encodePeniCallback(cases, deadline) {
   return `calc:peni:${deadline.toISOString().slice(0, 10)}:${cases.map(item => item.sum).join(',')}`;
 }
 
-function calculationKeyboard(cases = [], deadline = null) {
+function calculationResultKeyboard(cases = [], deadline = null) {
   const rows = [];
   if (deadline) rows.push([{ text: '📅 Рассчитать пени на другую дату', callback_data: encodePeniCallback(cases, deadline) }]);
   rows.push([
-    { text: '🔄 Новый расчёт', callback_data: 'calc:new' },
-    { text: '🏠 Главное меню', callback_data: 'calc:menu' }
+    { text: '🔄 Новый расчёт', callback_data: 'calc:result:new' },
+    { text: '🏠 Главное меню', callback_data: 'calc:result:menu' }
   ]);
   return { inline_keyboard: rows };
 }
 
-async function sendIssueDatePrompt(env, chatId, cases) {
-  return telegram(env, 'sendMessage', {
+function calculationWorkKeyboard() {
+  return {
+    inline_keyboard: [[
+      { text: '🔄 Новый расчёт', callback_data: 'calc:new' },
+      { text: '🏠 Главное меню', callback_data: 'calc:menu' }
+    ]]
+  };
+}
+
+async function sendIssueDatePrompt(env, chatId, cases, notice = '') {
+  await cleanupTemporaryMessages(env, chatId, chatId);
+  const lines = [];
+  if (notice) lines.push(`<b>${escapeHtml(notice)}</b>`, '');
+  lines.push(
+    'Чтобы рассчитать пени, нужна дата оформления СБКТС.',
+    'Введите её ответом на это сообщение в любом привычном формате.',
+    '',
+    encodeCases(cases),
+    '',
+    '<i>Например: 02.09.2026 или 2 сентября 2026</i>'
+  );
+  const sent = await telegram(env, 'sendMessage', {
     chat_id: chatId,
-    text: [
-      'Чтобы рассчитать пени, нужна дата оформления СБКТС.',
-      'Введите её ответом на это сообщение в любом привычном формате.',
-      '',
-      encodeCases(cases),
-      '',
-      '<i>Например: 02.09.2026 или 2 сентября 2026</i>'
-    ].join('\n'),
+    text: lines.join('\n'),
     parse_mode: 'HTML',
     reply_markup: { force_reply: true, selective: true, input_field_placeholder: 'Дата оформления СБКТС' }
   });
+  await trackTemporaryMessage(env, chatId, sent.message_id);
+  return sent;
 }
 
-async function sendPlannedDatePrompt(env, chatId, cases, deadline) {
-  return telegram(env, 'sendMessage', {
+async function sendPlannedDatePrompt(env, chatId, cases, deadline, notice = '') {
+  await cleanupTemporaryMessages(env, chatId, chatId);
+  const lines = [];
+  if (notice) lines.push(`<b>${escapeHtml(notice)}</b>`, '');
+  lines.push(
+    'Планируете подать документы позже?',
+    'Введите предполагаемую дату ответом на это сообщение — я пересчитаю пени точно на этот день.',
+    '',
+    `Крайний срок: ${formatDate(deadline)}`,
+    encodeCases(cases)
+  );
+  const sent = await telegram(env, 'sendMessage', {
     chat_id: chatId,
-    text: [
-      'Планируете подать документы позже?',
-      'Введите предполагаемую дату ответом на это сообщение — я пересчитаю пени точно на этот день.',
-      '',
-      `Крайний срок: ${formatDate(deadline)}`,
-      encodeCases(cases)
-    ].join('\n'),
+    text: lines.join('\n'),
+    parse_mode: 'HTML',
     reply_markup: { force_reply: true, selective: true, input_field_placeholder: 'Предполагаемая дата подачи' }
   });
+  await trackTemporaryMessage(env, chatId, sent.message_id);
+  return sent;
 }
 
 async function handleDateReply(env, message) {
   const prompt = message.reply_to_message?.text || '';
   const date = parseFlexibleDate(message.text);
-  if (!prompt || (!prompt.startsWith('Чтобы рассчитать пени') && !prompt.startsWith('Планируете подать документы позже'))) return false;
+  const issueDatePrompt = prompt.includes('Чтобы рассчитать пени');
+  const plannedDatePrompt = prompt.includes('Планируете подать документы позже');
+  if (!prompt || (!issueDatePrompt && !plannedDatePrompt)) return false;
   const cases = extractCases(prompt);
   if (!date || !cases.length) {
-    await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Не удалось распознать дату. Попробуйте ещё раз.' });
-    if (prompt.startsWith('Чтобы рассчитать пени')) await sendIssueDatePrompt(env, message.chat.id, cases);
+    if (issueDatePrompt) {
+      await sendIssueDatePrompt(env, message.chat.id, cases, 'Не удалось распознать дату. Попробуйте ещё раз.');
+    }
     else {
       const deadline = parseDateFromPrompt(prompt, 'Крайний срок');
-      if (deadline) await sendPlannedDatePrompt(env, message.chat.id, cases, deadline);
+      if (deadline) await sendPlannedDatePrompt(env, message.chat.id, cases, deadline, 'Не удалось распознать дату. Попробуйте ещё раз.');
     }
     return true;
   }
-  if (prompt.startsWith('Чтобы рассчитать пени')) {
+  await cleanupTemporaryMessages(env, message.from?.id || message.chat.id, message.chat.id);
+  if (issueDatePrompt) {
     const deadline = addWorkingDays(date, 5);
     await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
       text: [`<b>Крайний срок уплаты: ${formatDate(deadline)}</b>`, formatPeniCompact(cases, deadline, todayUtc())].join('\n'),
       parse_mode: 'HTML',
-      reply_markup: calculationKeyboard(cases, deadline)
+      reply_markup: calculationResultKeyboard(cases, deadline)
     });
   } else {
     const deadline = parseDateFromPrompt(prompt, 'Крайний срок');
@@ -611,7 +708,7 @@ async function handleDateReply(env, message) {
       chat_id: message.chat.id,
       text: [`<b>Крайний срок уплаты: ${formatDate(deadline)}</b>`, formatPeniCompact(cases, deadline, date)].join('\n'),
       parse_mode: 'HTML',
-      reply_markup: calculationKeyboard(cases, deadline)
+      reply_markup: calculationResultKeyboard(cases, deadline)
     });
   }
   return true;
@@ -655,6 +752,7 @@ async function handleCustomsCallback(env, query) {
     ].join('\n'), [[{ text: 'Рассчитать', callback_data: 'customs:under3:value' }]]);
   }
   if (data === 'customs:under3:value') {
+    await discardWorkingCard(env, message, query.from?.id || message.chat.id);
     return sendCustomsPrompt(env, message.chat.id, [
       '<b>Укажите предполагаемую стоимость автомобиля в рублях.</b>',
       '<i>Например: 2 500 000</i>'
@@ -675,6 +773,7 @@ async function handleCustomsCallback(env, query) {
   }
   const over3 = data.match(/^customs:over3:(3-5|5\+)$/);
   if (over3) {
+    await discardWorkingCard(env, message, query.from?.id || message.chat.id);
     return sendCustomsPrompt(env, message.chat.id, [
       '<b>Укажите точный объём двигателя в см³.</b>',
       '<i>Например: 1998</i>'
@@ -696,6 +795,7 @@ async function handleCustomsCallback(env, query) {
   }
   if (data === 'customs:electric:car') {
     await setCustomsState(env, query.from?.id || message.chat.id, { cleanupMessageIds: [message.message_id] });
+    await discardWorkingCard(env, message, query.from?.id || message.chat.id);
     return sendCustomsCatalogPrompt(env, message.chat.id, null, 'electric');
   }
   if (data === 'customs:pickup') {
@@ -722,6 +822,7 @@ async function handleCustomsCallback(env, query) {
   }
   const pickupFuel = data.match(/^customs:pickup:fuel:(0-3|3-5|5-7|7\+):(petrol|diesel)$/);
   if (pickupFuel) {
+    await discardWorkingCard(env, message, query.from?.id || message.chat.id);
     return sendCustomsPrompt(env, message.chat.id, [
       '<b>Укажите предполагаемую стоимость пикапа в рублях.</b>',
       '<i>Например: 3 500 000</i>'
@@ -762,7 +863,6 @@ async function handleCustomsReply(env, message) {
     env,
     userId,
     state,
-    message.message_id,
     message.reply_to_message?.message_id
   );
 
@@ -1382,7 +1482,8 @@ async function showCatalogModification(env, message, brandIndex, modelIndex, yea
 }
 
 async function sendCatalogWeightPrompt(env, chatId, parsed) {
-  return telegram(env, 'sendMessage', {
+  await cleanupTemporaryMessages(env, chatId, chatId);
+  const sent = await telegram(env, 'sendMessage', {
     chat_id: chatId,
     text: [
       'Чтобы найти точную модификацию и мощность, укажите <b>технически допустимую максимальную массу</b> автомобиля в килограммах.',
@@ -1401,6 +1502,8 @@ async function sendCatalogWeightPrompt(env, chatId, parsed) {
       input_field_placeholder: 'Масса автомобиля, кг'
     }
   });
+  await trackTemporaryMessage(env, chatId, sent.message_id);
+  return sent;
 }
 
 function catalogQueryFromWeightPrompt(prompt) {
@@ -1411,11 +1514,14 @@ function catalogQueryFromWeightPrompt(prompt) {
 }
 
 async function runCatalogSearch(env, message, parsed, weight) {
+  const userId = message.from?.id || message.chat.id;
+  await cleanupTemporaryMessages(env, userId, message.chat.id);
   await telegram(env, 'sendChatAction', { chat_id: message.chat.id, action: 'typing' });
   const status = await telegram(env, 'sendMessage', {
     chat_id: message.chat.id,
     text: '🔎 Ищу автомобиль в справочнике с учётом массы…'
   });
+  await trackTemporaryMessage(env, userId, status.message_id);
 
   try {
     const catalog = await loadCatalog(env.CATALOG_URL);
@@ -1430,7 +1536,7 @@ async function runCatalogSearch(env, message, parsed, weight) {
           'Проверьте марку, модель, год выпуска и массу, затем начните поиск заново.'
         ].join('\n'),
         parse_mode: 'HTML',
-        reply_markup: calculationKeyboard()
+        reply_markup: calculationWorkKeyboard()
       });
       return;
     }
@@ -1480,11 +1586,14 @@ async function handleCatalogWeightReply(env, message) {
 }
 
 async function runCatalogTextSearch(env, message, parsed) {
+  const userId = message.from?.id || message.chat.id;
+  await cleanupTemporaryMessages(env, userId, message.chat.id);
   await telegram(env, 'sendChatAction', { chat_id: message.chat.id, action: 'typing' });
   const status = await telegram(env, 'sendMessage', {
     chat_id: message.chat.id,
     text: '🔎 Ищу автомобиль в справочнике…'
   });
+  await trackTemporaryMessage(env, userId, status.message_id);
   try {
     const catalog = await loadCatalog(env.CATALOG_URL);
     const modifications = listCatalogModifications(catalog, parsed);
@@ -1493,7 +1602,7 @@ async function runCatalogTextSearch(env, message, parsed) {
         chat_id: message.chat.id,
         message_id: status.message_id,
         text: 'Не нашёл автомобиль в справочнике. Проверьте марку, модель и год выпуска.',
-        reply_markup: calculationKeyboard()
+        reply_markup: calculationWorkKeyboard()
       });
       return true;
     }
@@ -1507,7 +1616,7 @@ async function runCatalogTextSearch(env, message, parsed) {
           'Уточните полное название модификации автомобиля и повторите запрос.'
         ].join('\n'),
         parse_mode: 'HTML',
-        reply_markup: calculationKeyboard()
+        reply_markup: calculationWorkKeyboard()
       });
       return true;
     }
@@ -1714,8 +1823,9 @@ async function handleCatalogCallback(env, query) {
     message_id: message.message_id,
     text: formatCatalogResult(candidate, vehicle, util, customs),
     parse_mode: 'HTML',
-    reply_markup: customs ? customsResultKeyboard() : calculationKeyboard()
+    reply_markup: customs ? customsResultKeyboard() : calculationResultKeyboard()
   });
+  await releaseTemporaryMessage(env, query.from?.id || message.chat.id, message.message_id);
   if (customs) await clearCustomsState(env, query.from?.id || message.chat.id);
 }
 
@@ -1723,15 +1833,24 @@ async function handleDocument(env, message) {
   const document = message.document;
   const isPdf = document.mime_type === 'application/pdf' || /\.pdf$/i.test(document.file_name || '');
   if (!isPdf) {
-    await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Пожалуйста, отправьте документ в формате PDF.' });
+    const userId = message.from?.id || message.chat.id;
+    await cleanupTemporaryMessages(env, userId, message.chat.id);
+    const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Пожалуйста, отправьте документ в формате PDF.' });
+    await trackTemporaryMessage(env, userId, sent.message_id);
     return;
   }
   if (document.file_size > 20 * 1024 * 1024) {
-    await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Файл больше 20 МБ. Telegram не позволяет боту скачать такой документ.' });
+    const userId = message.from?.id || message.chat.id;
+    await cleanupTemporaryMessages(env, userId, message.chat.id);
+    const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Файл больше 20 МБ. Telegram не позволяет боту скачать такой документ.' });
+    await trackTemporaryMessage(env, userId, sent.message_id);
     return;
   }
+  const userId = message.from?.id || message.chat.id;
+  await cleanupTemporaryMessages(env, userId, message.chat.id);
   await telegram(env, 'sendChatAction', { chat_id: message.chat.id, action: 'typing' });
   const status = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: '📄 Читаю документ и рассчитываю утильсбор…' });
+  await trackTemporaryMessage(env, userId, status.message_id);
   try {
     const file = await telegram(env, 'getFile', { file_id: document.file_id });
     const response = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`);
@@ -1750,8 +1869,9 @@ async function handleDocument(env, message) {
       message_id: status.message_id,
       text: result,
       parse_mode: 'HTML',
-      reply_markup: calculationKeyboard(cases, deadline)
+      reply_markup: calculationResultKeyboard(cases, deadline)
     });
+    await releaseTemporaryMessage(env, userId, status.message_id);
     if (!vehicle.issueDate) await sendIssueDatePrompt(env, message.chat.id, cases);
   } catch (error) {
     await telegram(env, 'editMessageText', {
@@ -1841,30 +1961,36 @@ async function handleGroupCalculation(env, query) {
 
 async function sendMenu(env, chatId) {
   await cleanupCustomsMessages(env, chatId, chatId);
-  return telegram(env, 'sendMessage', {
+  await cleanupTemporaryMessages(env, chatId, chatId);
+  const sent = await telegram(env, 'sendMessage', {
     chat_id: chatId,
     text: MENU_TEXT,
     parse_mode: 'HTML',
     reply_markup: menuKeyboard(env)
   });
+  await trackTemporaryMessage(env, chatId, sent.message_id);
+  return sent;
 }
 
 async function editMenu(env, message) {
   await cleanupCustomsMessages(env, message.chat.id, message.chat.id, message.message_id);
-  return telegram(env, 'editMessageText', {
+  await cleanupTemporaryMessages(env, message.chat.id, message.chat.id, message.message_id);
+  const edited = await telegram(env, 'editMessageText', {
     chat_id: message.chat.id,
     message_id: message.message_id,
     text: MENU_TEXT,
     parse_mode: 'HTML',
     reply_markup: menuKeyboard(env)
   });
+  await trackTemporaryMessage(env, message.chat.id, message.message_id);
+  return edited;
 }
 
 async function showInfo(env, message, section) {
   const info = INFO[section];
   if (!info) return;
   const text = typeof info.text === 'function' ? info.text(env) : info.text;
-  return telegram(env, 'editMessageText', {
+  const edited = await telegram(env, 'editMessageText', {
     chat_id: message.chat.id,
     message_id: message.message_id,
     text: `${info.title}\n\n${text}`,
@@ -1872,22 +1998,47 @@ async function showInfo(env, message, section) {
     disable_web_page_preview: true,
     reply_markup: infoKeyboard(section, env)
   });
+  await trackTemporaryMessage(env, message.chat.id, message.message_id);
+  return edited;
+}
+
+async function sendCalculationStart(env, chatId, userId = chatId) {
+  await cleanupTemporaryMessages(env, userId, chatId);
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: '📎 Отправьте новый PDF-файл СБКТС или выписку ЭПТС либо напишите марку, модель и год выпуска автомобиля.',
+    reply_markup: { inline_keyboard: [[{ text: '🏠 Главное меню', callback_data: 'calc:menu' }]] }
+  });
+  await trackTemporaryMessage(env, userId, sent.message_id);
+  return sent;
 }
 
 async function handleCalculationCallback(env, query) {
   const message = query.message;
+  const userId = query.from?.id || message.chat.id;
+  if (query.data === 'calc:result:menu' || (query.data === 'calc:menu' && isPermanentResultText(message.text))) {
+    await sendMenu(env, message.chat.id);
+    return;
+  }
+  if (query.data === 'calc:result:new' || (query.data === 'calc:new' && isPermanentResultText(message.text))) {
+    await sendCalculationStart(env, message.chat.id, userId);
+    return;
+  }
   if (query.data === 'calc:menu') {
-    await telegram(env, 'deleteMessage', { chat_id: message.chat.id, message_id: message.message_id });
+    await releaseTemporaryMessage(env, userId, message.message_id);
+    await deleteBotMessage(env, message.chat.id, message.message_id, 'Working card cleanup');
     await sendMenu(env, message.chat.id);
     return;
   }
   if (query.data === 'calc:new') {
+    await cleanupTemporaryMessages(env, userId, message.chat.id, message.message_id);
     await telegram(env, 'editMessageText', {
       chat_id: message.chat.id,
       message_id: message.message_id,
       text: '📎 Отправьте новый PDF-файл СБКТС или выписку ЭПТС либо напишите марку, модель и год выпуска автомобиля.',
       reply_markup: { inline_keyboard: [[{ text: '🏠 Главное меню', callback_data: 'calc:menu' }]] }
     });
+    await trackTemporaryMessage(env, userId, message.message_id);
     return;
   }
   const match = query.data.match(/^calc:peni:(\d{4}-\d{2}-\d{2}):([\d,]+)$/);
@@ -1896,7 +2047,6 @@ async function handleCalculationCallback(env, query) {
   const sums = match[2].split(',').map(Number).filter(Boolean);
   const labels = sums.length > 1 ? ['до 3 лет', 'старше 3 лет'] : [''];
   const cases = sums.map((sum, index) => ({ label: labels[index] || '', sum }));
-  await telegram(env, 'deleteMessage', { chat_id: message.chat.id, message_id: message.message_id });
   await sendPlannedDatePrompt(env, message.chat.id, cases, deadline);
 }
 
@@ -1967,7 +2117,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'catalog-variants-v5' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'unified-message-flow-v6' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
