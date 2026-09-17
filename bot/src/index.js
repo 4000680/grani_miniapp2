@@ -41,7 +41,7 @@ const MENU_TEXT = [
   '',
   '📟 Для расчёта утильсбора отправьте PDF-файл СБКТС или выписку ЭПТС.',
   '',
-  '🎛️ Для поиска по справочнику СЭП напишите марку, модель и год выпуска.',
+  '🎛️ Для поиска по шаблону СЭП напишите марку, модель и год выпуска.',
   '',
   'Также вы можете выбрать нужный раздел в меню ниже.',
   '',
@@ -516,7 +516,7 @@ function extractCases(text) {
 function applicationFromVehicle(vehicle, util) {
   const amounts = util.map(item => item.personal !== item.commercial ? item.personal : item.commercial);
   return {
-    source: vehicle.type === 'sbkts' ? 'СБКТС' : vehicle.type === 'catalog' ? 'Справочник' : 'ЭПТС',
+    source: vehicle.type === 'sbkts' ? 'СБКТС' : vehicle.type === 'catalog' ? 'Шаблон СЭП' : 'ЭПТС',
     vin: vehicle.vin,
     surname: vehicle.surname,
     brand: vehicle.brand,
@@ -849,6 +849,34 @@ async function sendCustomsCatalogPrompt(env, chatId, customsDuty, mode = 'passen
   });
 }
 
+async function sendUnder3CatalogPrompt(env, chatId, userId = chatId, notice = '') {
+  const lines = [
+    '🚗 <b>Автомобили до 3 лет</b>',
+    ''
+  ];
+  if (notice) lines.push(`<b>${escapeHtml(notice)}</b>`, '');
+  lines.push(
+    'Сначала найдём автомобиль в шаблоне СЭП.',
+    '',
+    '<b>Введите марку, модель и год выпуска автомобиля.</b>'
+  );
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: lines.join('\n'),
+    parse_mode: 'HTML',
+    reply_markup: customsKeyboard([
+      [{ text: '🔄 Начать сначала', callback_data: 'customs:under3' }]
+    ], 'customs:start')
+  });
+  await setCustomsState(env, userId, {
+    stage: 'catalog-input',
+    mode: 'under3',
+    cleanupMessageIds: [sent.message_id]
+  });
+  await trackTemporaryMessage(env, userId, sent.message_id);
+  return sent;
+}
+
 function electricCustomsVehicleLines(candidate, requestedWeight = null) {
   const power = electricCustomsPowerDetails(candidate);
   const lines = [
@@ -949,7 +977,7 @@ async function handleCustomsCallback(env, query) {
     const userId = query.from?.id || message.chat.id;
     const catalog = await loadCatalog(env.CATALOG_URL);
     const candidate = getCatalogCandidate(catalog, Number(editElectricValue[1]));
-    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в справочнике');
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
     electricCustomsPowerDetails(candidate);
     await cleanupCustomsMessages(env, userId, message.chat.id);
     await cleanupTemporaryMessages(env, userId, message.chat.id);
@@ -963,7 +991,7 @@ async function handleCustomsCallback(env, query) {
     const userId = query.from?.id || message.chat.id;
     const catalog = await loadCatalog(env.CATALOG_URL);
     const candidate = getCatalogCandidate(catalog, Number(electricCurrency[1]));
-    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в справочнике');
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
     electricCustomsPowerDetails(candidate);
     await discardWorkingCard(env, message, userId);
     return sendElectricCustomsValuePrompt(
@@ -979,7 +1007,7 @@ async function handleCustomsCallback(env, query) {
     const userId = query.from?.id || message.chat.id;
     const catalog = await loadCatalog(env.CATALOG_URL);
     const candidate = getCatalogCandidate(catalog, Number(under3Volume[1]));
-    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в справочнике');
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
     const requestedWeight = Number(under3Volume[2]) || candidate.mass || null;
     await discardWorkingCard(env, message, userId);
     return sendCustomsPrompt(env, message.chat.id, [
@@ -997,18 +1025,10 @@ async function handleCustomsCallback(env, query) {
   }
   if (data === 'customs:start') return showCustomsIntro(env, message);
   if (data === 'customs:under3') {
-    await cleanupCustomsMessages(env, query.from?.id || message.chat.id, message.chat.id, message.message_id);
-    return editCustomsScreen(env, message, [
-      '🚗 <b>Автомобили до 3 лет</b>',
-      '',
-      'Для полного расчёта сначала найдём автомобиль в справочнике СЭП.',
-      '',
-      'Укажите марку, полную модель и год выпуска.'
-    ].join('\n'), [[{ text: 'Найти автомобиль', callback_data: 'customs:under3:catalog' }]]);
-  }
-  if (data === 'customs:under3:catalog') {
-    await discardWorkingCard(env, message, query.from?.id || message.chat.id);
-    return sendCustomsCatalogPrompt(env, message.chat.id, null, 'under3');
+    const userId = query.from?.id || message.chat.id;
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    await discardWorkingCard(env, message, userId);
+    return sendUnder3CatalogPrompt(env, message.chat.id, userId);
   }
   if (data === 'customs:over3') {
     await cleanupCustomsMessages(env, query.from?.id || message.chat.id, message.chat.id, message.message_id);
@@ -1121,6 +1141,17 @@ async function handleCustomsReply(env, message) {
   if (stage === 'catalog-input' && ['passenger', 'electric', 'under3'].includes(mode)) {
     const parsed = parseCatalogQuery(message.text);
     if (!parsed) {
+      if (mode === 'under3') {
+        await cleanupCustomsMessages(env, userId, message.chat.id);
+        await cleanupTemporaryMessages(env, userId, message.chat.id);
+        await sendUnder3CatalogPrompt(
+          env,
+          message.chat.id,
+          userId,
+          'Укажите марку, модель и четырёхзначный год выпуска.'
+        );
+        return true;
+      }
       await sendCustomsNotice(env, message.chat.id, 'Укажите марку, полную модель и четырёхзначный год выпуска.');
       await sendCustomsCatalogPrompt(
         env,
@@ -1157,7 +1188,7 @@ async function handleCustomsReply(env, message) {
     }
     const catalog = await loadCatalog(env.CATALOG_URL);
     const candidate = getCatalogCandidate(catalog, rowIndex);
-    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в справочнике');
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
     if (!candidate.combustionKw && candidate.electricKw) {
       await sendCustomsNotice(env, message.chat.id, 'Для электромобиля выберите раздел «Электро и последовательные гибриды».');
       return true;
@@ -1191,7 +1222,7 @@ async function handleCustomsReply(env, message) {
     }
     const catalog = await loadCatalog(env.CATALOG_URL);
     const candidate = getCatalogCandidate(catalog, rowIndex);
-    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в справочнике');
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
     const requestedWeight = parsePositiveNumber(state.requestedWeight) || candidate.mass || null;
     const totalKw = calculationPower(candidate, false);
     const vehicle = {
@@ -1485,7 +1516,7 @@ function catalogSearchKeyboard() {
 
 function catalogSearchPrompt() {
   return [
-    '<b>Поиск автомобиля в справочнике</b>',
+    '<b>Поиск автомобиля по шаблону СЭП</b>',
     '',
     'Напишите марку, модель и год выпуска.'
   ].join('\n');
@@ -1513,7 +1544,7 @@ function catalogCandidateDescription(candidate, requestedWeight = null) {
   if (candidate.electricKw) power.push(candidate.electricKw + ' кВт (30 мин)');
   return [
     '<b>' + escapeHtml([candidate.brand, candidate.model].filter(Boolean).join(' ')) + '</b>, ' + candidate.year,
-    power.length ? 'Мощность в справочнике: ' + power.join(' + ') : 'Мощность в справочнике не указана',
+    power.length ? 'Мощность в шаблоне СЭП: ' + power.join(' + ') : 'Мощность в шаблоне СЭП не указана',
     requestedWeight || candidate.mass
       ? 'Технически допустимая масса: ' + (requestedWeight || candidate.mass) + ' кг'
       : candidate.massFrom && candidate.massTo
@@ -1646,7 +1677,7 @@ function catalogEnginePrompt(candidate, weight, sourceParsed) {
     ? 'Объём двигателя уже указан. Продолжите расчёт утильсбора.'
     : 'Выберите тип автомобиля и группу объёма двигателя.';
   const lines = [
-    '✅ <b>Автомобиль найден в справочнике</b>',
+    '✅ <b>Автомобиль найден в шаблоне СЭП</b>',
     '',
     catalogCandidateDescription(candidate, weight),
     '',
@@ -1713,7 +1744,7 @@ function formatCatalogResult(candidate, vehicle, util, customs = null) {
 async function showCatalogCandidate(env, message, rowIndex, weight, sourceParsed = null, backCallback = null) {
   const catalog = await loadCatalog(env.CATALOG_URL);
   const candidate = getCatalogCandidate(catalog, rowIndex);
-  if (!candidate) throw new Error('Выбранная версия автомобиля больше не найдена в справочнике');
+  if (!candidate) throw new Error('Выбранная версия автомобиля больше не найдена в шаблоне СЭП');
   const source = sourceParsed || parseCatalogQuery(candidate.brand + ' ' + candidate.model + ' ' + candidate.year);
   const back = backCallback || 'catalog:back:variants:' + candidate.rowIndex;
   if (source?.customsMode === 'under3') {
@@ -1721,7 +1752,7 @@ async function showCatalogCandidate(env, message, rowIndex, weight, sourceParsed
       chat_id: message.chat.id,
       message_id: message.message_id,
       text: [
-        '✅ <b>Автомобиль найден в справочнике</b>',
+        '✅ <b>Автомобиль найден в шаблоне СЭП</b>',
         '',
         catalogCandidateDescription(candidate, weight),
         '',
@@ -1774,7 +1805,7 @@ async function showCatalogModification(env, message, brandIndex, modelIndex, yea
       text: [
         '<b>' + escapeHtml(first.brand + ' ' + first.model) + ' ' + first.year + '</b>',
         '',
-        'В справочнике пока нет готового варианта одновременно с мощностью и точной технически допустимой массой.',
+        'В шаблоне СЭП пока нет готового варианта одновременно с мощностью и точной технически допустимой массой.',
         'Уточните модификацию автомобиля или вернитесь к новому поиску.',
         '',
         catalogNavigationLine(source)
@@ -1846,7 +1877,7 @@ async function runCatalogSearch(env, message, parsed, weight) {
   await telegram(env, 'sendChatAction', { chat_id: message.chat.id, action: 'typing' });
   const status = await telegram(env, 'sendMessage', {
     chat_id: message.chat.id,
-    text: '🔎 Ищу автомобиль в справочнике с учётом массы…'
+    text: '🔎 Ищу автомобиль в шаблоне СЭП с учётом массы…'
   });
   await trackTemporaryMessage(env, userId, status.message_id);
 
@@ -1918,7 +1949,7 @@ async function runCatalogTextSearch(env, message, parsed) {
   await telegram(env, 'sendChatAction', { chat_id: message.chat.id, action: 'typing' });
   const status = await telegram(env, 'sendMessage', {
     chat_id: message.chat.id,
-    text: '🔎 Ищу автомобиль в справочнике…'
+    text: '🔎 Ищу автомобиль в шаблоне СЭП…'
   });
   await trackTemporaryMessage(env, userId, status.message_id);
   try {
@@ -1928,7 +1959,7 @@ async function runCatalogTextSearch(env, message, parsed) {
       await telegram(env, 'editMessageText', {
         chat_id: message.chat.id,
         message_id: status.message_id,
-        text: 'Не нашёл автомобиль в справочнике. Проверьте марку, модель и год выпуска.',
+        text: 'Не нашёл автомобиль в шаблоне СЭП. Проверьте марку, модель и год выпуска.',
         reply_markup: calculationWorkKeyboard()
       });
       return true;
@@ -2008,6 +2039,13 @@ async function handleCatalogCallback(env, query) {
   if (query.data === 'catalog:noop') return;
   if (query.data === 'catalog:back:search') {
     if (sourceParsed?.customsMode) {
+      const userId = query.from?.id || message.chat.id;
+      if (sourceParsed.customsMode === 'under3') {
+        await cleanupCustomsMessages(env, userId, message.chat.id);
+        await discardWorkingCard(env, message, userId);
+        await sendUnder3CatalogPrompt(env, message.chat.id, userId);
+        return;
+      }
       await telegram(env, 'deleteMessage', { chat_id: message.chat.id, message_id: message.message_id });
       await sendCustomsCatalogPrompt(
         env,
@@ -2051,7 +2089,7 @@ async function handleCatalogCallback(env, query) {
   if (variantsBack) {
     const catalog = await loadCatalog(env.CATALOG_URL);
     const candidate = getCatalogCandidate(catalog, Number(variantsBack[1]));
-    if (!candidate) throw new Error('Автомобиль больше не найден в справочнике');
+    if (!candidate) throw new Error('Автомобиль больше не найден в шаблоне СЭП');
     await showCatalogModification(
       env,
       message,
@@ -2094,7 +2132,7 @@ async function handleCatalogCallback(env, query) {
   if (pick) {
     const catalog = await loadCatalog(env.CATALOG_URL);
     const candidate = getCatalogCandidate(catalog, Number(pick[1]));
-    if (!candidate) throw new Error('Автомобиль больше не найден в справочнике');
+    if (!candidate) throw new Error('Автомобиль больше не найден в шаблоне СЭП');
     const backCallback = message.text?.startsWith('Нашёл несколько вариантов для массы')
       ? 'catalog:back:weight'
       : `catalog:variants:${candidate.brandIndex}:${candidate.modelIndex}:${candidate.year}:${Number(pick[3]) || 0}:${Number(pick[4]) || 0}`;
@@ -2113,7 +2151,7 @@ async function handleCatalogCallback(env, query) {
   if (!calculation) return;
   const catalog = await loadCatalog(env.CATALOG_URL);
   const candidate = getCatalogCandidate(catalog, Number(calculation[1]));
-  if (!candidate) throw new Error('Автомобиль больше не найден в справочнике');
+  if (!candidate) throw new Error('Автомобиль больше не найден в шаблоне СЭП');
 
   const electric = calculation[2] === 'e';
   const ccm = electric ? null : Number(calculation[2]);
@@ -2458,7 +2496,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'under3-expenses-v12' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'under3-direct-search-v13' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
