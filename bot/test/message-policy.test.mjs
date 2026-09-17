@@ -11,6 +11,7 @@ test('recognizes every completed calculation as a permanent result', () => {
     '✅ СБКТС распознан',
     '✅ Выписка ЭПТС распознана',
     '✅ Предварительный таможенный расчёт',
+    '✅ Полный расчёт автомобиля до 3 лет',
     'Крайний срок уплаты: 22.09.2026'
   ]) assert.equal(isPermanentResultText(text), true, text);
 
