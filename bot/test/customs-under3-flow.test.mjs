@@ -5,7 +5,12 @@ import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('../src/index.js', import.meta.url), 'utf8');
 
 test('автомобиль до 3 лет сначала выбирается по справочнику, затем вводятся объём и стоимость', () => {
-  assert.match(source, /customs:under3:catalog/);
+  assert.match(source, /Сначала найдём автомобиль в шаблоне СЭП/);
+  assert.match(source, /Введите марку, модель и год выпуска автомобиля/);
+  assert.doesNotMatch(source, /Найти автомобиль/);
+  assert.match(source, /🔄 Начать сначала/);
+  assert.match(source, /customsKeyboard\(\[/);
+  assert.match(source, /\], 'customs:start'\)/);
   assert.match(source, /stage: 'under3-selected-volume'/);
   assert.match(source, /stage: 'under3-selected-value'/);
   assert.ok(source.indexOf("stage: 'under3-selected-volume'") < source.indexOf("stage: 'under3-selected-value'"));
