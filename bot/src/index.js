@@ -291,6 +291,71 @@ function customsResultKeyboard(firstRow = null) {
   };
 }
 
+function under3CustomsResultText(candidate, vehicle, customs, customsFee, util, euroRate) {
+  const lines = [
+    '✅ <b>Полный расчёт автомобиля до 3 лет</b>',
+    '',
+    `<b>Автомобиль:</b> ${escapeHtml(candidate.brand + ' ' + candidate.model)}`,
+    `<b>Год выпуска:</b> ${candidate.year}`,
+    `<b>Мощность:</b> ${vehicle.totalKw} кВт`,
+    `<b>Технически допустимая масса:</b> ${vehicle.maxMass || '—'}${vehicle.maxMass ? ' кг' : ''}`,
+    `<b>Объём двигателя:</b> ${vehicle.ccm} см³`,
+    `<b>Таможенная стоимость:</b> ${formatMoney(customs.customsValueRub)}`,
+    ''
+  ];
+
+  if (customs.selectedBy === 'minimum') {
+    lines.push(
+      `<b>По единой ставке ${customs.percent}%:</b> ${formatMoney(customs.percentageAmount)}`,
+      `<b>Минимальный платёж ${customs.minEuroPerCc} €/см³:</b> ${formatMoney(customs.minimumAmount)}`,
+      `<b>Таможенный платёж:</b> ${formatMoney(customs.duty)}`,
+      `<i>Применён минимальный платёж за объём двигателя, поскольку он больше суммы по единой процентной ставке.</i>`
+    );
+  } else {
+    lines.push(`<b>Таможенный платёж по единой ставке ${customs.percent}%:</b> ${formatMoney(customs.duty)}`);
+    if (customs.percent !== 48) {
+      lines.push(`<i>Для указанной таможенной стоимости применяется ставка ${customs.percent}%, поэтому ставка 48% не используется.</i>`);
+    }
+  }
+
+  lines.push(
+    `<b>Таможенный сбор за операции:</b> ${formatMoney(customsFee)}`,
+    `<i>Курс евро ЦБ РФ: ${euroRate.toFixed(4)} ₽</i>`,
+    ''
+  );
+
+  for (const item of util) {
+    lines.push(`<b>Утильсбор — ${ageLabel(item.age)}:</b>`);
+    if (item.personal !== item.commercial) {
+      lines.push(
+        `Льготный для личного пользования: <b>${formatMoney(item.personal)}</b>`,
+        `Коммерческий: <b>${formatMoney(item.commercial)}</b>`,
+        `<b>Итого для личного пользования: ${formatMoney(customs.duty + customsFee + item.personal)}</b>`,
+        `<b>Итого по коммерческой ставке: ${formatMoney(customs.duty + customsFee + item.commercial)}</b>`
+      );
+    } else {
+      lines.push(
+        'Льготный для личного пользования: <b>не применяется</b>',
+        `Коммерческий: <b>${formatMoney(item.commercial)}</b>`,
+        `<b>Итого: ${formatMoney(customs.duty + customsFee + item.commercial)}</b>`
+      );
+    }
+    lines.push('');
+  }
+
+  lines.push(
+    '<b>Дополнительные расходы, которые не включены в расчёт:</b>',
+    '• услуги таможенного представителя;',
+    '• доставка;',
+    '• СВХ;',
+    '• лаборатория;',
+    '• СБКТС и ЭПТС.',
+    '',
+    '<i>Расчёт предварительный.</i>'
+  );
+  return lines.join('\n');
+}
+
 function electricCustomsResultKeyboard(rowIndex, requestedWeight) {
   return customsResultKeyboard([{
     text: '← Исправить стоимость',
@@ -775,10 +840,11 @@ async function sendCustomsCatalogPrompt(env, chatId, customsDuty, mode = 'passen
   return sendCustomsPrompt(env, chatId, [
     mode === 'electric'
       ? '<b>Сначала определим автомобиль и его мощности</b>'
-      : '<b>Теперь рассчитаем утилизационный сбор</b>',
+      : mode === 'under3'
+        ? '<b>Найдём автомобиль для полного расчёта</b>'
+        : '<b>Теперь рассчитаем утилизационный сбор</b>',
     '',
-    'Введите марку, полную модель и год выпуска автомобиля.',
-    '<i>Например: BMW X5 xDrive30d 2022</i>'
+    'Введите марку, полную модель и год выпуска автомобиля.'
   ], 'Марка, модель и год', {
     stage: 'catalog-input', mode, customsDuty, customsCcm, customsValue, customsFee
   });
@@ -909,25 +975,41 @@ async function handleCustomsCallback(env, query) {
       electricCurrency[3]
     );
   }
+  const under3Volume = data.match(/^customs:under3:volume:(\d+):(\d+(?:\.\d+)?)$/);
+  if (under3Volume) {
+    const userId = query.from?.id || message.chat.id;
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const candidate = getCatalogCandidate(catalog, Number(under3Volume[1]));
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в справочнике');
+    const requestedWeight = Number(under3Volume[2]) || candidate.mass || null;
+    await discardWorkingCard(env, message, userId);
+    return sendCustomsPrompt(env, message.chat.id, [
+      '✅ <b>Автомобиль выбран</b>',
+      '',
+      catalogCandidateDescription(candidate, requestedWeight),
+      '',
+      '<b>Укажите точный объём двигателя в см³.</b>',
+      '<i>Например: 1998</i>'
+    ], 'Объём двигателя, см³', {
+      stage: 'under3-selected-volume',
+      rowIndex: candidate.rowIndex,
+      requestedWeight
+    });
+  }
   if (data === 'customs:start') return showCustomsIntro(env, message);
   if (data === 'customs:under3') {
     await cleanupCustomsMessages(env, query.from?.id || message.chat.id, message.chat.id, message.message_id);
     return editCustomsScreen(env, message, [
       '🚗 <b>Автомобили до 3 лет</b>',
       '',
-      'Сначала укажите предполагаемую таможенную стоимость. Бот рассчитает процентную часть платежа.',
+      'Для полного расчёта сначала найдём автомобиль в справочнике СЭП.',
       '',
-      'Объём двигателя будет запрошен следующим шагом только для проверки установленной минимальной ставки за 1 см³.',
-      '',
-      '<i>Итог предварительный: окончательную таможенную стоимость определяет таможенный орган.</i>'
-    ].join('\n'), [[{ text: 'Рассчитать', callback_data: 'customs:under3:value' }]]);
+      'Укажите марку, полную модель и год выпуска.'
+    ].join('\n'), [[{ text: 'Найти автомобиль', callback_data: 'customs:under3:catalog' }]]);
   }
-  if (data === 'customs:under3:value') {
+  if (data === 'customs:under3:catalog') {
     await discardWorkingCard(env, message, query.from?.id || message.chat.id);
-    return sendCustomsPrompt(env, message.chat.id, [
-      '<b>Укажите предполагаемую стоимость автомобиля в рублях.</b>',
-      '<i>Например: 2 500 000</i>'
-    ], 'Стоимость в рублях', { stage: 'under3-value', cleanupMessageIds: [message.message_id] });
+    return sendCustomsCatalogPrompt(env, message.chat.id, null, 'under3');
   }
   if (data === 'customs:over3') {
     await cleanupCustomsMessages(env, query.from?.id || message.chat.id, message.chat.id, message.message_id);
@@ -1037,7 +1119,7 @@ async function handleCustomsReply(env, message) {
     message.reply_to_message?.message_id
   );
 
-  if (stage === 'catalog-input' && ['passenger', 'electric'].includes(mode)) {
+  if (stage === 'catalog-input' && ['passenger', 'electric', 'under3'].includes(mode)) {
     const parsed = parseCatalogQuery(message.text);
     if (!parsed) {
       await sendCustomsNotice(env, message.chat.id, 'Укажите марку, полную модель и четырёхзначный год выпуска.');
@@ -1067,60 +1149,85 @@ async function handleCustomsReply(env, message) {
     return true;
   }
 
-  if (stage === 'under3-value') {
-    const value = parsePositiveNumber(message.text);
-    if (!value) {
-      await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать стоимость. Введите сумму одним числом в рублях.');
-      await handleCustomsCallback(env, { message, data: 'customs:under3:value' });
-      return true;
-    }
-    const preliminary = calculatePassengerUnder3({ customsValueRub: value, engineCc: 1, euroRate: await euroRate(env) });
-    await cleanupCustomsMessages(env, userId, message.chat.id);
-    await sendCustomsPrompt(env, message.chat.id, [
-      '<b>Предварительный расчёт по стоимости</b>',
-      `Указанная стоимость: ${formatMoney(value)}`,
-      `Ставка: ${preliminary.percent}%`,
-      `По процентной ставке: <b>${formatMoney(preliminary.percentageAmount)}</b>`,
-      '',
-      'Теперь укажите объём двигателя — бот сравнит эту сумму с обязательным минимумом за 1 см³ и выберет большую.'
-    ], 'Объём двигателя, см³', { stage: 'under3-volume', customsValueRub: value });
-    return true;
-  }
-
-  if (stage === 'under3-volume') {
+  if (stage === 'under3-selected-volume') {
     const ccm = parsePositiveNumber(message.text);
-    const value = parsePositiveNumber(state.customsValueRub);
-    if (!ccm || !value) {
+    const rowIndex = Number(state.rowIndex);
+    if (!ccm || !Number.isInteger(rowIndex) || rowIndex < 0) {
       await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать объём. Введите точное значение в см³, например 1998.');
       return true;
     }
-    const rate = await euroRate(env);
-    const result = calculatePassengerUnder3({ customsValueRub: value, engineCc: ccm, euroRate: rate });
-    const customsFee = calculateCustomsProcessingFee(value);
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const candidate = getCatalogCandidate(catalog, rowIndex);
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в справочнике');
+    if (!candidate.combustionKw && candidate.electricKw) {
+      await sendCustomsNotice(env, message.chat.id, 'Для электромобиля выберите раздел «Электро и последовательные гибриды».');
+      return true;
+    }
+    const requestedWeight = parsePositiveNumber(state.requestedWeight) || candidate.mass || null;
     await cleanupCustomsMessages(env, userId, message.chat.id);
-    const sent = await telegram(env, 'sendMessage', {
+    await sendCustomsPrompt(env, message.chat.id, [
+      '✅ <b>Данные автомобиля получены</b>',
+      '',
+      catalogCandidateDescription(candidate, requestedWeight),
+      `Объём двигателя: ${ccm} см³`,
+      '',
+      '<b>Укажите предполагаемую стоимость автомобиля в рублях.</b>',
+      'Для автомобиля до 3 лет таможенный платёж рассчитывается от стоимости.'
+    ], 'Стоимость в рублях', {
+      stage: 'under3-selected-value',
+      rowIndex,
+      requestedWeight,
+      engineCc: ccm
+    });
+    return true;
+  }
+
+  if (stage === 'under3-selected-value') {
+    const value = parsePositiveNumber(message.text);
+    const ccm = parsePositiveNumber(state.engineCc);
+    const rowIndex = Number(state.rowIndex);
+    if (!value || !ccm || !Number.isInteger(rowIndex) || rowIndex < 0) {
+      await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать стоимость. Введите сумму одним числом в рублях.');
+      return true;
+    }
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const candidate = getCatalogCandidate(catalog, rowIndex);
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в справочнике');
+    const requestedWeight = parsePositiveNumber(state.requestedWeight) || candidate.mass || null;
+    const totalKw = calculationPower(candidate, false);
+    const vehicle = {
+      type: 'catalog',
+      brand: candidate.brand,
+      model: candidate.model,
+      vin: null,
+      surname: null,
+      year: candidate.year,
+      category: 'M1',
+      ccm,
+      combustionKw: candidate.combustionKw,
+      electricKw: candidate.electricKw ? [candidate.electricKw] : [],
+      totalKw,
+      maxMass: requestedWeight,
+      issueDate: null,
+      hybridType: 'ДВС / параллельный гибрид'
+    };
+    const rate = await euroRate(env);
+    const customs = calculatePassengerUnder3({ customsValueRub: value, engineCc: ccm, euroRate: rate });
+    const customsFee = calculateCustomsProcessingFee(value);
+    const util = calculateUtil(vehicle);
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
-      text: [
-        '✅ <b>Таможенный платёж рассчитан</b>',
-        '',
-        `Таможенная стоимость: ${formatMoney(value)}`,
-        `${result.percent}% от стоимости: ${formatMoney(result.percentageAmount)}`,
-        `Минимум ${result.minEuroPerCc} €/см³: ${formatMoney(result.minimumAmount)}`,
-        `<b>Таможенный платёж: ${formatMoney(result.duty)}</b>`,
-        `Таможенный сбор за операции: ${formatMoney(customsFee)}`,
-        `<b>Таможенные платежи всего: ${formatMoney(result.duty + customsFee)}</b>`,
-        `Курс евро ЦБ РФ: ${rate.toFixed(4)} ₽`,
-        '',
-        '<i>Применена большая из двух сумм. Расчёт предварительный.</i>'
-      ].join('\n'),
+      text: under3CustomsResultText(candidate, vehicle, customs, customsFee, util, rate),
       parse_mode: 'HTML',
-      reply_markup: customsKeyboard([[{ text: 'Перейти к расчёту утильсбора', callback_data: `customs:catalog:${result.duty}:${ccm}` }]], 'customs:under3')
+      reply_markup: customsResultKeyboard()
     });
-    await setCustomsState(env, userId, {
-      stage: 'customs-duty-ready', mode: 'passenger', customsDuty: result.duty,
-      customsCcm: ccm, customsValue: value, customsFee,
-      cleanupMessageIds: [sent.message_id]
-    });
+    await saveApplication(env, userId, customsApplicationFromVehicle(vehicle, util, {
+      customsValue: value,
+      customsPayments: customs.duty,
+      customsFee
+    }));
+    await clearCustomsState(env, userId);
     return true;
   }
 
@@ -1610,6 +1717,35 @@ async function showCatalogCandidate(env, message, rowIndex, weight, sourceParsed
   if (!candidate) throw new Error('Выбранная версия автомобиля больше не найдена в справочнике');
   const source = sourceParsed || parseCatalogQuery(candidate.brand + ' ' + candidate.model + ' ' + candidate.year);
   const back = backCallback || 'catalog:back:variants:' + candidate.rowIndex;
+  if (source?.customsMode === 'under3') {
+    await telegram(env, 'editMessageText', {
+      chat_id: message.chat.id,
+      message_id: message.message_id,
+      text: [
+        '✅ <b>Автомобиль найден в справочнике</b>',
+        '',
+        catalogCandidateDescription(candidate, weight),
+        '',
+        'Продолжите расчёт, если выбран правильный автомобиль.',
+        '',
+        catalogNavigationLine(source)
+      ].join('\n'),
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{
+            text: 'Продолжить расчёт',
+            callback_data: `customs:under3:volume:${candidate.rowIndex}:${weight || candidate.mass || 0}`
+          }],
+          [
+            { text: '← Назад', callback_data: back },
+            { text: '🏠 Главное меню', callback_data: 'calc:menu' }
+          ]
+        ]
+      }
+    });
+    return;
+  }
   if (source?.customsMode === 'electric') {
     electricCustomsPowerDetails(candidate);
     return showElectricCustomsCurrencyPrompt(env, message, candidate, weight, back, source);
@@ -2323,7 +2459,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'menu-emojis-support-v10' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'under3-catalog-first-v11' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
