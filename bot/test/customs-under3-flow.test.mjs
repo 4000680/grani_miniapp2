@@ -20,6 +20,6 @@ test('итог до 3 лет содержит объяснение ставки,
   assert.match(source, /услуги таможенного представителя/);
   assert.match(source, /• доставка;/);
   assert.match(source, /• СВХ;/);
-  assert.match(source, /• лаборатория;/);
+  assert.doesNotMatch(source, /• лаборатория;/);
   assert.match(source, /• СБКТС и ЭПТС\./);
 });
