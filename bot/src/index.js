@@ -28,6 +28,7 @@ import {
   parseCbrEuroRate,
   parsePositiveNumber
 } from './customs-calculation.js';
+import { electricCustomsPowerDetails } from './electric-customs-flow.js';
 import { isPermanentResultText } from './message-policy.js';
 export { ApplicationsStore } from './applications-store.js';
 
@@ -233,13 +234,23 @@ function customsIntroKeyboard() {
   ], 'menu');
 }
 
-function customsResultKeyboard() {
+function customsResultKeyboard(firstRow = null) {
   return {
-    inline_keyboard: [[
-      { text: '🔄 Новый расчёт', callback_data: 'customs:result:new' },
-      { text: '🏠 Главное меню', callback_data: 'customs:result:menu' }
-    ]]
+    inline_keyboard: [
+      ...(firstRow ? [firstRow] : []),
+      [
+        { text: '🔄 Новый расчёт', callback_data: 'customs:result:new' },
+        { text: '🏠 Главное меню', callback_data: 'customs:result:menu' }
+      ]
+    ]
   };
+}
+
+function electricCustomsResultKeyboard(rowIndex, requestedWeight) {
+  return customsResultKeyboard([{
+    text: '← Исправить стоимость',
+    callback_data: `customs:electric:edit:${rowIndex}:${requestedWeight || 0}`
+  }]);
 }
 
 async function sendCustomsIntro(env, chatId) {
@@ -728,6 +739,39 @@ async function sendCustomsCatalogPrompt(env, chatId, customsDuty, mode = 'passen
   });
 }
 
+function electricCustomsVehicleLines(candidate, requestedWeight = null) {
+  const power = electricCustomsPowerDetails(candidate);
+  const lines = [
+    `<b>Автомобиль:</b> ${escapeHtml(candidate.brand + ' ' + candidate.model)}, ${candidate.year}`,
+    `<b>Тип автомобиля:</b> ${power.vehicleType}`
+  ];
+  if (power.combustionKw) {
+    lines.push(`<b>Максимальная мощность ДВС:</b> ${power.combustionKw} кВт`);
+  }
+  lines.push(
+    `<b>30-минутная мощность электромоторов:</b> ${power.electricKw} кВт`,
+    `<b>Суммарная мощность для акциза:</b> ${power.excisePowerKw} кВт`,
+    `<b>Мощность для утильсбора:</b> ${power.utilPowerKw} кВт (30-минутная)`
+  );
+  const weight = requestedWeight || candidate.mass;
+  if (weight) lines.push(`<b>Технически допустимая масса:</b> ${weight} кг`);
+  return lines;
+}
+
+async function sendElectricCustomsValuePrompt(env, chatId, candidate, requestedWeight = null, cleanupMessageIds = []) {
+  return sendCustomsPrompt(env, chatId, [
+    '✅ <b>Автомобиль и мощности определены</b>',
+    '',
+    ...electricCustomsVehicleLines(candidate, requestedWeight),
+    '',
+    '<b>Укажите предполагаемую таможенную стоимость в рублях.</b>'
+  ], 'Стоимость в рублях', {
+    stage: 'electric-value', rowIndex: candidate.rowIndex,
+    requestedWeight: requestedWeight || candidate.mass || null,
+    cleanupMessageIds
+  });
+}
+
 async function handleCustomsCallback(env, query) {
   const message = query.message;
   const data = query.data;
@@ -738,6 +782,22 @@ async function handleCustomsCallback(env, query) {
   if (data === 'customs:result:new') {
     await clearCustomsState(env, query.from?.id || message.chat.id);
     return sendCustomsIntro(env, message.chat.id);
+  }
+  const editElectricValue = data.match(/^customs:electric:edit:(\d+):(\d+(?:\.\d+)?)$/);
+  if (editElectricValue) {
+    const userId = query.from?.id || message.chat.id;
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const candidate = getCatalogCandidate(catalog, Number(editElectricValue[1]));
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в справочнике');
+    electricCustomsPowerDetails(candidate);
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    await cleanupTemporaryMessages(env, userId, message.chat.id);
+    return sendElectricCustomsValuePrompt(
+      env,
+      message.chat.id,
+      candidate,
+      Number(editElectricValue[2]) || candidate.mass || null
+    );
   }
   if (data === 'customs:start') return showCustomsIntro(env, message);
   if (data === 'customs:under3') {
@@ -1024,16 +1084,16 @@ async function handleCustomsReply(env, message) {
     }
     const catalog = await loadCatalog(env.CATALOG_URL);
     const candidate = getCatalogCandidate(catalog, rowIndex);
-    if (!candidate?.electricKw) throw new Error('В справочнике не найдена 30-минутная мощность выбранного автомобиля');
-    const utilPowerKw = calculationPower(candidate, true);
-    const excisePowerKw = (candidate.combustionKw || 0) + (candidate.electricKw || 0);
+    const power = electricCustomsPowerDetails(candidate);
+    const utilPowerKw = power.utilPowerKw;
+    const excisePowerKw = power.excisePowerKw;
     const vehicle = {
       type: 'catalog', brand: candidate.brand, model: candidate.model, vin: null, surname: null,
       year: candidate.year, category: 'M1', ccm: null,
       combustionKw: candidate.combustionKw || 0,
       electricKw: [candidate.electricKw], totalKw: utilPowerKw,
       maxMass: requestedWeight || candidate.mass || null, issueDate: null,
-      hybridType: candidate.combustionKw ? 'последовательный гибрид' : 'электромобиль'
+      hybridType: power.vehicleType
     };
     const util = calculateUtil(vehicle);
     const customs = calculateElectricCustoms({ customsValueRub: value, excisePowerKw });
@@ -1041,9 +1101,8 @@ async function handleCustomsReply(env, message) {
     const lines = [
       '✅ <b>Предварительный таможенный расчёт</b>',
       '',
-      `<b>Автомобиль:</b> ${escapeHtml(candidate.brand + ' ' + candidate.model)}, ${candidate.year}`,
-      `Мощность для акциза: ${excisePowerKw} кВт`,
-      `30-минутная мощность для утильсбора: ${utilPowerKw} кВт`,
+      ...electricCustomsVehicleLines(candidate, requestedWeight),
+      `<b>Указанная таможенная стоимость:</b> ${formatMoney(value)}`,
       '',
       `Ввозная пошлина 15%: ${formatMoney(customs.duty)}`,
       `Акциз (${customs.excisePerHp} ₽ за 0,75 кВт): ${formatMoney(customs.excise)}`,
@@ -1063,7 +1122,7 @@ async function handleCustomsReply(env, message) {
       chat_id: message.chat.id,
       text: lines.join('\n'),
       parse_mode: 'HTML',
-      reply_markup: customsResultKeyboard()
+      reply_markup: electricCustomsResultKeyboard(candidate.rowIndex, requestedWeight || candidate.mass)
     });
     await saveApplication(env, userId, customsApplicationFromVehicle(vehicle, util, {
       customsValue: value,
@@ -1322,17 +1381,6 @@ function catalogPowerMassKeyboard(variants, brandIndex, modelIndex, year, page =
 }
 
 function catalogEngineKeyboard(rowIndex, weight, backCallback, sourceParsed = null) {
-  if (sourceParsed?.customsMode === 'electric') {
-    return {
-      inline_keyboard: [
-        [{ text: '⚡ Это электро/последовательный гибрид', callback_data: 'catalog:calc:' + rowIndex + ':e:' + weight }],
-        [
-          { text: '← Назад', callback_data: backCallback },
-          { text: '🏠 Главное меню', callback_data: 'calc:menu' }
-        ]
-      ]
-    };
-  }
   if (sourceParsed?.customsMode === 'passenger' && sourceParsed.customsCcm) {
     return {
       inline_keyboard: [
@@ -1365,11 +1413,9 @@ function catalogEngineKeyboard(rowIndex, weight, backCallback, sourceParsed = nu
 }
 
 function catalogEnginePrompt(candidate, weight, sourceParsed) {
-  const instruction = sourceParsed?.customsMode === 'electric'
-    ? 'Подтвердите, что это электромобиль или последовательный гибрид.'
-    : sourceParsed?.customsMode === 'passenger' && sourceParsed.customsCcm
-      ? 'Объём двигателя уже указан. Продолжите расчёт утильсбора.'
-      : 'Выберите тип автомобиля и группу объёма двигателя.';
+  const instruction = sourceParsed?.customsMode === 'passenger' && sourceParsed.customsCcm
+    ? 'Объём двигателя уже указан. Продолжите расчёт утильсбора.'
+    : 'Выберите тип автомобиля и группу объёма двигателя.';
   const lines = [
     '✅ <b>Автомобиль найден в справочнике</b>',
     '',
@@ -1441,6 +1487,11 @@ async function showCatalogCandidate(env, message, rowIndex, weight, sourceParsed
   if (!candidate) throw new Error('Выбранная версия автомобиля больше не найдена в справочнике');
   const source = sourceParsed || parseCatalogQuery(candidate.brand + ' ' + candidate.model + ' ' + candidate.year);
   const back = backCallback || 'catalog:back:variants:' + candidate.rowIndex;
+  if (source?.customsMode === 'electric') {
+    electricCustomsPowerDetails(candidate);
+    await cleanupTemporaryMessages(env, message.chat.id, message.chat.id);
+    return sendElectricCustomsValuePrompt(env, message.chat.id, candidate, weight);
+  }
   await telegram(env, 'editMessageText', {
     chat_id: message.chat.id,
     message_id: message.message_id,
@@ -1829,20 +1880,8 @@ async function handleCatalogCallback(env, query) {
   };
   const util = calculateUtil(vehicle);
   if (sourceParsed?.customsMode === 'electric') {
-    await sendCustomsPrompt(env, message.chat.id, [
-      '✅ <b>Автомобиль и мощности определены</b>',
-      '',
-      catalogCandidateDescription(candidate, requestedWeight),
-      '',
-      `Для акциза: ${(candidate.combustionKw || 0) + (candidate.electricKw || 0)} кВт`,
-      `Для утильсбора: ${totalKw} кВт (30-минутная)`,
-      '',
-      '<b>Укажите предполагаемую таможенную стоимость в рублях.</b>'
-    ], 'Стоимость в рублях', {
-      stage: 'electric-value', rowIndex: candidate.rowIndex,
-      requestedWeight: requestedWeight || candidate.mass || null,
-      cleanupMessageIds: [message.message_id]
-    });
+    await cleanupTemporaryMessages(env, query.from?.id || message.chat.id, message.chat.id);
+    await sendElectricCustomsValuePrompt(env, message.chat.id, candidate, requestedWeight);
     return;
   }
   const customs = sourceParsed?.customsDuty ? {
@@ -2156,7 +2195,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'catalog-model-pages-v7' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'electric-customs-flow-v8' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
