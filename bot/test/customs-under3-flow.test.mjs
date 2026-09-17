@@ -28,3 +28,16 @@ test('итог до 3 лет содержит объяснение ставки,
   assert.doesNotMatch(source, /• лаборатория;/);
   assert.match(source, /• СБКТС и ЭПТС\./);
 });
+
+test('чистый электромобиль сразу переводится в электрорасчёт без запроса объёма', () => {
+  const candidateFlow = source.slice(
+    source.indexOf('async function showCatalogCandidate'),
+    source.indexOf('async function showCatalogModification')
+  );
+  assert.match(candidateFlow, /source\?\.customsMode === 'under3'/);
+  assert.match(candidateFlow, /!candidate\.combustionKw && candidate\.electricKw/);
+  assert.match(source, /Неправильно выбран раздел для расчёта/);
+  assert.match(source, /🪫 Перейти в «Электро\/гибриды»/);
+  assert.match(source, /customs:electric:route:/);
+  assert.match(source, /showElectricCustomsCurrencyPrompt/);
+});
