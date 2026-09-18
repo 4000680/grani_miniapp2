@@ -20,13 +20,16 @@ test('автомобиль до 3 лет сначала выбирается п�
 test('итог до 3 лет содержит объяснение ставки, оба утильсбора и дополнительные расходы', () => {
   assert.match(source, /Таможенный платёж по единой ставке/);
   assert.match(source, /Применён минимальный платёж за объём двигателя/);
-  assert.match(source, /Льготный для личного пользования/);
-  assert.match(source, /Коммерческий:/);
+  assert.match(source, /<b>Льготный утильсбор:/);
+  assert.match(source, /<b>Итого с льготным утильсбором:/);
+  assert.match(source, /<i>Коммерческий утильсбор:/);
+  assert.match(source, /<i>Итого с коммерческим утильсбором:/);
+  assert.match(source, /<b>Коммерческий утильсбор:/);
+  assert.doesNotMatch(source, /Льготный для личного пользования: <b>не применяется<\/b>/);
   assert.match(source, /услуги таможенного представителя/);
-  assert.match(source, /• доставка;/);
-  assert.match(source, /• СВХ;/);
+  assert.match(source, /доставка, СВХ, оформление СБКТС и ЭПТС/);
   assert.doesNotMatch(source, /• лаборатория;/);
-  assert.match(source, /• СБКТС и ЭПТС\./);
+  assert.match(source, /customs\.selectedBy === 'minimum'/);
 });
 
 test('чистый электромобиль сразу переводится в электрорасчёт без запроса объёма', () => {

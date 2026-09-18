@@ -313,6 +313,26 @@ function customsResultKeyboard(firstRow = null) {
   };
 }
 
+const CUSTOMS_EXPENSES_NOTE = '<i>Расчёт предварительный. Дополнительные расходы не включены: услуги таможенного представителя, доставка, СВХ, оформление СБКТС и ЭПТС.</i>';
+
+function appendCustomsUtilSummary(lines, item, baseTotal) {
+  lines.push(`<b>Утильсбор — ${ageLabel(item.age)}:</b>`);
+  if (item.personal !== item.commercial) {
+    lines.push(
+      `<b>Льготный утильсбор: ${formatMoney(item.personal)}</b>`,
+      `<b>Итого с льготным утильсбором: ${formatMoney(baseTotal + item.personal)}</b>`,
+      `<i>Коммерческий утильсбор: ${formatMoney(item.commercial)}</i>`,
+      `<i>Итого с коммерческим утильсбором: ${formatMoney(baseTotal + item.commercial)}</i>`
+    );
+  } else {
+    lines.push(
+      `<b>Коммерческий утильсбор: ${formatMoney(item.commercial)}</b>`,
+      `<b>Итого с коммерческим утильсбором: ${formatMoney(baseTotal + item.commercial)}</b>`
+    );
+  }
+  lines.push('');
+}
+
 function under3CustomsResultText(candidate, vehicle, customs, customsFee, util, euroRate, valueDetails) {
   const lines = [
     '✅ <b>Полный расчёт автомобиля до 3 лет</b>',
@@ -336,7 +356,8 @@ function under3CustomsResultText(candidate, vehicle, customs, customsFee, util, 
       `<b>По единой ставке ${customs.percent}%:</b> ${formatMoney(customs.percentageAmount)}`,
       `<b>Минимальный платёж ${customs.minEuroPerCc} €/см³:</b> ${formatMoney(customs.minimumAmount)}`,
       `<b>Таможенный платёж:</b> ${formatMoney(customs.duty)}`,
-      `<i>Применён минимальный платёж за объём двигателя, поскольку он больше суммы по единой процентной ставке.</i>`
+      `<i>Применён минимальный платёж за объём двигателя, поскольку он больше суммы по единой процентной ставке.</i>`,
+      `<i>Курс евро ЦБ РФ: ${euroRate.toFixed(4)} ₽</i>`
     );
   } else {
     lines.push(`<b>Таможенный платёж по единой ставке ${customs.percent}%:</b> ${formatMoney(customs.duty)}`);
@@ -347,38 +368,14 @@ function under3CustomsResultText(candidate, vehicle, customs, customsFee, util, 
 
   lines.push(
     `<b>Таможенный сбор за операции:</b> ${formatMoney(customsFee)}`,
-    `<i>Курс евро ЦБ РФ: ${euroRate.toFixed(4)} ₽</i>`,
     ''
   );
 
   for (const item of util) {
-    lines.push(`<b>Утильсбор — ${ageLabel(item.age)}:</b>`);
-    if (item.personal !== item.commercial) {
-      lines.push(
-        `Льготный для личного пользования: <b>${formatMoney(item.personal)}</b>`,
-        `Коммерческий: <b>${formatMoney(item.commercial)}</b>`,
-        `<b>Итого для личного пользования: ${formatMoney(customs.duty + customsFee + item.personal)}</b>`,
-        `<b>Итого по коммерческой ставке: ${formatMoney(customs.duty + customsFee + item.commercial)}</b>`
-      );
-    } else {
-      lines.push(
-        'Льготный для личного пользования: <b>не применяется</b>',
-        `Коммерческий: <b>${formatMoney(item.commercial)}</b>`,
-        `<b>Итого: ${formatMoney(customs.duty + customsFee + item.commercial)}</b>`
-      );
-    }
-    lines.push('');
+    appendCustomsUtilSummary(lines, item, customs.duty + customsFee);
   }
 
-  lines.push(
-    '<b>Дополнительные расходы, которые не включены в расчёт:</b>',
-    '• услуги таможенного представителя;',
-    '• доставка;',
-    '• СВХ;',
-    '• СБКТС и ЭПТС.',
-    '',
-    '<i>Расчёт предварительный.</i>'
-  );
+  lines.push(CUSTOMS_EXPENSES_NOTE);
   return lines.join('\n');
 }
 
@@ -862,7 +859,11 @@ async function handleDateReply(env, message) {
   return true;
 }
 
-async function sendCustomsCatalogPrompt(env, chatId, customsDuty, mode = 'passenger', customsCcm = null, customsValue = null, customsFee = null) {
+async function sendCustomsCatalogPrompt(
+  env, chatId, customsDuty, mode = 'passenger', customsCcm = null,
+  customsValue = null, customsFee = null, customsEnteredValue = null,
+  customsCurrency = null, customsCurrencyRate = null, customsEuroRate = null
+) {
   return sendCustomsPrompt(env, chatId, [
     mode === 'electric'
       ? '<b>Сначала определим автомобиль и его мощности</b>'
@@ -872,7 +873,8 @@ async function sendCustomsCatalogPrompt(env, chatId, customsDuty, mode = 'passen
     '',
     'Введите марку, полную модель и год выпуска автомобиля.'
   ], 'Марка, модель и год', {
-    stage: 'catalog-input', mode, customsDuty, customsCcm, customsValue, customsFee
+    stage: 'catalog-input', mode, customsDuty, customsCcm, customsValue, customsFee,
+    customsEnteredValue, customsCurrency, customsCurrencyRate, customsEuroRate
   });
 }
 
@@ -1268,7 +1270,9 @@ async function handleCustomsCallback(env, query) {
     await cleanupCustomsMessages(env, query.from?.id || message.chat.id, message.chat.id);
     return sendCustomsCatalogPrompt(
       env, message.chat.id, Number(catalog[1]), 'passenger', Number(catalog[2]),
-      state?.customsValue || null, state?.customsFee || null
+      state?.customsValue || null, state?.customsFee || null,
+      state?.customsEnteredValue || null, state?.customsCurrency || null,
+      state?.customsCurrencyRate || null, state?.customsEuroRate || null
     );
   }
   if (data === 'customs:advice') {
@@ -1319,7 +1323,11 @@ async function handleCustomsReply(env, message) {
         mode,
         state.customsCcm,
         state.customsValue,
-        state.customsFee
+        state.customsFee,
+        state.customsEnteredValue,
+        state.customsCurrency,
+        state.customsCurrencyRate,
+        state.customsEuroRate
       );
       return true;
     }
@@ -1328,11 +1336,19 @@ async function handleCustomsReply(env, message) {
     parsed.customsCcm = state.customsCcm;
     parsed.customsValue = state.customsValue;
     parsed.customsFee = state.customsFee;
+    parsed.customsEnteredValue = state.customsEnteredValue;
+    parsed.customsCurrency = state.customsCurrency;
+    parsed.customsCurrencyRate = state.customsCurrencyRate;
+    parsed.customsEuroRate = state.customsEuroRate;
     await cleanupCustomsMessages(env, userId, message.chat.id);
     await setCustomsState(env, userId, {
       stage: 'catalog-input', mode,
       customsDuty: state.customsDuty, customsCcm: state.customsCcm,
-      customsValue: state.customsValue, customsFee: state.customsFee
+      customsValue: state.customsValue, customsFee: state.customsFee,
+      customsEnteredValue: state.customsEnteredValue,
+      customsCurrency: state.customsCurrency,
+      customsCurrencyRate: state.customsCurrencyRate,
+      customsEuroRate: state.customsEuroRate
     });
     await runCatalogTextSearch(env, message, parsed);
     return true;
@@ -1497,6 +1513,9 @@ async function handleCustomsReply(env, message) {
     await setCustomsState(env, userId, {
       stage: 'customs-duty-ready', mode: 'passenger', customsDuty: duty,
       customsCcm: ccm, customsValue: value, customsFee,
+      customsEnteredValue: enteredValue, customsCurrency: currency.code,
+      customsCurrencyRate: valueDetails.currencyRate,
+      customsEuroRate: rate,
       cleanupMessageIds: [sent.message_id]
     });
     return true;
@@ -1553,11 +1572,9 @@ async function handleCustomsReply(env, message) {
       ''
     ];
     for (const item of util) {
-      const utilAmount = item.personal !== item.commercial ? item.personal : item.commercial;
-      lines.push(`<b>Утильсбор (${ageLabel(item.age)}): ${formatMoney(utilAmount)}</b>`);
-      lines.push(`<b>Итого: ${formatMoney(customs.customsTotal + customsFee + utilAmount)}</b>`);
+      appendCustomsUtilSummary(lines, item, customs.customsTotal + customsFee);
     }
-    lines.push('', '<i>Расчёт предварительный. Услуги таможенного представителя и иные сопутствующие расходы не включены.</i>');
+    lines.push(CUSTOMS_EXPENSES_NOTE);
     await cleanupCustomsMessages(env, userId, message.chat.id);
     await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
@@ -1711,6 +1728,10 @@ function withCustomsState(parsed, state) {
   parsed.customsCcm = state.customsCcm || null;
   parsed.customsValue = state.customsValue || null;
   parsed.customsFee = state.customsFee || null;
+  parsed.customsEnteredValue = state.customsEnteredValue || null;
+  parsed.customsCurrency = state.customsCurrency || null;
+  parsed.customsCurrencyRate = state.customsCurrencyRate || null;
+  parsed.customsEuroRate = state.customsEuroRate || null;
   return parsed;
 }
 
@@ -1921,28 +1942,34 @@ function formatCatalogResult(candidate, vehicle, util, customs = null) {
     }
   }
   lines.push('');
-  for (const item of util) {
-    lines.push('<b>' + ageLabel(item.age) + ':</b>');
-    if (item.personal !== item.commercial) {
-      lines.push('<b>Льготный утильсбор для физлица: ' + formatMoney(item.personal) + '</b>');
-      lines.push('Коммерческий утильсбор: ' + formatMoney(item.commercial));
-    } else {
-      lines.push('<b>Коммерческий утильсбор: ' + formatMoney(item.commercial) + '</b>');
-      lines.push('<i>Льготный коэффициент не применяется: ' + catalogNoPreferenceReason(vehicle.ccm, vehicle.totalKw) + '.</i>');
+  if (!customs?.customsPayments) {
+    for (const item of util) {
+      lines.push('<b>' + ageLabel(item.age) + ':</b>');
+      if (item.personal !== item.commercial) {
+        lines.push('<b>Льготный утильсбор для физлица: ' + formatMoney(item.personal) + '</b>');
+        lines.push('Коммерческий утильсбор: ' + formatMoney(item.commercial));
+      } else {
+        lines.push('<b>Коммерческий утильсбор: ' + formatMoney(item.commercial) + '</b>');
+        lines.push('<i>Льготный коэффициент не применяется: ' + catalogNoPreferenceReason(vehicle.ccm, vehicle.totalKw) + '.</i>');
+      }
+      lines.push('');
     }
-    lines.push('');
   }
   if (customs?.customsPayments) {
-    lines.push('<b>Общий расчёт:</b>');
-    if (customs.customsValue) lines.push('Таможенная стоимость: ' + formatMoney(customs.customsValue));
-    lines.push('Таможенная пошлина: ' + formatMoney(customs.customsPayments));
-    lines.push('Таможенный сбор за операции: ' + formatMoney(customs.customsFee));
-    for (const item of util) {
-      const utilAmount = item.personal !== item.commercial ? item.personal : item.commercial;
-      lines.push('<b>Итого (' + ageLabel(item.age) + '): ' + formatMoney(customs.customsPayments + customs.customsFee + utilAmount) + '</b>');
+    lines.push('<b>Таможенный расчёт:</b>');
+    if (customs.enteredValue && customs.currency && customs.currencyRate) {
+      lines.push(...customsValueLines(customs.enteredValue, customs.currency, customs.currencyRate, customs.customsValue));
+    } else if (customs.customsValue) {
+      lines.push('Таможенная стоимость: ' + formatMoney(customs.customsValue));
     }
+    lines.push('Таможенная пошлина: ' + formatMoney(customs.customsPayments));
+    if (customs.euroRate) lines.push('Курс евро ЦБ РФ: ' + Number(customs.euroRate).toFixed(4) + ' ₽');
+    lines.push('Таможенный сбор за операции: ' + formatMoney(customs.customsFee));
     lines.push('');
-    lines.push('<i>Расчёт предварительный. Услуги таможенного представителя и иные сопутствующие расходы не включены.</i>');
+    for (const item of util) {
+      appendCustomsUtilSummary(lines, item, customs.customsPayments + customs.customsFee);
+    }
+    lines.push(CUSTOMS_EXPENSES_NOTE);
   }
   return lines.join('\n').trim();
 }
@@ -2263,7 +2290,11 @@ async function handleCatalogCallback(env, query) {
         sourceParsed.customsMode,
         sourceParsed.customsCcm,
         sourceParsed.customsValue,
-        sourceParsed.customsFee
+        sourceParsed.customsFee,
+        sourceParsed.customsEnteredValue,
+        sourceParsed.customsCurrency,
+        sourceParsed.customsCurrencyRate,
+        sourceParsed.customsEuroRate
       );
       return;
     }
@@ -2399,7 +2430,11 @@ async function handleCatalogCallback(env, query) {
     customsPayments: Number(sourceParsed.customsDuty),
     customsFee: Number(sourceParsed.customsFee) || (sourceParsed.customsValue
       ? calculateCustomsProcessingFee(sourceParsed.customsValue)
-      : 0)
+      : 0),
+    enteredValue: Number(sourceParsed.customsEnteredValue) || null,
+    currency: electricCustomsCurrency(sourceParsed.customsCurrency),
+    currencyRate: sourceParsed.customsCurrencyRate || null,
+    euroRate: Number(sourceParsed.customsEuroRate) || null
   } : null;
   await saveApplication(
     env,
@@ -2705,7 +2740,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'customs-currency-all-v15' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'customs-results-unified-v16' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
