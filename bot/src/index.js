@@ -3,6 +3,7 @@ import {
   getCatalogCandidate,
   getCatalogVariants,
   listCatalogModifications,
+  listCatalogSuggestions,
   loadCatalog,
   paginateCatalogModifications,
   paginateCatalogVariants,
@@ -1826,6 +1827,35 @@ function catalogModificationKeyboard(modifications, page = 0) {
   };
 }
 
+function catalogSuggestionsText(suggestions, parsed) {
+  const hasRelatedGac = suggestions.some(item => item.relatedBrand && item.brand.toUpperCase() === 'TRUMPCHI');
+  return [
+    'Точного совпадения по марке или модели в шаблоне СЭП нет.',
+    hasRelatedGac
+      ? 'В шаблоне СЭП автомобили <b>GAC</b> могут быть указаны под маркой <b>TRUMPCHI</b>. На российском рынке используется название <b>GAC</b>, а <b>TRUMPCHI</b> — название марки на китайском рынке.'
+      : '',
+    '',
+    'Возможно, вы имели в виду один из этих вариантов:',
+    '',
+    catalogNavigationLine(parsed)
+  ].filter(Boolean).join('\n');
+}
+
+function catalogSuggestionsKeyboard(suggestions) {
+  return {
+    inline_keyboard: [
+      ...suggestions.map(item => [{
+        text: compactButtonText(`${item.brand} ${item.model}, ${item.year}`),
+        callback_data: `catalog:model:${item.brandIndex}:${item.modelIndex}:${item.year}:0`
+      }]),
+      [
+        { text: '✏️ Изменить запрос', callback_data: 'catalog:back:search' },
+        { text: '🏠 Главное меню', callback_data: 'calc:menu' }
+      ]
+    ]
+  };
+}
+
 function catalogVariantPower(candidate) {
   return Math.round((candidate.combustionKw + candidate.electricKw) * 100) / 100;
 }
@@ -2192,6 +2222,17 @@ async function runCatalogTextSearch(env, message, parsed) {
     const catalog = await loadCatalog(env.CATALOG_URL);
     const modifications = listCatalogModifications(catalog, parsed);
     if (!modifications.length) {
+      const suggestions = listCatalogSuggestions(catalog, parsed);
+      if (suggestions.length) {
+        await telegram(env, 'editMessageText', {
+          chat_id: message.chat.id,
+          message_id: status.message_id,
+          text: catalogSuggestionsText(suggestions, parsed),
+          parse_mode: 'HTML',
+          reply_markup: catalogSuggestionsKeyboard(suggestions)
+        });
+        return true;
+      }
       await telegram(env, 'editMessageText', {
         chat_id: message.chat.id,
         message_id: status.message_id,

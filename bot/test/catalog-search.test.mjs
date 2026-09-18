@@ -5,6 +5,7 @@ import {
   getCatalogCandidate,
   getCatalogVariants,
   listCatalogModifications,
+  listCatalogSuggestions,
   paginateCatalogModifications,
   paginateCatalogVariants,
   parseCatalogQuery,
@@ -13,8 +14,8 @@ import {
 } from '../src/catalog-search.js';
 
 const catalog = {
-  brands: ['KIA', 'BMW'],
-  models: ['NIRO EV', 'NIRO HEV', 'X5 XDRIVE30D', 'X5 XDRIVE40D'],
+  brands: ['KIA', 'BMW', 'GAC', 'Trumpchi', 'Lixiang', 'Lexus'],
+  models: ['NIRO EV', 'NIRO HEV', 'X5 XDRIVE30D', 'X5 XDRIVE40D', 'EMZOOM', 'M8', 'GM8', 'L9', 'LX'],
   eco: [],
   rows: [
     [0, 0, 2022, -1, null, 70, 2170, null, null],
@@ -23,7 +24,12 @@ const catalog = {
     [0, 0, 2022, -1, null, 71, null, 2100, 2250],
     [1, 2, 2026, -1, 210, 9, 2950, 2891, 3009],
     [1, 2, 2026, -1, 210, 2.2, 2755, 2699.9, 2810.1],
-    [1, 3, 2026, -1, 250, 9, 2985, 2925.3, 3044.7]
+    [1, 3, 2026, -1, 250, 9, 2985, 2925.3, 3044.7],
+    [2, 4, 2026, -1, 130, 0, 1900, null, null],
+    [3, 5, 2026, -1, 185, 0, 2450, null, null],
+    [3, 6, 2026, -1, 185, 0, 2480, null, null],
+    [4, 7, 2026, -1, 110, 130, 3080, null, null],
+    [5, 8, 2026, -1, 150, 0, 2200, null, null]
   ]
 };
 
@@ -105,4 +111,23 @@ test('paginates up to 25 catalog modifications for button selection', () => {
   assert.equal(first.pageCount, 3);
   assert.equal(last.currentPage, 2);
   assert.deepEqual(last.items.map(item => item.model), ['COOPER 17', 'COOPER 18', 'COOPER 19', 'COOPER 20', 'COOPER 21']);
+});
+
+test('suggests Trumpchi models when a GAC market name has no exact model', () => {
+  const suggestions = listCatalogSuggestions(catalog, parseCatalogQuery('GAC M8 2026'));
+  assert.equal(suggestions[0].brand, 'Trumpchi');
+  assert.equal(suggestions[0].model, 'M8');
+  assert.equal(suggestions[0].relatedBrand, true);
+});
+
+test('accepts Russian GAC spelling and suggests the document brand', () => {
+  const suggestions = listCatalogSuggestions(catalog, parseCatalogQuery('ГАК M8 2026'));
+  assert.equal(suggestions[0].brand, 'Trumpchi');
+  assert.equal(suggestions[0].model, 'M8');
+});
+
+test('suggests a close brand spelling while preserving model and year', () => {
+  const suggestions = listCatalogSuggestions(catalog, parseCatalogQuery('Lexusigan L9 2026'));
+  assert.equal(suggestions[0].brand, 'Lixiang');
+  assert.equal(suggestions[0].model, 'L9');
 });

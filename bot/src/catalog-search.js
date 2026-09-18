@@ -6,7 +6,13 @@ const BRAND_ALIASES = {
   'ХЕНДАЙ': 'HYUNDAI', 'ХЮНДАЙ': 'HYUNDAI', 'ФОЛЬКСВАГЕН': 'VOLKSWAGEN',
   'ШКОДА': 'SKODA', 'РЕНО': 'RENAULT', 'ФОРД': 'FORD', 'ЛЕКСУС': 'LEXUS',
   'ВОЛЬВО': 'VOLVO', 'ПОРШЕ': 'PORSCHE', 'ДЖИЛИ': 'GEELY', 'ЧЕРИ': 'CHERY',
-  'ХАВАЛ': 'HAVAL', 'ХАВЕЙЛ': 'HAVAL', 'БАЙДИ': 'BYD', 'ЗИКР': 'ZEEKR'
+  'ХАВАЛ': 'HAVAL', 'ХАВЕЙЛ': 'HAVAL', 'БАЙДИ': 'BYD', 'ЗИКР': 'ZEEKR',
+  'ГАК': 'GAC', 'GAK': 'GAC', 'ТРАМЧИ': 'TRUMPCHI', 'ТРАНЧИ': 'TRUMPCHI'
+};
+
+const RELATED_BRANDS = {
+  GAC: new Set(['GAC', 'TRUMPCHI']),
+  TRUMPCHI: new Set(['GAC', 'TRUMPCHI'])
 };
 
 let catalogPromise = null;
@@ -117,6 +123,108 @@ function namedCatalogRows(catalog, parsedQuery) {
     namedRows.push({ row, rowIndex, brand, model, combined, score });
   }
   return namedRows;
+}
+
+function editDistance(leftValue, rightValue) {
+  const left = String(leftValue || '');
+  const right = String(rightValue || '');
+  if (!left.length) return right.length;
+  if (!right.length) return left.length;
+  const matrix = Array.from({ length: left.length + 1 }, () => Array(right.length + 1).fill(0));
+  for (let row = 0; row <= left.length; row++) matrix[row][0] = row;
+  for (let column = 0; column <= right.length; column++) matrix[0][column] = column;
+  for (let row = 1; row <= left.length; row++) {
+    for (let column = 1; column <= right.length; column++) {
+      const cost = left[row - 1] === right[column - 1] ? 0 : 1;
+      matrix[row][column] = Math.min(
+        matrix[row - 1][column] + 1,
+        matrix[row][column - 1] + 1,
+        matrix[row - 1][column - 1] + cost
+      );
+      if (
+        row > 1 && column > 1 &&
+        left[row - 1] === right[column - 2] &&
+        left[row - 2] === right[column - 1]
+      ) {
+        matrix[row][column] = Math.min(matrix[row][column], matrix[row - 2][column - 2] + cost);
+      }
+    }
+  }
+  return matrix[left.length][right.length];
+}
+
+function similarity(leftValue, rightValue) {
+  const left = normalizeCatalogText(leftValue).replace(/\s/g, '');
+  const right = normalizeCatalogText(rightValue).replace(/\s/g, '');
+  if (!left || !right) return 0;
+  if (left === right) return 1;
+  return Math.max(0, 1 - editDistance(left, right) / Math.max(left.length, right.length));
+}
+
+function modelNumberTokens(value) {
+  return normalizeCatalogText(value).match(/\d+/g) || [];
+}
+
+function relatedBrandMatch(queryBrand, candidateBrand) {
+  return RELATED_BRANDS[queryBrand]?.has(candidateBrand) || false;
+}
+
+export function listCatalogSuggestions(catalog, parsedQuery, limit = 5) {
+  if (!parsedQuery) return [];
+  const queryTokens = parsedQuery.tokens || normalizeCatalogText(parsedQuery.vehicleText).split(' ');
+  const queryBrand = normalizeCatalogText(queryTokens[0]);
+  const queryModel = normalizeCatalogText(queryTokens.slice(1).join(' '));
+  if (!queryBrand || !queryModel) return [];
+  const queryNumbers = modelNumberTokens(queryModel);
+  const suggestions = new Map();
+
+  for (const row of catalog.rows) {
+    if (Number(row[2]) !== parsedQuery.year) continue;
+    const brandIndex = Number(row[0]);
+    const modelIndex = Number(row[1]);
+    const brand = catalog.brands[brandIndex] || '';
+    const model = catalog.models[modelIndex] || '';
+    const normalizedBrand = normalizeCatalogText(brand);
+    const normalizedModel = normalizeCatalogText(model);
+    const linkedBrand = relatedBrandMatch(queryBrand, normalizedBrand);
+    const brandScore = linkedBrand ? 1 : similarity(queryBrand, normalizedBrand);
+    if (brandScore < 0.42) continue;
+
+    const candidateNumbers = modelNumberTokens(normalizedModel);
+    if (queryNumbers.length && candidateNumbers.length && !queryNumbers.some(number => candidateNumbers.includes(number))) {
+      continue;
+    }
+    let modelScore = similarity(queryModel, normalizedModel);
+    const compactQueryModel = queryModel.replace(/\s/g, '');
+    const compactCandidateModel = normalizedModel.replace(/\s/g, '');
+    if (compactCandidateModel.startsWith(compactQueryModel) || compactQueryModel.startsWith(compactCandidateModel)) {
+      modelScore = Math.max(modelScore, 0.82);
+    }
+    if (modelScore < 0.45) continue;
+    const score = modelScore * 0.62 + brandScore * 0.38;
+    if (score < 0.6) continue;
+
+    const key = `${brandIndex}:${modelIndex}:${parsedQuery.year}`;
+    const existing = suggestions.get(key);
+    if (existing) {
+      existing.rowsCount++;
+      continue;
+    }
+    suggestions.set(key, {
+      brandIndex,
+      modelIndex,
+      brand,
+      model,
+      year: parsedQuery.year,
+      rowsCount: 1,
+      score,
+      relatedBrand: linkedBrand && queryBrand !== normalizedBrand
+    });
+  }
+
+  return [...suggestions.values()]
+    .sort((left, right) => right.score - left.score || left.model.localeCompare(right.model, 'ru'))
+    .slice(0, Math.max(1, Number(limit) || 5));
 }
 
 export function listCatalogModifications(catalog, parsedQuery) {
