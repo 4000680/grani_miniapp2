@@ -37,11 +37,21 @@ export { ApplicationsStore } from './applications-store.js';
 
 const { hybridTypeLabel } = globalThis.GraniVehiclePower;
 
-const MENU_TEXT = [
+const START_MENU_TEXT = [
   'Здравствуйте! Я — помощник компании «Брокер Грани» 🚗',
   '',
   'Мы создали этот бот, чтобы автоматизировать ежедневные задачи брокера и упростить оформление автомобилей по параллельному импорту.',
   '',
+  '📟 Для расчёта утильсбора отправьте PDF-файл СБКТС или выписку ЭПТС.',
+  '',
+  '🎛️ Для поиска по шаблону СЭП напишите марку, модель и год выпуска.',
+  '',
+  'Также вы можете выбрать нужный раздел в меню ниже.',
+  '',
+  'Функционал бота постоянно пополняется 🎮'
+].join('\n');
+
+const MENU_TEXT = [
   '📟 Для расчёта утильсбора отправьте PDF-файл СБКТС или выписку ЭПТС.',
   '',
   '🎛️ Для поиска по шаблону СЭП напишите марку, модель и год выпуска.',
@@ -2714,12 +2724,12 @@ async function handleGroupCalculation(env, query) {
   }
 }
 
-async function sendMenu(env, chatId) {
+async function sendMenu(env, chatId, text = MENU_TEXT) {
   await cleanupCustomsMessages(env, chatId, chatId);
   await cleanupTemporaryMessages(env, chatId, chatId);
   const sent = await telegram(env, 'sendMessage', {
     chat_id: chatId,
-    text: MENU_TEXT,
+    text,
     parse_mode: 'HTML',
     reply_markup: menuKeyboard(env)
   });
@@ -2828,7 +2838,11 @@ async function handleUpdate(env, update) {
   }
   if (update.message?.text) {
     const command = update.message.text.split(/\s+/)[0].split('@')[0].toLowerCase();
-    if (command === '/start' || command === '/menu' || command === '/help') {
+    if (command === '/start') {
+      await sendMenu(env, update.message.chat.id, START_MENU_TEXT);
+      return;
+    }
+    if (command === '/menu' || command === '/help') {
       await sendMenu(env, update.message.chat.id);
       return;
     }
