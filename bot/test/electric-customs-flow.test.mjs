@@ -39,6 +39,12 @@ test('electric customs flow skips the repeated type confirmation and can correct
   assert.match(workerSource, /customs:electric:edit:/);
 });
 
+test('electric customs starts with a short vehicle-search prompt', () => {
+  assert.match(workerSource, /Сначала определим марку, модель и год выпуска автомобиля, затем приступим к расчёту\./);
+  assert.doesNotMatch(workerSource, /Для акциза учитывается суммарная мощность ДВС и электромоторов/);
+  assert.doesNotMatch(workerSource, /После выбора автомобиля бот запросит стоимость/);
+});
+
 test('electric customs flow asks for currency before the amount', () => {
   for (const code of ['RUB', 'USD', 'EUR', 'CNY', 'KRW']) {
     assert.match(workerSource, new RegExp(`callback\\('${code}'\\)`));
