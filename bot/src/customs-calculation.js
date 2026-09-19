@@ -206,6 +206,27 @@ export function parsePositiveNumber(value) {
   return Number.isFinite(number) && number > 0 ? number : null;
 }
 
+export function parseCurrencyAmount(value) {
+  let normalized = String(value || '')
+    .trim()
+    .replace(/\b(?:RUB|USD|EUR|CNY|KRW)\b/gi, '')
+    .replace(/[₽€$¥₩]/g, '')
+    .replace(/[\s\u00a0]/g, '')
+    .replace(',', '.')
+    .toLowerCase();
+  let multiplier = 1;
+  if (/(?:млн\.?|миллион(?:а|ов)?|mln|million(?:s)?|m)$/.test(normalized)) {
+    multiplier = 1_000_000;
+    normalized = normalized.replace(/(?:млн\.?|миллион(?:а|ов)?|mln|million(?:s)?|m)$/, '');
+  } else if (/(?:тыс\.?|тысяч(?:а|и)?|k|к)$/.test(normalized)) {
+    multiplier = 1_000;
+    normalized = normalized.replace(/(?:тыс\.?|тысяч(?:а|и)?|k|к)$/, '');
+  }
+  const number = Number(normalized);
+  const amount = number * multiplier;
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
 export function parseCbrCurrencyRate(xml, currencyCode) {
   const code = String(currencyCode || '').trim().toUpperCase();
   if (code === 'RUB') {
