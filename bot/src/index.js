@@ -972,6 +972,34 @@ async function sendCustomsCatalogPrompt(
   return sent;
 }
 
+async function sendPickupAgePrompt(env, chatId, userId, state) {
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: [
+      '🛻 <b>Пикап найден в шаблоне СЭП</b>',
+      '',
+      `<b>Автомобиль:</b> ${escapeHtml([state.pickupBrand, state.pickupModel].filter(Boolean).join(' '))}`,
+      `<b>Год выпуска:</b> ${state.pickupYear}`,
+      `<b>Полная масса по шаблону СЭП:</b> ${state.pickupMass} кг`,
+      '',
+      '<b>Для точного расчёта важно определить возраст на дату таможенного оформления.</b>',
+      'Сколько полных лет будет автомобилю на эту дату?'
+    ].join('\n'),
+    parse_mode: 'HTML',
+    reply_markup: customsKeyboard([
+      [{ text: '0–3 года', callback_data: 'customs:pickup:age:0-3' }, { text: '3–5 лет', callback_data: 'customs:pickup:age:3-5' }],
+      [{ text: '5–7 лет', callback_data: 'customs:pickup:age:5-7' }, { text: '7 лет и старше', callback_data: 'customs:pickup:age:7+' }]
+    ], 'customs:pickup')
+  });
+  await setCustomsState(env, userId, {
+    ...state,
+    stage: 'pickup-age',
+    mode: 'pickup',
+    cleanupMessageIds: [sent.message_id]
+  });
+  return sent;
+}
+
 async function sendUnder3CatalogPrompt(env, chatId, userId = chatId, notice = '') {
   const lines = [
     '🚗 <b>Автомобили до 3 лет</b>',
@@ -1395,16 +1423,23 @@ async function handleCustomsCallback(env, query) {
       '',
       '💰 Расчёт таможенных платежей зависит от стоимости автомобиля.',
       '',
-      '🧰 Для точного расчёта также нужно уточнить несколько параметров: возраст, тип топлива, объём двигателя и полную массу.',
+      '🧰 Сначала найдём пикап в шаблоне СЭП: так бот определит год выпуска и полную массу.',
       '',
-      'Выберите возраст автомобиля:'
-    ].join('\n'), [
-      [{ text: '0–3 года', callback_data: 'customs:pickup:age:0-3' }, { text: '3–5 лет', callback_data: 'customs:pickup:age:3-5' }],
-      [{ text: '5–7 лет', callback_data: 'customs:pickup:age:5-7' }, { text: '7 лет и старше', callback_data: 'customs:pickup:age:7+' }]
-    ]);
+      'Затем уточним возраст на дату таможенного оформления и тип топлива.'
+    ].join('\n'), [[{ text: 'Выбрать пикап', callback_data: 'customs:pickup:car' }]]);
+  }
+  if (data === 'customs:pickup:car') {
+    const userId = query.from?.id || message.chat.id;
+    await setCustomsState(env, userId, { stage: 'catalog-input', mode: 'pickup' });
+    await discardWorkingCard(env, message, userId);
+    return sendCustomsCatalogPrompt(env, message.chat.id, null, 'pickup');
   }
   const pickupAge = data.match(/^customs:pickup:age:(0-3|3-5|5-7|7\+)$/);
   if (pickupAge) {
+    const userId = query.from?.id || message.chat.id;
+    const state = await getCustomsState(env, userId);
+    if (state?.stage !== 'pickup-age') throw new Error('Шаг выбора возраста устарел. Начните расчёт заново.');
+    await setCustomsState(env, userId, { ...state, stage: 'pickup-fuel', ageGroup: pickupAge[1] });
     return editCustomsScreen(env, message, [
       '🛻 <b>Пикап ' + escapeHtml(pickupAge[1]) + '</b>',
       '',
@@ -1417,11 +1452,23 @@ async function handleCustomsCallback(env, query) {
   const pickupFuel = data.match(/^customs:pickup:fuel:(0-3|3-5|5-7|7\+):(petrol|diesel)$/);
   if (pickupFuel) {
     const userId = query.from?.id || message.chat.id;
+    const state = await getCustomsState(env, userId);
+    if (state?.stage !== 'pickup-fuel' || state.ageGroup !== pickupFuel[1] || !state.pickupMass) {
+      throw new Error('Шаг выбора топлива устарел. Начните расчёт заново.');
+    }
     await discardWorkingCard(env, message, userId);
-    await setCustomsState(env, userId, {
-      stage: 'catalog-input', mode: 'pickup', ageGroup: pickupFuel[1], fuel: pickupFuel[2]
-    });
-    return sendCustomsCatalogPrompt(env, message.chat.id, null, 'pickup');
+    return sendCustomsCurrencyPrompt(env, message.chat.id, userId, 'pickup', [
+      '🛻 <b>Стоимость пикапа</b>',
+      '',
+      `<b>Автомобиль:</b> ${escapeHtml([state.pickupBrand, state.pickupModel].filter(Boolean).join(' '))}`,
+      `<b>Год выпуска:</b> ${state.pickupYear}`,
+      `<b>Полная масса по шаблону СЭП:</b> ${state.pickupMass} кг`,
+      `Возрастная группа на дату оформления: ${escapeHtml(state.ageGroup)}`,
+      `Топливо: ${pickupFuel[2] === 'petrol' ? 'бензин' : 'дизель'}`
+    ], {
+      ...state,
+      fuel: pickupFuel[2]
+    }, 'customs:pickup');
   }
   const pickupVehicle = data.match(/^customs:pickup:vehicle:(\d+):(\d+(?:\.\d+)?)$/);
   if (pickupVehicle) {
@@ -1430,26 +1477,16 @@ async function handleCustomsCallback(env, query) {
     const catalog = await loadCatalog(env.CATALOG_URL);
     const candidate = getCatalogCandidate(catalog, Number(pickupVehicle[1]));
     const mass = Number(pickupVehicle[2]) || candidate?.mass;
-    if (!candidate || !mass || state?.stage !== 'catalog-input' || state.mode !== 'pickup' || !state.ageGroup || !state.fuel) {
+    if (!candidate || !mass || state?.stage !== 'catalog-input' || state.mode !== 'pickup') {
       throw new Error('Шаг выбора пикапа устарел. Начните расчёт заново.');
     }
     await discardWorkingCard(env, message, userId);
-    return sendCustomsCurrencyPrompt(env, message.chat.id, userId, 'pickup', [
-      '🛻 <b>Стоимость пикапа</b>',
-      '',
-      `<b>Автомобиль:</b> ${escapeHtml(candidate.brand + ' ' + candidate.model)}`,
-      `<b>Год выпуска:</b> ${candidate.year}`,
-      `<b>Полная масса по шаблону СЭП:</b> ${mass} кг`,
-      `Возрастная группа: ${escapeHtml(state.ageGroup)}`,
-      `Топливо: ${state.fuel === 'petrol' ? 'бензин' : 'дизель'}`
-    ], {
-      ageGroup: state.ageGroup,
-      fuel: state.fuel,
+    return sendPickupAgePrompt(env, message.chat.id, userId, {
       pickupMass: mass,
       pickupBrand: candidate.brand,
       pickupModel: candidate.model,
       pickupYear: candidate.year
-    }, 'customs:pickup');
+    });
   }
   const catalog = data.match(/^customs:catalog:(\d+):(\d+(?:\.\d+)?)$/);
   if (catalog) {
@@ -1875,6 +1912,7 @@ async function sendPickupCalculationResult(env, message, userId, state, engineCc
           `<b>Автомобиль:</b> ${escapeHtml([state.pickupBrand, state.pickupModel].filter(Boolean).join(' '))}`,
           ...(state.pickupYear ? [`<b>Год выпуска:</b> ${state.pickupYear}`] : []),
           `<b>Полная масса из шаблона СЭП:</b> ${mass} кг`,
+          ...(ccm > 1 ? [`<b>Объём двигателя:</b> ${ccm} см³`] : []),
           ''
         ] : []),
         ...customsValueLines(enteredValue, currency, currencyRate, value),
