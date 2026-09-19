@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 33558)
-Total output lines: 2996
-
 import {
   calculationPower,
   getCatalogCandidate,
@@ -919,7 +916,1158 @@ async function handleDateReply(env, message) {
       reply_markup: calculationResultKeyboard(cases, deadline)
     });
   } else {
-    const d…13558 tokens truncated…tons = CATALOG_CCM_BUCKETS.map(bucket => ({
+    const deadline = parseDateFromPrompt(prompt, 'Крайний срок');
+    if (!deadline) throw new Error('Не удалось восстановить крайний срок из сообщения');
+    await telegram(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: [`<b>Крайний срок уплаты: ${formatDate(deadline)}</b>`, formatPeniCompact(cases, deadline, date)].join('\n'),
+      parse_mode: 'HTML',
+      reply_markup: calculationResultKeyboard(cases, deadline)
+    });
+  }
+  return true;
+}
+
+async function sendCustomsCatalogPrompt(
+  env, chatId, customsDuty, mode = 'passenger', customsCcm = null,
+  customsValue = null, customsFee = null, customsEnteredValue = null,
+  customsCurrency = null, customsCurrencyRate = null, customsEuroRate = null,
+  customsFeeRange = null
+) {
+  const previous = await getCustomsState(env, chatId);
+  const back = mode === 'electric'
+    ? 'customs:electric'
+    : mode === 'under3'
+      ? 'customs:under3'
+      : 'customs:over3';
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: (mode === 'electric'
+      ? ['Введите марку, полную модель и год выпуска автомобиля, чтобы я смог подобрать его в шаблоне СЭП.']
+      : [
+        mode === 'under3'
+        ? '<b>Найдём автомобиль для полного расчёта</b>'
+        : '<b>Теперь рассчитаем утилизационный сбор</b>',
+        '',
+        'Введите марку, полную модель и год выпуска автомобиля.'
+      ]).join('\n'),
+    parse_mode: 'HTML',
+    reply_markup: customsKeyboard([], back)
+  });
+  await setCustomsState(env, chatId, {
+    ...previous,
+    stage: 'catalog-input', mode, customsDuty, customsCcm, customsValue, customsFee,
+    customsEnteredValue, customsCurrency, customsCurrencyRate, customsEuroRate, customsFeeRange,
+    cleanupMessageIds: mergeCustomsMessageIds(previous?.cleanupMessageIds, sent.message_id)
+  });
+  return sent;
+}
+
+async function sendUnder3CatalogPrompt(env, chatId, userId = chatId, notice = '') {
+  const lines = [
+    '🚗 <b>Автомобили до 3 лет</b>',
+    ''
+  ];
+  if (notice) lines.push(`<b>${escapeHtml(notice)}</b>`, '');
+  lines.push(
+    'Сначала найдём автомобиль в шаблоне СЭП.',
+    '',
+    '<b>Введите марку, модель и год выпуска автомобиля.</b>'
+  );
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: lines.join('\n'),
+    parse_mode: 'HTML',
+    reply_markup: customsKeyboard([
+      [{ text: '🔄 Начать сначала', callback_data: 'customs:under3' }]
+    ], 'customs:start')
+  });
+  await setCustomsState(env, userId, {
+    stage: 'catalog-input',
+    mode: 'under3',
+    cleanupMessageIds: [sent.message_id]
+  });
+  await trackTemporaryMessage(env, userId, sent.message_id);
+  return sent;
+}
+
+function electricCustomsVehicleLines(candidate, requestedWeight = null) {
+  const power = electricCustomsPowerDetails(candidate);
+  const lines = [
+    `<b>Автомобиль:</b> ${escapeHtml(candidate.brand + ' ' + candidate.model)}, ${candidate.year}`,
+    `<b>Тип автомобиля:</b> ${power.vehicleType}`
+  ];
+  if (power.combustionKw) {
+    lines.push(`<b>Максимальная мощность ДВС:</b> ${power.combustionKw} кВт`);
+  }
+  lines.push(
+    `<b>30-минутная мощность электромоторов:</b> ${power.electricKw} кВт`,
+    `<b>Суммарная мощность для акциза:</b> ${power.excisePowerKw} кВт`,
+    `<b>Мощность для утильсбора:</b> ${power.utilPowerKw} кВт (30-минутная)`
+  );
+  const weight = requestedWeight || candidate.mass;
+  if (weight) lines.push(`<b>Технически допустимая масса:</b> ${weight} кг`);
+  return lines;
+}
+
+function electricCustomsCurrencyText(candidate, requestedWeight = null, sourceParsed = null) {
+  const lines = [
+    '✅ <b>Автомобиль и мощности определены</b>',
+    '',
+    ...electricCustomsVehicleLines(candidate, requestedWeight),
+    '',
+    '<b>Выберите валюту, в которой будете указывать стоимость автомобиля.</b>',
+    'Бот автоматически пересчитает сумму в рубли по курсу ЦБ РФ.'
+  ];
+  if (sourceParsed) lines.push('', catalogNavigationLine(sourceParsed));
+  return lines.join('\n');
+}
+
+function electricCustomsCurrencyKeyboard(rowIndex, requestedWeight, backCallback = 'catalog:back:search') {
+  const callback = code => `customs:electric:currency:${rowIndex}:${requestedWeight || 0}:${code}`;
+  return customsKeyboard([
+    [
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.RUB.button, callback_data: callback('RUB') },
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.USD.button, callback_data: callback('USD') }
+    ],
+    [
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.EUR.button, callback_data: callback('EUR') },
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.CNY.button, callback_data: callback('CNY') }
+    ],
+    [{ text: ELECTRIC_CUSTOMS_CURRENCIES.KRW.button, callback_data: callback('KRW') }]
+  ], backCallback);
+}
+
+function customsCurrencyKeyboard(flow, backCallback = 'customs:start') {
+  const callback = code => `customs:currency:${flow}:${code}`;
+  return customsKeyboard([
+    [
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.RUB.button, callback_data: callback('RUB') },
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.USD.button, callback_data: callback('USD') }
+    ],
+    [
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.EUR.button, callback_data: callback('EUR') },
+      { text: ELECTRIC_CUSTOMS_CURRENCIES.CNY.button, callback_data: callback('CNY') }
+    ],
+    [{ text: ELECTRIC_CUSTOMS_CURRENCIES.KRW.button, callback_data: callback('KRW') }]
+  ], backCallback);
+}
+
+async function sendCustomsCurrencyPrompt(env, chatId, userId, flow, lines, state, backCallback) {
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: [
+      ...lines,
+      '',
+      '<b>Выберите валюту, в которой будете указывать стоимость автомобиля.</b>',
+      'Бот автоматически пересчитает сумму в рубли по курсу ЦБ РФ.'
+    ].join('\n'),
+    parse_mode: 'HTML',
+    reply_markup: customsCurrencyKeyboard(flow, backCallback)
+  });
+  await setCustomsState(env, userId, {
+    ...state,
+    stage: `${flow}-currency`,
+    cleanupMessageIds: mergeCustomsMessageIds(state?.cleanupMessageIds, sent.message_id)
+  });
+  return sent;
+}
+
+function over3CustomsFeeKeyboard() {
+  return customsKeyboard(
+    OVER3_CUSTOMS_FEE_BRACKETS.map(item => [{
+      text: `${item.label} · ${formatMoney(item.fee)}`,
+      callback_data: `customs:over3:fee:${item.id}`
+    }]),
+    'customs:over3'
+  );
+}
+
+async function sendOver3CustomsFeePrompt(env, chatId, userId, result, state) {
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: [
+      '<b>Пошлина по объёму двигателя рассчитана.</b>',
+      `Сумма пошлины: <b>${formatMoney(result.duty)}</b>`,
+      '',
+      'Стоимость на пошлину не влияет. Выберите диапазон для расчёта таможенного сбора за операции:'
+    ].join('\n'),
+    parse_mode: 'HTML',
+    reply_markup: over3CustomsFeeKeyboard()
+  });
+  await setCustomsState(env, userId, {
+    ...state,
+    stage: 'over3-fee',
+    cleanupMessageIds: mergeCustomsMessageIds(state?.cleanupMessageIds, sent.message_id)
+  });
+  return sent;
+}
+
+async function showElectricCustomsCurrencyPrompt(env, message, candidate, requestedWeight = null, backCallback = 'catalog:back:search', sourceParsed = null) {
+  return telegram(env, 'editMessageText', {
+    chat_id: message.chat.id,
+    message_id: message.message_id,
+    text: electricCustomsCurrencyText(candidate, requestedWeight, sourceParsed),
+    parse_mode: 'HTML',
+    reply_markup: electricCustomsCurrencyKeyboard(candidate.rowIndex, requestedWeight || candidate.mass, backCallback)
+  });
+}
+
+async function sendElectricCustomsCurrencyPrompt(env, chatId, userId, candidate, requestedWeight = null) {
+  const source = parseCatalogQuery(candidate.brand + ' ' + candidate.model + ' ' + candidate.year);
+  await setCustomsState(env, userId, { stage: 'catalog-input', mode: 'electric' });
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: electricCustomsCurrencyText(candidate, requestedWeight, source),
+    parse_mode: 'HTML',
+    reply_markup: electricCustomsCurrencyKeyboard(candidate.rowIndex, requestedWeight || candidate.mass)
+  });
+  await trackTemporaryMessage(env, userId, sent.message_id);
+  return sent;
+}
+
+function under3ElectricRedirectText(candidate, requestedWeight = null, sourceParsed = null) {
+  const lines = [
+    '⚠️ <b>Неправильно выбран раздел для расчёта</b>',
+    '',
+    catalogCandidateDescription(candidate, requestedWeight),
+    '',
+    'Выбранный автомобиль — <b>электромобиль</b>. Объём двигателя для него не используется.',
+    '',
+    'Для правильного расчёта перейдите в раздел «Электро и последовательные гибриды».'
+  ];
+  if (sourceParsed) lines.push('', catalogNavigationLine(sourceParsed));
+  return lines.join('\n');
+}
+
+function under3ElectricRedirectKeyboard(candidate, requestedWeight = null, backCallback = 'customs:under3') {
+  return customsKeyboard([[
+    {
+      text: '🪫 Перейти в «Электро/гибриды»',
+      callback_data: `customs:electric:route:${candidate.rowIndex}:${requestedWeight || candidate.mass || 0}`
+    }
+  ]], backCallback);
+}
+
+async function showUnder3ElectricRedirect(env, message, candidate, requestedWeight, backCallback, sourceParsed) {
+  return telegram(env, 'editMessageText', {
+    chat_id: message.chat.id,
+    message_id: message.message_id,
+    text: under3ElectricRedirectText(candidate, requestedWeight, sourceParsed),
+    parse_mode: 'HTML',
+    reply_markup: under3ElectricRedirectKeyboard(candidate, requestedWeight, backCallback)
+  });
+}
+
+async function sendUnder3ElectricRedirect(env, chatId, userId, candidate, requestedWeight, sourceParsed) {
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: under3ElectricRedirectText(candidate, requestedWeight, sourceParsed),
+    parse_mode: 'HTML',
+    reply_markup: under3ElectricRedirectKeyboard(candidate, requestedWeight)
+  });
+  await setCustomsState(env, userId, {
+    stage: 'catalog-input',
+    mode: 'under3',
+    cleanupMessageIds: [sent.message_id]
+  });
+  await trackTemporaryMessage(env, userId, sent.message_id);
+  return sent;
+}
+
+async function sendElectricCustomsValuePrompt(env, chatId, candidate, requestedWeight, currencyCode, cleanupMessageIds = []) {
+  const currency = electricCustomsCurrency(currencyCode);
+  if (!currency) throw new Error('Неизвестная валюта стоимости');
+  return sendCustomsPrompt(env, chatId, [
+    `<b>Введите предполагаемую стоимость автомобиля в ${currency.name}.</b>`,
+    `<i>Выбрано: ${currency.button} (${currency.code}). Укажите сумму одним числом.</i>`
+  ], `Стоимость в ${currency.code}`, {
+    stage: 'electric-value', rowIndex: candidate.rowIndex,
+    requestedWeight: requestedWeight || candidate.mass || null,
+    currency: currency.code,
+    cleanupMessageIds
+  });
+}
+
+async function handleCustomsCallback(env, query) {
+  const message = query.message;
+  const data = query.data;
+  if (data === 'customs:result:menu') {
+    await clearCustomsState(env, query.from?.id || message.chat.id);
+    return sendMenu(env, message.chat.id);
+  }
+  if (data === 'customs:result:new') {
+    await clearCustomsState(env, query.from?.id || message.chat.id);
+    return sendCustomsIntro(env, message.chat.id);
+  }
+  const editElectricValue = data.match(/^customs:electric:edit:(\d+):(\d+(?:\.\d+)?)$/);
+  if (editElectricValue) {
+    const userId = query.from?.id || message.chat.id;
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const candidate = getCatalogCandidate(catalog, Number(editElectricValue[1]));
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
+    electricCustomsPowerDetails(candidate);
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    await cleanupTemporaryMessages(env, userId, message.chat.id);
+    return sendElectricCustomsCurrencyPrompt(
+      env, message.chat.id, userId, candidate,
+      Number(editElectricValue[2]) || candidate.mass || null
+    );
+  }
+  const electricCurrency = data.match(/^customs:electric:currency:(\d+):(\d+(?:\.\d+)?):(RUB|USD|EUR|CNY|KRW)$/);
+  if (electricCurrency) {
+    const userId = query.from?.id || message.chat.id;
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const candidate = getCatalogCandidate(catalog, Number(electricCurrency[1]));
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
+    electricCustomsPowerDetails(candidate);
+    await discardWorkingCard(env, message, userId);
+    return sendElectricCustomsValuePrompt(
+      env,
+      message.chat.id,
+      candidate,
+      Number(electricCurrency[2]) || candidate.mass || null,
+      electricCurrency[3]
+    );
+  }
+  const customsCurrency = data.match(/^customs:currency:(under3|over3|pickup):(RUB|USD|EUR|CNY|KRW)$/);
+  if (customsCurrency) {
+    const userId = query.from?.id || message.chat.id;
+    const flow = customsCurrency[1];
+    const currency = electricCustomsCurrency(customsCurrency[2]);
+    const state = await getCustomsState(env, userId);
+    if (!currency || state?.stage !== `${flow}-currency`) {
+      throw new Error('Шаг выбора валюты устарел. Начните расчёт заново.');
+    }
+    const valueStage = {
+      under3: 'under3-selected-value',
+      over3: 'over3-value',
+      pickup: 'pickup-value'
+    }[flow];
+    const objectName = flow === 'pickup' ? 'пикапа' : 'автомобиля';
+    await discardWorkingCard(env, message, userId);
+    return sendCustomsPrompt(env, message.chat.id, [
+      `<b>Введите предполагаемую таможенную стоимость ${objectName} в ${currency.name}.</b>`,
+      `<i>Выбрано: ${currency.button} (${currency.code}). Укажите сумму одним числом.</i>`
+    ], `Стоимость в ${currency.code}`, {
+      ...state,
+      stage: valueStage,
+      currency: currency.code
+    });
+  }
+  const electricRoute = data.match(/^customs:electric:route:(\d+):(\d+(?:\.\d+)?)$/);
+  if (electricRoute) {
+    const userId = query.from?.id || message.chat.id;
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const candidate = getCatalogCandidate(catalog, Number(electricRoute[1]));
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
+    electricCustomsPowerDetails(candidate);
+    const requestedWeight = Number(electricRoute[2]) || candidate.mass || null;
+    const source = parseCatalogQuery(candidate.brand + ' ' + candidate.model + ' ' + candidate.year);
+    source.customsMode = 'electric';
+    await setCustomsState(env, userId, { stage: 'catalog-input', mode: 'electric' });
+    return showElectricCustomsCurrencyPrompt(
+      env,
+      message,
+      candidate,
+      requestedWeight,
+      `catalog:back:variants:${candidate.rowIndex}`,
+      source
+    );
+  }
+  const under3Volume = data.match(/^customs:under3:volume:(\d+):(\d+(?:\.\d+)?)$/);
+  if (under3Volume) {
+    const userId = query.from?.id || message.chat.id;
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const candidate = getCatalogCandidate(catalog, Number(under3Volume[1]));
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
+    const requestedWeight = Number(under3Volume[2]) || candidate.mass || null;
+    await discardWorkingCard(env, message, userId);
+    return sendCustomsPrompt(env, message.chat.id, [
+      '✅ <b>Автомобиль выбран</b>',
+      '',
+      catalogCandidateDescription(candidate, requestedWeight),
+      '',
+      '<b>Укажите точный объём двигателя в см³.</b>',
+      '<i>Например: 1998</i>'
+    ], 'Объём двигателя, см³', {
+      stage: 'under3-selected-volume',
+      rowIndex: candidate.rowIndex,
+      requestedWeight
+    });
+  }
+  if (data === 'customs:start') return showCustomsIntro(env, message);
+  if (data === 'customs:under3') {
+    const userId = query.from?.id || message.chat.id;
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    await discardWorkingCard(env, message, userId);
+    return sendUnder3CatalogPrompt(env, message.chat.id, userId);
+  }
+  if (data === 'customs:over3') {
+    await cleanupCustomsMessages(env, query.from?.id || message.chat.id, message.chat.id, message.message_id);
+    return editCustomsScreen(env, message, [
+      '🚙 <b>Автомобили старше 3 лет</b>',
+      '',
+      'Для автомобилей категории M1, кроме электромобилей и последовательных гибридов, пошлина рассчитывается по объёму двигателя.',
+      '',
+      'Выберите возрастную группу:'
+    ].join('\n'), [
+      [{ text: 'От 3 до 5 лет', callback_data: 'customs:over3:3-5' }],
+      [{ text: 'Старше 5 лет', callback_data: 'customs:over3:5+' }]
+    ]);
+  }
+  const over3 = data.match(/^customs:over3:(3-5|5\+)$/);
+  if (over3) {
+    await discardWorkingCard(env, message, query.from?.id || message.chat.id);
+    return sendCustomsPrompt(env, message.chat.id, [
+      '<b>Укажите точный объём двигателя в см³.</b>',
+      '<i>Например: 1998</i>'
+    ], 'Объём двигателя, см³', {
+      stage: 'over3-volume', ageGroup: over3[1], cleanupMessageIds: [message.message_id]
+    });
+  }
+  const over3Fee = data.match(/^customs:over3:fee:(450-1200|1200-2700|2700-4200|4200-5500|5500-10000|10000-plus)$/);
+  if (over3Fee) {
+    const userId = query.from?.id || message.chat.id;
+    const state = await getCustomsState(env, userId);
+    const bracket = OVER3_CUSTOMS_FEE_BRACKETS.find(item => item.id === over3Fee[1]);
+    const ccm = parsePositiveNumber(state?.engineCc);
+    const duty = parsePositiveNumber(state?.customsDuty);
+    const rate = parsePositiveNumber(state?.euroRate);
+    const ageGroup = state?.ageGroup;
+    if (!bracket || !ccm || !duty || !rate || !['3-5', '5+'].includes(ageGroup) || state?.stage !== 'over3-fee') {
+      throw new Error('Шаг выбора диапазона устарел. Начните расчёт заново.');
+    }
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    const sent = await telegram(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: [
+        '✅ <b>Таможенный платёж рассчитан</b>',
+        '',
+        `Возраст: ${ageGroup === '3-5' ? 'от 3 до 5 лет' : 'старше 5 лет'}`,
+        `Объём двигателя: ${ccm} см³`,
+        `Диапазон таможенной стоимости: ${bracket.label}`,
+        `Ставка: ${calculatePassengerOver3({ ageGroup, engineCc: ccm, euroRate: rate }).euroPerCc} €/см³`,
+        `<b>Таможенная пошлина: ${formatMoney(duty)}</b>`,
+        `Таможенный сбор за операции: ${formatMoney(bracket.fee)}`,
+        `<b>Таможенные платежи всего: ${formatMoney(duty + bracket.fee)}</b>`,
+        `Курс евро ЦБ РФ: ${rate.toFixed(4)} ₽`,
+        '',
+        '<i>Диапазон используется только для предварительного расчёта сбора. Итоговую таможенную стоимость определяет таможенный орган.</i>'
+      ].join('\n'),
+      parse_mode: 'HTML',
+      reply_markup: customsKeyboard([[{ text: 'Перейти к расчёту утильсбора', callback_data: `customs:catalog:${duty}:${ccm}` }]], 'customs:over3')
+    });
+    await setCustomsState(env, userId, {
+      stage: 'customs-duty-ready', mode: 'passenger', customsDuty: duty,
+      customsCcm: ccm, customsFee: bracket.fee, customsFeeRange: bracket.label,
+      customsEuroRate: rate, euroRate: rate,
+      cleanupMessageIds: [sent.message_id]
+    });
+    return;
+  }
+  if (data === 'customs:electric') {
+    await cleanupCustomsMessages(env, query.from?.id || message.chat.id, message.chat.id, message.message_id);
+    return editCustomsScreen(env, message, [
+      '⚡ <b>Электромобили и последовательные гибриды</b>',
+      '',
+      '🪫 Расчёт таможенных платежей зависит от стоимости автомобиля, при этом для расчёта также нужна его мощность в кВт.'
+    ].join('\n'), [[{ text: 'Выбрать автомобиль', callback_data: 'customs:electric:car' }]]);
+  }
+  if (data === 'customs:electric:car') {
+    await setCustomsState(env, query.from?.id || message.chat.id, { cleanupMessageIds: [message.message_id] });
+    await discardWorkingCard(env, message, query.from?.id || message.chat.id);
+    return sendCustomsCatalogPrompt(env, message.chat.id, null, 'electric');
+  }
+  if (data === 'customs:pickup') {
+    await cleanupCustomsMessages(env, query.from?.id || message.chat.id, message.chat.id, message.message_id);
+    return editCustomsScreen(env, message, [
+      '🛻 <b>Пикапы</b>',
+      '',
+      '💰 Расчёт таможенных платежей зависит от стоимости автомобиля.',
+      '',
+      '🧰 Для точного расчёта также нужно уточнить несколько параметров: возраст, тип топлива, объём двигателя и полную массу.',
+      '',
+      'Выберите возраст автомобиля:'
+    ].join('\n'), [
+      [{ text: '0–3 года', callback_data: 'customs:pickup:age:0-3' }, { text: '3–5 лет', callback_data: 'customs:pickup:age:3-5' }],
+      [{ text: '5–7 лет', callback_data: 'customs:pickup:age:5-7' }, { text: '7 лет и старше', callback_data: 'customs:pickup:age:7+' }]
+    ]);
+  }
+  const pickupAge = data.match(/^customs:pickup:age:(0-3|3-5|5-7|7\+)$/);
+  if (pickupAge) {
+    return editCustomsScreen(env, message, [
+      '🛻 <b>Пикап ' + escapeHtml(pickupAge[1]) + '</b>',
+      '',
+      'Выберите тип топлива:'
+    ].join('\n'), [[
+      { text: 'Бензин', callback_data: `customs:pickup:fuel:${pickupAge[1]}:petrol` },
+      { text: 'Дизель', callback_data: `customs:pickup:fuel:${pickupAge[1]}:diesel` }
+    ]], 'customs:pickup');
+  }
+  const pickupFuel = data.match(/^customs:pickup:fuel:(0-3|3-5|5-7|7\+):(petrol|diesel)$/);
+  if (pickupFuel) {
+    const userId = query.from?.id || message.chat.id;
+    await discardWorkingCard(env, message, userId);
+    return sendCustomsCurrencyPrompt(env, message.chat.id, userId, 'pickup', [
+      '🛻 <b>Стоимость пикапа</b>',
+      '',
+      `Возрастная группа: ${escapeHtml(pickupFuel[1])}`,
+      `Топливо: ${pickupFuel[2] === 'petrol' ? 'бензин' : 'дизель'}`
+    ], {
+      ageGroup: pickupFuel[1],
+      fuel: pickupFuel[2]
+    }, `customs:pickup:age:${pickupFuel[1]}`);
+  }
+  const catalog = data.match(/^customs:catalog:(\d+):(\d+(?:\.\d+)?)$/);
+  if (catalog) {
+    const state = await getCustomsState(env, query.from?.id || message.chat.id);
+    await cleanupCustomsMessages(env, query.from?.id || message.chat.id, message.chat.id);
+    return sendCustomsCatalogPrompt(
+      env, message.chat.id, Number(catalog[1]), 'passenger', Number(catalog[2]),
+      state?.customsValue || null, state?.customsFee || null,
+      state?.customsEnteredValue || null, state?.customsCurrency || null,
+      state?.customsCurrencyRate || null, state?.customsEuroRate || null,
+      state?.customsFeeRange || null
+    );
+  }
+  if (data === 'customs:advice') {
+    return editCustomsScreen(env, message, [
+      '💡 <b>Какой автомобиль выгоднее?</b>',
+      '',
+      'Нельзя сравнивать автомобили только по таможенной пошлине: возрастная группа с меньшей пошлиной может дать значительно больший утильсбор.',
+      '',
+      'Корректное сравнение — это таможенный платёж + утильсбор по конкретной модели, году, объёму и мощности.',
+      '',
+      'ИИ-консультанта добавим отдельным следующим этапом.'
+    ].join('\n'), [[{ text: '☎️ Получить консультацию', callback_data: 'info:contact' }]]);
+  }
+}
+
+async function handleCustomsReply(env, message) {
+  const userId = message.from?.id || message.chat?.id;
+  const state = await getCustomsState(env, userId);
+  const stage = state?.stage;
+  const mode = state?.mode;
+  if (!stage) return false;
+  await trackCustomsMessages(
+    env,
+    userId,
+    state,
+    message.reply_to_message?.message_id
+  );
+
+  if (stage === 'catalog-input' && ['passenger', 'electric', 'under3'].includes(mode)) {
+    const parsed = parseCatalogQuery(message.text);
+    if (!parsed) {
+      if (mode === 'under3') {
+        await cleanupCustomsMessages(env, userId, message.chat.id);
+        await cleanupTemporaryMessages(env, userId, message.chat.id);
+        await sendUnder3CatalogPrompt(
+          env,
+          message.chat.id,
+          userId,
+          'Укажите марку, модель и четырёхзначный год выпуска.'
+        );
+        return true;
+      }
+      await sendCustomsNotice(env, message.chat.id, 'Укажите марку, полную модель и четырёхзначный год выпуска.');
+      await sendCustomsCatalogPrompt(
+        env,
+        message.chat.id,
+        state.customsDuty,
+        mode,
+        state.customsCcm,
+        state.customsValue,
+        state.customsFee,
+        state.customsEnteredValue,
+        state.customsCurrency,
+        state.customsCurrencyRate,
+        state.customsEuroRate,
+        state.customsFeeRange
+      );
+      return true;
+    }
+    parsed.customsMode = mode;
+    parsed.customsDuty = state.customsDuty;
+    parsed.customsCcm = state.customsCcm;
+    parsed.customsValue = state.customsValue;
+    parsed.customsFee = state.customsFee;
+    parsed.customsFeeRange = state.customsFeeRange;
+    parsed.customsEnteredValue = state.customsEnteredValue;
+    parsed.customsCurrency = state.customsCurrency;
+    parsed.customsCurrencyRate = state.customsCurrencyRate;
+    parsed.customsEuroRate = state.customsEuroRate;
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    await setCustomsState(env, userId, {
+      stage: 'catalog-input', mode,
+      customsDuty: state.customsDuty, customsCcm: state.customsCcm,
+      customsValue: state.customsValue, customsFee: state.customsFee,
+      customsFeeRange: state.customsFeeRange,
+      customsEnteredValue: state.customsEnteredValue,
+      customsCurrency: state.customsCurrency,
+      customsCurrencyRate: state.customsCurrencyRate,
+      customsEuroRate: state.customsEuroRate
+    });
+    await runCatalogTextSearch(env, message, parsed);
+    return true;
+  }
+
+  if (stage === 'under3-selected-volume') {
+    const ccm = parsePositiveNumber(message.text);
+    const rowIndex = Number(state.rowIndex);
+    if (!ccm || !Number.isInteger(rowIndex) || rowIndex < 0) {
+      await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать объём. Введите точное значение в см³, например 1998.');
+      return true;
+    }
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const candidate = getCatalogCandidate(catalog, rowIndex);
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
+    if (!candidate.combustionKw && candidate.electricKw) {
+      const requestedWeight = parsePositiveNumber(state.requestedWeight) || candidate.mass || null;
+      const source = parseCatalogQuery(candidate.brand + ' ' + candidate.model + ' ' + candidate.year);
+      source.customsMode = 'under3';
+      await cleanupCustomsMessages(env, userId, message.chat.id);
+      await cleanupTemporaryMessages(env, userId, message.chat.id);
+      await sendUnder3ElectricRedirect(env, message.chat.id, userId, candidate, requestedWeight, source);
+      return true;
+    }
+    const requestedWeight = parsePositiveNumber(state.requestedWeight) || candidate.mass || null;
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    await sendCustomsCurrencyPrompt(env, message.chat.id, userId, 'under3', [
+      '✅ <b>Данные автомобиля получены</b>',
+      '',
+      catalogCandidateDescription(candidate, requestedWeight),
+      `Объём двигателя: ${ccm} см³`,
+      '',
+      'Для автомобиля до 3 лет таможенный платёж рассчитывается от стоимости.'
+    ], {
+      rowIndex,
+      requestedWeight,
+      engineCc: ccm
+    }, `customs:under3:volume:${rowIndex}:${requestedWeight || 0}`);
+    return true;
+  }
+
+  if (stage === 'under3-selected-value') {
+    const enteredValue = parsePositiveNumber(message.text);
+    const currency = electricCustomsCurrency(state.currency || 'RUB');
+    const ccm = parsePositiveNumber(state.engineCc);
+    const rowIndex = Number(state.rowIndex);
+    if (!enteredValue || !currency || !ccm || !Number.isInteger(rowIndex) || rowIndex < 0) {
+      await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать стоимость. Введите сумму одним числом в выбранной валюте.');
+      return true;
+    }
+    let valueDetails;
+    try {
+      valueDetails = await resolveCustomsValue(enteredValue, currency.code);
+    } catch (error) {
+      await sendCustomsNotice(env, message.chat.id, `Не удалось получить курс ЦБ РФ: ${escapeHtml(error.message || error)}. Попробуйте ещё раз позже.`);
+      return true;
+    }
+    const value = valueDetails.valueRub;
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const candidate = getCatalogCandidate(catalog, rowIndex);
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
+    const requestedWeight = parsePositiveNumber(state.requestedWeight) || candidate.mass || null;
+    const totalKw = calculationPower(candidate, false);
+    const vehicle = {
+      type: 'catalog',
+      brand: candidate.brand,
+      model: candidate.model,
+      vin: null,
+      surname: null,
+      year: candidate.year,
+      category: 'M1',
+      ccm,
+      combustionKw: candidate.combustionKw,
+      electricKw: candidate.electricKw ? [candidate.electricKw] : [],
+      totalKw,
+      maxMass: requestedWeight,
+      issueDate: null,
+      hybridType: 'ДВС / параллельный гибрид'
+    };
+    const rate = await euroRate(env);
+    const customs = calculatePassengerUnder3({ customsValueRub: value, engineCc: ccm, euroRate: rate });
+    const customsFee = calculateCustomsProcessingFee(value);
+    const util = calculateUtil(vehicle);
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    await telegram(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: under3CustomsResultText(candidate, vehicle, customs, customsFee, util, rate, valueDetails),
+      parse_mode: 'HTML',
+      reply_markup: customsResultKeyboard()
+    });
+    await saveApplication(env, userId, customsApplicationFromVehicle(vehicle, util, {
+      customsValue: value,
+      customsPayments: customs.duty,
+      customsFee
+    }));
+    await clearCustomsState(env, userId);
+    return true;
+  }
+
+  if (stage === 'over3-volume') {
+    const ccm = parsePositiveNumber(message.text);
+    const ageGroup = state.ageGroup;
+    if (!ccm || !['3-5', '5+'].includes(ageGroup)) {
+      await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать объём двигателя. Введите число в см³.');
+      return true;
+    }
+    const rate = await euroRate(env);
+    const result = calculatePassengerOver3({ ageGroup, engineCc: ccm, euroRate: rate });
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    await sendOver3CustomsFeePrompt(env, message.chat.id, userId, result, {
+      ageGroup, engineCc: ccm, customsDuty: result.duty, euroRate: rate
+    });
+    return true;
+  }
+
+  if (stage === 'over3-value') {
+    const enteredValue = parsePositiveNumber(message.text);
+    const currency = electricCustomsCurrency(state.currency || 'RUB');
+    const ccm = parsePositiveNumber(state.engineCc);
+    const duty = parsePositiveNumber(state.customsDuty);
+    const ageGroup = state.ageGroup;
+    if (!enteredValue || !currency || !ccm || !duty || !['3-5', '5+'].includes(ageGroup)) {
+      await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать стоимость. Введите сумму одним числом в выбранной валюте.');
+      return true;
+    }
+    let valueDetails;
+    try {
+      valueDetails = await resolveCustomsValue(enteredValue, currency.code);
+    } catch (error) {
+      await sendCustomsNotice(env, message.chat.id, `Не удалось получить курс ЦБ РФ: ${escapeHtml(error.message || error)}. Попробуйте ещё раз позже.`);
+      return true;
+    }
+    const value = valueDetails.valueRub;
+    const customsFee = calculateCustomsProcessingFee(value);
+    const rate = parsePositiveNumber(state.euroRate) || await euroRate(env);
+    const result = calculatePassengerOver3({ ageGroup, engineCc: ccm, euroRate: rate });
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    const sent = await telegram(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: [
+        '✅ <b>Таможенный платёж рассчитан</b>',
+        '',
+        `Возраст: ${ageGroup === '3-5' ? 'от 3 до 5 лет' : 'старше 5 лет'}`,
+        `Объём двигателя: ${ccm} см³`,
+        ...customsValueLines(enteredValue, currency, valueDetails.currencyRate, value),
+        `Ставка: ${result.euroPerCc} €/см³`,
+        `<b>Таможенная пошлина: ${formatMoney(duty)}</b>`,
+        `Таможенный сбор за операции: ${formatMoney(customsFee)}`,
+        `<b>Таможенные платежи всего: ${formatMoney(duty + customsFee)}</b>`,
+        `Курс евро ЦБ РФ: ${rate.toFixed(4)} ₽`,
+        '',
+        '<i>Расчёт предварительный.</i>'
+      ].join('\n'),
+      parse_mode: 'HTML',
+      reply_markup: customsKeyboard([[{ text: 'Перейти к расчёту утильсбора', callback_data: `customs:catalog:${duty}:${ccm}` }]], 'customs:over3')
+    });
+    await setCustomsState(env, userId, {
+      stage: 'customs-duty-ready', mode: 'passenger', customsDuty: duty,
+      customsCcm: ccm, customsValue: value, customsFee,
+      customsEnteredValue: enteredValue, customsCurrency: currency.code,
+      customsCurrencyRate: valueDetails.currencyRate,
+      customsEuroRate: rate,
+      cleanupMessageIds: [sent.message_id]
+    });
+    return true;
+  }
+
+  if (stage === 'electric-value') {
+    const enteredValue = parsePositiveNumber(message.text);
+    const currency = electricCustomsCurrency(state.currency || 'RUB');
+    const rowIndex = Number(state.rowIndex);
+    const requestedWeight = parsePositiveNumber(state.requestedWeight);
+    if (!enteredValue || !currency || !Number.isInteger(rowIndex) || rowIndex < 0) {
+      await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать стоимость. Введите сумму одним числом в выбранной валюте.');
+      return true;
+    }
+    let currencyRate;
+    try {
+      currencyRate = await cbrCurrencyRate(currency.code);
+    } catch (error) {
+      await sendCustomsNotice(env, message.chat.id, `Не удалось получить курс ЦБ РФ: ${escapeHtml(error.message || error)}. Попробуйте ещё раз позже.`);
+      return true;
+    }
+    const value = convertCurrencyToRub(enteredValue, currencyRate);
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const candidate = getCatalogCandidate(catalog, rowIndex);
+    const power = electricCustomsPowerDetails(candidate);
+    const utilPowerKw = power.utilPowerKw;
+    const excisePowerKw = power.excisePowerKw;
+    const vehicle = {
+      type: 'catalog', brand: candidate.brand, model: candidate.model, vin: null, surname: null,
+      year: candidate.year, category: 'M1', ccm: null,
+      combustionKw: candidate.combustionKw || 0,
+      electricKw: [candidate.electricKw], totalKw: utilPowerKw,
+      maxMass: requestedWeight || candidate.mass || null, issueDate: null,
+      hybridType: power.vehicleType
+    };
+    const util = calculateUtil(vehicle);
+    const customs = calculateElectricCustoms({ customsValueRub: value, excisePowerKw });
+    const customsFee = calculateCustomsProcessingFee(value);
+    const lines = [
+      '✅ <b>Предварительный таможенный расчёт</b>',
+      '',
+      ...electricCustomsVehicleLines(candidate, requestedWeight),
+      `<b>Указанная стоимость:</b> ${formatCurrencyAmount(enteredValue, currency.code)}`,
+      ...(currency.code === 'RUB' ? [] : [
+        formatCbrRate(currencyRate),
+        `<b>Таможенная стоимость в рублях:</b> ${formatMoney(value)}`
+      ]),
+      '',
+      `Ввозная пошлина 15%: ${formatMoney(customs.duty)}`,
+      `Акциз (${customs.excisePerHp} ₽ за 0,75 кВт): ${formatMoney(customs.excise)}`,
+      `НДС 22%: ${formatMoney(customs.vat)}`,
+      `Таможенный сбор за операции: ${formatMoney(customsFee)}`,
+      `<b>Таможенные платежи: ${formatMoney(customs.customsTotal + customsFee)}</b>`,
+      ''
+    ];
+    for (const item of util) {
+      appendCustomsUtilSummary(lines, item, customs.customsTotal + customsFee);
+    }
+    lines.push(CUSTOMS_EXPENSES_NOTE);
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    await telegram(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: lines.join('\n'),
+      parse_mode: 'HTML',
+      reply_markup: electricCustomsResultKeyboard(candidate.rowIndex, requestedWeight || candidate.mass)
+    });
+    await saveApplication(env, userId, customsApplicationFromVehicle(vehicle, util, {
+      customsValue: value,
+      customsPayments: customs.customsTotal,
+      customsFee
+    }));
+    await clearCustomsState(env, userId);
+    return true;
+  }
+
+  if (stage === 'pickup-value') {
+    const enteredValue = parsePositiveNumber(message.text);
+    const currency = electricCustomsCurrency(state.currency || 'RUB');
+    const age = state.ageGroup;
+    const fuel = state.fuel;
+    if (!enteredValue || !currency || !age || !fuel) {
+      await sendCustomsNotice(env, message.chat.id, 'Не удалось распознать стоимость. Введите сумму одним числом в выбранной валюте.');
+      return true;
+    }
+    let valueDetails;
+    try {
+      valueDetails = await resolveCustomsValue(enteredValue, currency.code);
+    } catch (error) {
+      await sendCustomsNotice(env, message.chat.id, `Не удалось получить курс ЦБ РФ: ${escapeHtml(error.message || error)}. Попробуйте ещё раз позже.`);
+      return true;
+    }
+    const valueState = {
+      customsValueRub: valueDetails.valueRub,
+      enteredValue,
+      currency: currency.code,
+      currencyRate: valueDetails.currencyRate,
+      ageGroup: age,
+      fuel
+    };
+    const needsCcm = age === '7+' || (fuel === 'petrol' && age === '0-3') || (fuel === 'diesel' && age === '5-7');
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    if (needsCcm) {
+      await sendCustomsPrompt(env, message.chat.id, [
+        '<b>Для выбранной ставки нужен объём двигателя.</b>',
+        'Укажите точный объём в см³.'
+      ], 'Объём двигателя, см³', { stage: 'pickup-volume', ...valueState });
+    } else {
+      await sendCustomsPrompt(env, message.chat.id, [
+        '<b>Укажите полную технически допустимую массу по шильдику.</b>'
+      ], 'Полная масса, кг', { stage: 'pickup-mass', ...valueState, engineCc: 1 });
+    }
+    return true;
+  }
+
+  if (stage === 'pickup-volume') {
+    const ccm = parsePositiveNumber(message.text);
+    if (!ccm) return true;
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    await sendCustomsPrompt(env, message.chat.id, [
+      '<b>Укажите полную технически допустимую массу по шильдику.</b>'
+    ], 'Полная масса, кг', {
+      stage: 'pickup-mass', customsValueRub: state.customsValueRub,
+      enteredValue: state.enteredValue, currency: state.currency, currencyRate: state.currencyRate,
+      ageGroup: state.ageGroup, fuel: state.fuel, engineCc: ccm
+    });
+    return true;
+  }
+
+  if (stage === 'pickup-mass') {
+    const mass = parsePositiveNumber(message.text);
+    const value = parsePositiveNumber(state.customsValueRub);
+    const ccm = parsePositiveNumber(state.engineCc);
+    const ageGroup = state.ageGroup;
+    const fuel = state.fuel;
+    const enteredValue = parsePositiveNumber(state.enteredValue) || value;
+    const currency = electricCustomsCurrency(state.currency || 'RUB');
+    const currencyRate = state.currencyRate || parseCbrCurrencyRate('', 'RUB');
+    if (!mass || !value || !ccm || !enteredValue || !currency || !currencyRate) return true;
+    try {
+      const rate = await euroRate(env);
+      const result = calculatePickup({ customsValueRub: value, fuel, ageGroup, engineCc: ccm, maxMassKg: mass, euroRate: rate });
+      const customsFee = calculateCustomsProcessingFee(value);
+      await cleanupCustomsMessages(env, userId, message.chat.id);
+      await telegram(env, 'sendMessage', {
+        chat_id: message.chat.id,
+        text: [
+          '✅ <b>Предварительный расчёт пикапа</b>',
+          '',
+          ...customsValueLines(enteredValue, currency, currencyRate, value),
+          '',
+          `Категория: ${result.category}`,
+          `Ввозная пошлина: ${formatMoney(result.duty)}`,
+          `НДС 22%: ${formatMoney(result.vat)}`,
+          `Таможенный сбор за операции: ${formatMoney(customsFee)}`,
+          `<b>Таможенные платежи: ${formatMoney(result.customsTotal + customsFee)}</b>`,
+          `Утилизационный сбор: ${formatMoney(result.util)}`,
+          `<b>Итого: ${formatMoney(result.total + customsFee)}</b>`,
+          '',
+          '<i>Услуги таможенного представителя не включены. Окончательная сумма зависит от классификации автомобиля и таможенной стоимости.</i>'
+        ].join('\n'),
+        parse_mode: 'HTML',
+        reply_markup: customsResultKeyboard()
+      });
+      await saveApplication(env, userId, {
+        source: 'Таможенный расчёт', calculationType: 'customs',
+        brand: 'Пикап', model: fuel === 'petrol' ? 'бензин' : 'дизель',
+        category: result.category, ccm, customsValue: value,
+        customsDuty: result.customsTotal, customsFee, utilAmount: result.util,
+        amount: result.total + customsFee,
+        amountLabel: ageGroup
+      });
+      await clearCustomsState(env, userId);
+    } catch (error) {
+      await sendCustomsNotice(env, message.chat.id, escapeHtml(error.message || error));
+    }
+    return true;
+  }
+
+  return false;
+}
+
+
+const CATALOG_CCM_BUCKETS = [
+  { value: 800, label: 'до 1000 см³' },
+  { value: 1500, label: '1001–2000 см³' },
+  { value: 2500, label: '2001–3000 см³' },
+  { value: 3200, label: '3001–3500 см³' },
+  { value: 4000, label: 'свыше 3500 см³' }
+];
+
+function compactButtonText(value, max = 58) {
+  const text = String(value);
+  return text.length <= max ? text : text.slice(0, max - 1) + '…';
+}
+
+function catalogNavigationLine(parsed) {
+  if (!parsed) return '';
+  return '<i>Исходный запрос: ' + escapeHtml([parsed.vehicleText, parsed.year].filter(Boolean).join(' ')) + '</i>';
+}
+
+function catalogQueryFromNavigationMessage(message) {
+  const source = message?.text?.match(/Исходный запрос:\s*(.+)/i)?.[1]?.trim();
+  const parsed = source ? parseCatalogQuery(source) : null;
+  return parsed;
+}
+
+function withCustomsState(parsed, state) {
+  if (!parsed || state?.stage !== 'catalog-input') return parsed;
+  parsed.customsMode = state.mode || null;
+  parsed.customsDuty = state.customsDuty || null;
+  parsed.customsCcm = state.customsCcm || null;
+  parsed.customsValue = state.customsValue || null;
+  parsed.customsFee = state.customsFee || null;
+  parsed.customsFeeRange = state.customsFeeRange || null;
+  parsed.customsEnteredValue = state.customsEnteredValue || null;
+  parsed.customsCurrency = state.customsCurrency || null;
+  parsed.customsCurrencyRate = state.customsCurrencyRate || null;
+  parsed.customsEuroRate = state.customsEuroRate || null;
+  return parsed;
+}
+
+function catalogSearchKeyboard() {
+  return {
+    inline_keyboard: [[{ text: '🏠 Главное меню', callback_data: 'calc:menu' }]]
+  };
+}
+
+function catalogSearchPrompt() {
+  return [
+    '<b>Поиск автомобиля по шаблону СЭП</b>',
+    '',
+    'Напишите марку, модель и год выпуска.'
+  ].join('\n');
+}
+
+function catalogModificationsText(modifications, parsed, page = 0) {
+  const pagination = paginateCatalogModifications(modifications, page);
+  return [
+    modifications.length === 1
+      ? 'Для запроса найдена одна модификация.'
+      : 'Найдено несколько модификаций — <b>' + modifications.length + '</b>.',
+    '',
+    'Выберите точную модификацию автомобиля:',
+    pagination.pageCount > 1
+      ? `Показаны варианты ${pagination.startIndex + 1}–${pagination.startIndex + pagination.items.length} из ${pagination.total}.`
+      : '',
+    '',
+    catalogNavigationLine(parsed)
+  ].filter(Boolean).join('\n');
+}
+
+function catalogCandidateDescription(candidate, requestedWeight = null) {
+  const power = [];
+  if (candidate.combustionKw) power.push(candidate.combustionKw + ' кВт макс.');
+  if (candidate.electricKw) power.push(candidate.electricKw + ' кВт (30 мин)');
+  return [
+    '<b>' + escapeHtml([candidate.brand, candidate.model].filter(Boolean).join(' ')) + '</b>, ' + candidate.year,
+    power.length ? 'Мощность в шаблоне СЭП: ' + power.join(' + ') : 'Мощность в шаблоне СЭП не указана',
+    requestedWeight || candidate.mass
+      ? 'Технически допустимая масса: ' + (requestedWeight || candidate.mass) + ' кг'
+      : candidate.massFrom && candidate.massTo
+        ? 'Диапазон массы: ' + candidate.massFrom + '–' + candidate.massTo + ' кг'
+        : ''
+  ].filter(Boolean).join('\n');
+}
+
+function catalogVariantsKeyboard(matches, weight) {
+  return {
+    inline_keyboard: [
+      ...matches.map(candidate => [{
+        text: compactButtonText(
+          candidate.brand + ' ' + candidate.model + ' · ' +
+          (candidate.combustionKw || 0) +
+          (candidate.electricKw ? ' + ' + candidate.electricKw : '') + ' кВт · ' + weight + ' кг'
+        ),
+        callback_data: 'catalog:pick:' + candidate.rowIndex + ':' + weight
+      }]),
+      [
+        { text: '← Назад', callback_data: 'catalog:back:weight' },
+        { text: '🏠 Главное меню', callback_data: 'calc:menu' }
+      ]
+    ]
+  };
+}
+
+function catalogModificationKeyboard(modifications, page = 0) {
+  const pagination = paginateCatalogModifications(modifications, page);
+  const pageButtons = [];
+  if (pagination.pageCount > 1) {
+    if (pagination.currentPage > 0) {
+      pageButtons.push({ text: '‹ Предыдущие', callback_data: `catalog:mods:${pagination.currentPage - 1}` });
+    }
+    pageButtons.push({ text: `${pagination.currentPage + 1}/${pagination.pageCount}`, callback_data: 'catalog:noop' });
+    if (pagination.currentPage < pagination.pageCount - 1) {
+      pageButtons.push({ text: 'Следующие ›', callback_data: `catalog:mods:${pagination.currentPage + 1}` });
+    }
+  }
+  return {
+    inline_keyboard: [
+      ...pagination.items.map(item => [{
+        text: compactButtonText(item.model),
+        callback_data: 'catalog:model:' + item.brandIndex + ':' + item.modelIndex + ':' + item.year + ':' + pagination.currentPage
+      }]),
+      ...(pageButtons.length ? [pageButtons] : []),
+      [
+        { text: '← Назад', callback_data: 'catalog:back:search' },
+        { text: '🏠 Главное меню', callback_data: 'calc:menu' }
+      ]
+    ]
+  };
+}
+
+function catalogSuggestionsText(suggestions, parsed) {
+  const hasRelatedGac = suggestions.some(item => item.relatedBrand && item.brand.toUpperCase() === 'TRUMPCHI');
+  return [
+    'Точного совпадения по марке или модели в шаблоне СЭП нет.',
+    hasRelatedGac
+      ? 'В шаблоне СЭП автомобили <b>GAC</b> могут быть указаны под маркой <b>TRUMPCHI</b>. На российском рынке используется название <b>GAC</b>, а <b>TRUMPCHI</b> — название марки на китайском рынке.'
+      : '',
+    '',
+    'Возможно, вы имели в виду один из этих вариантов:',
+    '',
+    catalogNavigationLine(parsed)
+  ].filter(Boolean).join('\n');
+}
+
+function catalogSuggestionsKeyboard(suggestions) {
+  return {
+    inline_keyboard: [
+      ...suggestions.map(item => [{
+        text: compactButtonText(`${item.brand} ${item.model}, ${item.year}`),
+        callback_data: `catalog:model:${item.brandIndex}:${item.modelIndex}:${item.year}:0`
+      }]),
+      [
+        { text: '✏️ Изменить запрос', callback_data: 'catalog:back:search' },
+        { text: '🏠 Главное меню', callback_data: 'calc:menu' }
+      ]
+    ]
+  };
+}
+
+function catalogVariantPower(candidate) {
+  return Math.round((candidate.combustionKw + candidate.electricKw) * 100) / 100;
+}
+
+function catalogPowerMassKeyboard(variants, brandIndex, modelIndex, year, page = 0, modificationsPage = 0) {
+  const pagination = paginateCatalogVariants(variants, page);
+  const pageButtons = [];
+  if (pagination.pageCount > 1) {
+    if (pagination.currentPage > 0) {
+      pageButtons.push({
+        text: '‹ Предыдущие',
+        callback_data: `catalog:variants:${brandIndex}:${modelIndex}:${year}:${pagination.currentPage - 1}:${modificationsPage}`
+      });
+    }
+    pageButtons.push({ text: `${pagination.currentPage + 1}/${pagination.pageCount}`, callback_data: 'catalog:noop' });
+    if (pagination.currentPage < pagination.pageCount - 1) {
+      pageButtons.push({
+        text: 'Следующие ›',
+        callback_data: `catalog:variants:${brandIndex}:${modelIndex}:${year}:${pagination.currentPage + 1}:${modificationsPage}`
+      });
+    }
+  }
+  return {
+    inline_keyboard: [
+      ...pagination.items.map(candidate => {
+        const kw = catalogVariantPower(candidate);
+        const hp = Math.round(kw / 0.7355);
+        return [{
+          text: compactButtonText(kw + ' кВт / ' + hp + ' л.с. — ' + candidate.mass + ' кг'),
+          callback_data: 'catalog:pick:' + candidate.rowIndex + ':' + candidate.mass + ':' + pagination.currentPage + ':' + modificationsPage
+        }];
+      }),
+      ...(pageButtons.length ? [pageButtons] : []),
+      [
+        { text: '← Назад', callback_data: `catalog:mods:${modificationsPage}` },
+        { text: '🏠 Главное меню', callback_data: 'calc:menu' }
+      ]
+    ]
+  };
+}
+
+function catalogEngineKeyboard(rowIndex, weight, backCallback, sourceParsed = null) {
+  if (sourceParsed?.customsMode === 'passenger' && sourceParsed.customsCcm) {
+    return {
+      inline_keyboard: [
+        [{
+          text: 'Продолжить · ' + sourceParsed.customsCcm + ' см³',
+          callback_data: 'catalog:calc:' + rowIndex + ':' + sourceParsed.customsCcm + ':' + weight
+        }],
+        [
+          { text: '← Назад', callback_data: backCallback },
+          { text: '🏠 Главное меню', callback_data: 'calc:menu' }
+        ]
+      ]
+    };
+  }
+  const buttons = CATALOG_CCM_BUCKETS.map(bucket => ({
     text: bucket.label,
     callback_data: 'catalog:calc:' + rowIndex + ':' + bucket.value + ':' + weight
   }));
