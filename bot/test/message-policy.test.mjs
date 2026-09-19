@@ -46,7 +46,7 @@ test('user messages are not registered for automatic cleanup', () => {
   assert.match(initialTracking, /message\.reply_to_message\?\.message_id/);
 });
 
-test('navigation keeps calculation cards in the chat history', () => {
+test('chain navigation clears only bot working cards and keeps final results', () => {
   const temporaryCleanup = workerSource.slice(
     workerSource.indexOf('async function cleanupTemporaryMessages'),
     workerSource.indexOf('function mergeCustomsMessageIds')
@@ -65,9 +65,9 @@ test('navigation keeps calculation cards in the chat history', () => {
   );
 
   assert.doesNotMatch(temporaryCleanup, /deleteBotMessage|deleteMessage/);
-  assert.doesNotMatch(customsCleanup, /deleteMessage/);
-  assert.doesNotMatch(discardFlow, /deleteBotMessage|deleteMessage/);
-  assert.doesNotMatch(catalogBackFlow, /deleteMessage/);
+  assert.match(customsCleanup, /deleteBotMessage/);
+  assert.match(discardFlow, /deleteBotMessage/);
+  assert.match(catalogBackFlow, /discardWorkingCard/);
   assert.match(workerSource, /else if \(query\.data === 'menu'\) await sendMenu\(env, query\.message\.chat\.id\)/);
 });
 
