@@ -942,15 +942,15 @@ async function sendCustomsCatalogPrompt(
       : 'customs:over3';
   const sent = await telegram(env, 'sendMessage', {
     chat_id: chatId,
-    text: [
-    mode === 'electric'
-      ? '<b>Сначала определим автомобиль и его мощности</b>'
-      : mode === 'under3'
+    text: (mode === 'electric'
+      ? ['Введите марку, полную модель и год выпуска автомобиля, чтобы я смог подобрать его в шаблоне СЭП.']
+      : [
+        mode === 'under3'
         ? '<b>Найдём автомобиль для полного расчёта</b>'
         : '<b>Теперь рассчитаем утилизационный сбор</b>',
-    '',
-    'Введите марку, полную модель и год выпуска автомобиля.'
-    ].join('\n'),
+        '',
+        'Введите марку, полную модель и год выпуска автомобиля.'
+      ]).join('\n'),
     parse_mode: 'HTML',
     reply_markup: customsKeyboard([], back)
   });
@@ -1371,7 +1371,7 @@ async function handleCustomsCallback(env, query) {
     return editCustomsScreen(env, message, [
       '⚡ <b>Электромобили и последовательные гибриды</b>',
       '',
-      '🪫 Расчёт таможенных платежей зависит от стоимости автомобиля, при этом для расчёта также нужна его мощность в кВт. Сначала определим марку и модель автомобиля.'
+      '🪫 Расчёт таможенных платежей зависит от стоимости автомобиля, при этом для расчёта также нужна его мощность в кВт.'
     ].join('\n'), [[{ text: 'Выбрать автомобиль', callback_data: 'customs:electric:car' }]]);
   }
   if (data === 'customs:electric:car') {
