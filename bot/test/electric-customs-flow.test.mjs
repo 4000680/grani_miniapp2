@@ -40,7 +40,7 @@ test('electric customs flow skips the repeated type confirmation and can correct
 });
 
 test('electric customs starts with a short vehicle-search prompt', () => {
-  assert.match(workerSource, /🪫 Расчет элекро и гибридов последовательных идет по формуле но учитывается киловатты, сначала определим Марку и модель/);
+  assert.match(workerSource, /🪫 Расчёт таможенных платежей зависит от стоимости автомобиля, при этом для расчёта также нужна его мощность в кВт\. Сначала определим марку и модель автомобиля\./);
   assert.doesNotMatch(workerSource, /Для акциза учитывается суммарная мощность ДВС и электромоторов/);
   assert.doesNotMatch(workerSource, /После выбора автомобиля бот запросит стоимость/);
 });
