@@ -1,5 +1,8 @@
 import { extractTextItems, getDocumentProxy } from 'unpdf';
 import { UTIL_RATES } from './rates-data.js';
+import '../../shared/vehicle-power.js';
+
+const { analyzeVehiclePower } = globalThis.GraniVehiclePower;
 
 const DAY = 24 * 60 * 60 * 1000;
 const RU_MONTHS = {
@@ -99,14 +102,15 @@ function parseSbkts(document) {
         .flatMap(line => line.items.filter(item => item.x >= 180 && /^\d+(?:[.,]\d+)?$/.test(item.str)))
         .map(item => Number(item.str.replace(',', '.')))
     : [];
+  const electric30MinKw = round2(electricKw.reduce((sum, value) => sum + value, 0));
+  const power = analyzeVehiclePower(document.text, { engineKw: combustionKw, electric30MinKw });
   return {
     type: 'sbkts', brand, model, vin, surname: applicant?.split(/\s+/)[0] || null,
-    year, category, ccm, combustionKw, electricKw,
-    totalKw: round2((combustionKw || 0) + electricKw.reduce((sum, value) => sum + value, 0)),
+    year, category, ccm, combustionKw, engineKw: combustionKw, electricKw, electric30MinKw,
+    calculatedKw: power.calculatedKw, totalKw: power.calculatedKw,
     maxMass, issueDate: parseRussianDateFromText(document.text),
-    hybridType: /параллельного типа/i.test(document.text) ? 'параллельный'
-      : /последовательного типа/i.test(document.text) ? 'последовательный'
-      : /гибрид/i.test(document.text) ? 'гибрид' : null
+    hybridType: power.hybridType, hybridTypeSource: power.hybridTypeSource,
+    powerError: power.error
   };
 }
 
@@ -171,9 +175,11 @@ function rateRow(payer, kw, ccm) {
 
 export function calculateUtil(vehicle, now = new Date()) {
   if (vehicle.category !== 'M1') throw new Error(`Категория ${vehicle.category || 'не определена'} пока не поддерживается`);
-  if (!vehicle.year || !vehicle.totalKw) throw new Error('Не удалось определить год или мощность двигателя');
-  const commercial = rateRow('commercial', vehicle.totalKw, vehicle.ccm);
-  const personal = rateRow('personal', vehicle.totalKw, vehicle.ccm);
+  if (vehicle.powerError) throw new Error(vehicle.powerError);
+  if (!vehicle.year || !vehicle.totalKw) throw new Error('Не удалось определить год или расчётную мощность');
+  const calculationCcm = ['series', 'ev'].includes(vehicle.hybridType) ? null : vehicle.ccm;
+  const commercial = rateRow('commercial', vehicle.totalKw, calculationCcm);
+  const personal = rateRow('personal', vehicle.totalKw, calculationCcm);
   if (!commercial || !personal) throw new Error('Для этих характеристик не найдена ставка');
   return ageStatus(vehicle.year, now).map(age => ({
     age,

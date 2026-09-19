@@ -35,6 +35,8 @@ import { electricCustomsPowerDetails } from './electric-customs-flow.js';
 import { isPermanentResultText } from './message-policy.js';
 export { ApplicationsStore } from './applications-store.js';
 
+const { hybridTypeLabel } = globalThis.GraniVehiclePower;
+
 const MENU_TEXT = [
   'Здравствуйте! Я — помощник компании «Брокер Грани» 🚗',
   '',
@@ -491,10 +493,23 @@ function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(
     `<b>Год выпуска:</b> ${vehicle.year}`,
     `<b>Категория:</b> ${escapeHtml(vehicle.category)}`,
   ];
-  if (vehicle.hybridType) lines.push(`<b>Тип гибрида:</b> ${escapeHtml(vehicle.hybridType)}`);
-  lines.push('', `<b>Объём двигателя:</b> ${vehicle.ccm ? `${vehicle.ccm} см³` : 'электро/гибрид'}`, `<b>Мощность:</b> ${vehicle.totalKw} кВт`);
-  if (vehicle.electricKw.length) {
-    lines.push(`<i>${vehicle.combustionKw || 0} кВт ДВС + ${vehicle.electricKw.join(' + ')} кВт электромоторы</i>`);
+  if (vehicle.hybridType && vehicle.hybridType !== 'combustion') {
+    lines.push(`<b>Тип гибрида:</b> ${escapeHtml(hybridTypeLabel(vehicle.hybridType))}`);
+  }
+  lines.push('', `<b>Объём двигателя:</b> ${vehicle.ccm ? `${vehicle.ccm} см³` : 'не используется'}`);
+  if (vehicle.engineKw || vehicle.combustionKw) {
+    lines.push(`<b>Мощность ДВС:</b> ${vehicle.engineKw || vehicle.combustionKw} кВт`);
+  }
+  if (['series', 'ev'].includes(vehicle.hybridType) && (vehicle.engineKw || vehicle.combustionKw)) {
+    lines.push('Мощность ДВС в расчёте не учитывается');
+  }
+  if (vehicle.electric30MinKw) {
+    lines.push(`<b>30-минутная мощность электромотора:</b> ${vehicle.electric30MinKw} кВт`);
+  }
+  if (['parallel', 'parallel-series', 'series-parallel'].includes(vehicle.hybridType)) {
+    lines.push(`<b>Расчётная мощность:</b> ${vehicle.engineKw || vehicle.combustionKw} + ${vehicle.electric30MinKw} = ${vehicle.totalKw} кВт`);
+  } else {
+    lines.push(`<b>Расчётная мощность:</b> ${vehicle.totalKw} кВт`);
   }
   lines.push('');
   for (const item of util) {
@@ -518,6 +533,20 @@ function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(
     );
   }
   return lines.join('\n');
+}
+
+async function sendDocumentIdentity(env, chatId, vehicle, replyToMessageId = null) {
+  if (!vehicle.vin && !vehicle.surname) return null;
+  const identity = `${vehicle.vin || 'VIN не найден'} / ${vehicle.surname || 'фамилия не найдена'}`;
+  return telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: `<tg-spoiler>${escapeHtml(identity)}</tg-spoiler>`,
+    parse_mode: 'HTML',
+    reply_parameters: replyToMessageId ? {
+      message_id: replyToMessageId,
+      allow_sending_without_reply: true
+    } : undefined
+  });
 }
 
 function peniCases(util) {
@@ -1713,7 +1742,7 @@ function compactButtonText(value, max = 58) {
 
 function catalogNavigationLine(parsed) {
   if (!parsed) return '';
-  return '<i>Исходный запрос: ' + escapeHtml(parsed.vehicleText + ' ' + parsed.year) + '</i>';
+  return '<i>Исходный запрос: ' + escapeHtml([parsed.vehicleText, parsed.year].filter(Boolean).join(' ')) + '</i>';
 }
 
 function catalogQueryFromNavigationMessage(message) {
@@ -2224,6 +2253,19 @@ async function runCatalogTextSearch(env, message, parsed) {
     if (!modifications.length) {
       const suggestions = listCatalogSuggestions(catalog, parsed);
       if (suggestions.length) {
+        if (suggestions.length > 25) {
+          await telegram(env, 'editMessageText', {
+            chat_id: message.chat.id,
+            message_id: status.message_id,
+            text: [
+              'Найдено слишком много похожих вариантов.',
+              '',
+              'Уточните модель, модификацию или год выпуска и повторите запрос.'
+            ].join('\n'),
+            reply_markup: calculationWorkKeyboard()
+          });
+          return true;
+        }
         await telegram(env, 'editMessageText', {
           chat_id: message.chat.id,
           message_id: status.message_id,
@@ -2535,6 +2577,7 @@ async function handleDocument(env, message) {
       parse_mode: 'HTML',
       reply_markup: calculationResultKeyboard(cases, deadline)
     });
+    await sendDocumentIdentity(env, message.chat.id, vehicle, message.message_id).catch(() => null);
     await releaseTemporaryMessage(env, userId, status.message_id);
     if (!vehicle.issueDate) await sendIssueDatePrompt(env, message.chat.id, cases);
   } catch (error) {
@@ -2612,6 +2655,7 @@ async function handleGroupCalculation(env, query) {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [] }
     });
+    await sendDocumentIdentity(env, botMessage.chat.id, vehicle, sourceMessage.message_id).catch(() => null);
   } catch (error) {
     await telegram(env, 'editMessageText', {
       chat_id: botMessage.chat.id,

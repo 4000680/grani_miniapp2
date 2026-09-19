@@ -6,6 +6,8 @@
 <title>Расчёт утильсбора</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="../../application-api.js"></script>
+<script src="../../shared/vehicle-power.js"></script>
+<script src="../../shared/catalog-match.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
@@ -540,7 +542,7 @@ const TRANSLIT_MAP = {
   'ь':'','э':'e','ю':'yu','я':'ya'
 };
 function transliterate(str){
-  return str.toLowerCase().split('').map(ch => TRANSLIT_MAP[ch] !== undefined ? TRANSLIT_MAP[ch] : ch).join('');
+  return GraniCatalogMatch.transliterate(str);
 }
 function hasCyrillic(str){ return /[а-яА-ЯёЁ]/.test(str); }
 
@@ -556,18 +558,7 @@ function layoutConvert(str){
 }
 
 function levenshtein(a, b){
-  a = a.toLowerCase(); b = b.toLowerCase();
-  const m = a.length, n = b.length;
-  const dp = Array.from({length:m+1}, ()=> new Array(n+1).fill(0));
-  for(let i=0;i<=m;i++) dp[i][0]=i;
-  for(let j=0;j<=n;j++) dp[0][j]=j;
-  for(let i=1;i<=m;i++){
-    for(let j=1;j<=n;j++){
-      const cost = a[i-1]===b[j-1] ? 0 : 1;
-      dp[i][j] = Math.min(dp[i-1][j]+1, dp[i][j-1]+1, dp[i-1][j-1]+cost);
-    }
-  }
-  return dp[m][n];
+  return GraniCatalogMatch.editDistance(String(a).toLowerCase(), String(b).toLowerCase());
 }
 
 // находит индекс марки в DB.brands по произвольному вводу (латиница/кириллица/опечатки)
@@ -902,11 +893,16 @@ function parseSbkts(text){
 
   result.issueDate = parseSbktsIssueDate(text);
 
-  const lower = text.toLowerCase();
-  if(lower.includes('последовательного типа')) result.hybridType = 'sequential';
-  else if(lower.includes('параллельного типа')) result.hybridType = 'parallel';
-  else if(lower.includes('гибрид')) result.hybridType = 'unknown-hybrid';
-  else result.hybridType = null;
+  const power = GraniVehiclePower.analyzeVehiclePower(text, {
+    engineKw: result.kw,
+    electric30MinKw: result.electricKw
+  });
+  result.engineKw = power.engineKw;
+  result.electric30MinKw = power.electric30MinKw;
+  result.calculatedKw = power.calculatedKw;
+  result.hybridType = power.hybridType;
+  result.hybridTypeSource = power.hybridTypeSource;
+  result.powerError = power.error;
 
   return result;
 }
@@ -930,17 +926,25 @@ function extractAllNumbersAfterLabel(text, labelRegex, maxLines){
   return nums;
 }
 
-// определяет эффективные kw/ccm для утильсбора: суммируем ДВС + ВСЕ электромоторы
-// (может быть 1, 2, 3 и более моторов — все их 30-минутные мощности складываются)
 function resolveEngineForUtil(parsed){
-  const electricSum = parsed.electricKw || 0;
-  const kw = (parsed.kw || 0) + electricSum;
+  const resolved = GraniVehiclePower.calculateVehiclePower({
+    engineKw: parsed.engineKw ?? parsed.kw,
+    electric30MinKw: parsed.electric30MinKw ?? parsed.electricKw,
+    hybridType: parsed.hybridType
+  });
+  if(resolved.error) throw new Error(resolved.error);
+  const kw = resolved.calculatedKw;
   let note = null;
-  if(electricSum > 0 && parsed.electricKwList && parsed.electricKwList.length > 0){
+  if(parsed.electricKwList && parsed.electricKwList.length > 0){
     const list = parsed.electricKwList;
-    note = `Суммарная мощность: ДВС ${parsed.kw||0} кВт + ${list.length} электромотор${list.length>1?'а/ов':''} (${list.join(' + ')} кВт) = ${kw} кВт.`;
+    if(['parallel','parallel-series','series-parallel'].includes(parsed.hybridType)){
+      note = `Расчётная мощность: ${parsed.kw||0} кВт ДВС + ${list.join(' + ')} кВт (30-мин.) = ${kw} кВт.`;
+    } else if(['series','ev'].includes(parsed.hybridType)){
+      note = `Расчётная мощность: ${list.join(' + ')} = ${kw} кВт (30-мин.). Мощность ДВС в расчёте не учитывается.`;
+    }
   }
-  return {kw, ccm: parsed.ccm || null, note};
+  const ccm = ['series','ev'].includes(parsed.hybridType) ? null : (parsed.ccm || null);
+  return {kw, ccm, sourceCcm: parsed.ccm || null, note};
 }
 
 // ============== КЛЮЧЕВАЯ СТАВКА И КАЛЕНДАРЬ ПРАЗДНИКОВ РФ ==============
@@ -1063,17 +1067,17 @@ function calcUtilSborForSbkts(kw, ccm, carYear){
 }
 
 function formatSbktsSummary(parsed, engine, calc, deadline){
-  const hybridLabel = parsed.hybridType
-    ? {sequential:'последовательный', parallel:'параллельный', 'unknown-hybrid':'гибрид'}[parsed.hybridType]
-    : null;
+  const hybridLabel = parsed.hybridType ? GraniVehiclePower.hybridTypeLabel(parsed.hybridType) : null;
   let html = `✅ <b>СБКТС распознан</b><br><br>`;
   html += `<b>Автомобиль:</b> ${escapeHtml([parsed.brand, parsed.model].filter(Boolean).join(' ') || '—')}<br>`;
   html += `<b>Год выпуска:</b> ${parsed.year}<br><b>Категория:</b> ${escapeHtml(parsed.category || '—')}<br>`;
   if(hybridLabel) html += `<b>Тип гибрида:</b> ${escapeHtml(hybridLabel)}<br>`;
-  html += `<br><b>Объём двигателя:</b> ${engine.ccm || '—'} см³<br><b>Мощность:</b> ${engine.kw} кВт<br>`;
-  if(parsed.electricKwList && parsed.electricKwList.length){
-    html += `<i>${parsed.kw || 0} кВт ДВС + ${parsed.electricKwList.join(' + ')} кВт электромоторы</i><br>`;
-  }
+  html += `<br><b>Объём двигателя:</b> ${engine.ccm ? engine.ccm + ' см³' : 'не используется'}<br>`;
+  if(parsed.kw) html += `<b>Мощность ДВС:</b> ${parsed.kw} кВт<br>`;
+  if(['series','ev'].includes(parsed.hybridType) && parsed.kw) html += `Мощность ДВС в расчёте не учитывается<br>`;
+  if(parsed.electric30MinKw) html += `<b>30-минутная мощность электромотора:</b> ${parsed.electric30MinKw} кВт<br>`;
+  html += `<b>Расчётная мощность:</b> ${engine.kw} кВт<br>`;
+  if(engine.note) html += `<i>${escapeHtml(engine.note)}</i><br>`;
   html += `<br>`;
   if(calc.ageAmbiguous){
     html += `<span style="color:var(--muted);font-size:12px;">Месяц выпуска неизвестен, поэтому для автомобиля пограничного возраста приведены оба варианта.</span><br><br>`;
@@ -1134,6 +1138,10 @@ function parsePlannedDate(text){
 }
 
 function startSbktsFlow(parsed){
+  if(parsed.powerError){
+    addBotMessage(escapeHtml(parsed.powerError) + '. Проверьте тип силовой установки и значения мощности в СБКТС.');
+    return;
+  }
   const engine = resolveEngineForUtil(parsed);
   if(!parsed.issueDate){
     addBotMessage('Не удалось найти дату оформления СБКТС в документе — не могу рассчитать срок и пени. Проверьте, что PDF содержит текстовый слой (не скан).');

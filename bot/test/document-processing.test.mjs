@@ -54,7 +54,7 @@ test('parses SБКТС and adds every 30-minute electric power', () => {
   const vehicle = parseVehicleDocument(document);
   assert.equal(vehicle.totalKw, 241);
   assert.equal(vehicle.vin, 'TESTVN00000000002');
-  assert.equal(vehicle.hybridType, 'параллельный');
+  assert.equal(vehicle.hybridType, 'parallel');
   assert.deepEqual(vehicle.electricKw, [90, 36]);
   assert.equal(toIso(vehicle.issueDate), '2026-09-02');
   assert.deepEqual(calculateUtil(vehicle, new Date('2026-09-10T00:00:00Z')), [

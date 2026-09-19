@@ -14,8 +14,8 @@ import {
 } from '../src/catalog-search.js';
 
 const catalog = {
-  brands: ['KIA', 'BMW', 'GAC', 'Trumpchi', 'Lixiang', 'Lexus'],
-  models: ['NIRO EV', 'NIRO HEV', 'X5 XDRIVE30D', 'X5 XDRIVE40D', 'EMZOOM', 'M8', 'GM8', 'L9', 'LX'],
+  brands: ['KIA', 'BMW', 'GAC', 'Trumpchi', 'Lixiang', 'Lexus', 'EXEED', 'TOYOTA'],
+  models: ['NIRO EV', 'NIRO HEV', 'X5 XDRIVE30D', 'X5 XDRIVE40D', 'EMZOOM', 'M8', 'GM8', 'L9', 'LX', 'STERRA ET', 'BZ3X'],
   eco: [],
   rows: [
     [0, 0, 2022, -1, null, 70, 2170, null, null],
@@ -29,7 +29,9 @@ const catalog = {
     [3, 5, 2026, -1, 185, 0, 2450, null, null],
     [3, 6, 2026, -1, 185, 0, 2480, null, null],
     [4, 7, 2026, -1, 110, 130, 3080, null, null],
-    [5, 8, 2026, -1, 150, 0, 2200, null, null]
+    [5, 8, 2026, -1, 150, 0, 2200, null, null],
+    [6, 9, 2026, -1, 105, 155.25, 2845, null, null],
+    [7, 10, 2026, -1, 0, 45, 2250, null, null]
   ]
 };
 
@@ -39,7 +41,11 @@ test('parses a brand, model and one year from free text', () => {
     vehicleText: 'KIA NIRO EV',
     tokens: ['KIA', 'NIRO', 'EV']
   });
-  assert.equal(parseCatalogQuery('Kia 2022'), null);
+  assert.deepEqual(parseCatalogQuery('Kia 2022'), {
+    year: 2022,
+    vehicleText: 'KIA',
+    tokens: ['KIA']
+  });
 });
 
 test('finds the exact vehicle and year in the compact catalog', () => {
@@ -130,4 +136,19 @@ test('suggests a close brand spelling while preserving model and year', () => {
   const suggestions = listCatalogSuggestions(catalog, parseCatalogQuery('Lexusigan L9 2026'));
   assert.equal(suggestions[0].brand, 'Lixiang');
   assert.equal(suggestions[0].model, 'L9');
+});
+
+test('finds a catalog model despite an absent market-name token and extra trim words', () => {
+  for (const query of ['Exeed exlantix et 2026', 'Exeed explantix et 1.5t ssr 2026']) {
+    const suggestions = listCatalogSuggestions(catalog, parseCatalogQuery(query));
+    assert.equal(suggestions[0].brand, 'EXEED');
+    assert.equal(suggestions[0].model, 'STERRA ET');
+  }
+});
+
+test('supports transliteration, mixed alphabets, omitted year and incomplete brand queries', () => {
+  assert.equal(listCatalogSuggestions(catalog, parseCatalogQuery('Тойота BZ3X 2026'))[0].model, 'BZ3X');
+  assert.equal(listCatalogModifications(catalog, parseCatalogQuery('KIA NIRO EV'))[0].model, 'NIRO EV');
+  const broad = listCatalogSuggestions(catalog, parseCatalogQuery('Exeed 2026'));
+  assert.ok(broad.some(item => item.model === 'STERRA ET'));
 });
