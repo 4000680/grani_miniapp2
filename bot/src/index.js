@@ -1371,7 +1371,7 @@ async function handleCustomsCallback(env, query) {
     return editCustomsScreen(env, message, [
       '⚡ <b>Электромобили и последовательные гибриды</b>',
       '',
-      'Сначала определим марку, модель и год выпуска автомобиля, затем приступим к расчёту.'
+      '🪫 Расчет элекро и гибридов последовательных идет по формуле но учитывается киловатты, сначала определим Марку и модель'
     ].join('\n'), [[{ text: 'Выбрать автомобиль', callback_data: 'customs:electric:car' }]]);
   }
   if (data === 'customs:electric:car') {
