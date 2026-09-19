@@ -46,6 +46,31 @@ test('user messages are not registered for automatic cleanup', () => {
   assert.match(initialTracking, /message\.reply_to_message\?\.message_id/);
 });
 
+test('navigation keeps calculation cards in the chat history', () => {
+  const temporaryCleanup = workerSource.slice(
+    workerSource.indexOf('async function cleanupTemporaryMessages'),
+    workerSource.indexOf('function mergeCustomsMessageIds')
+  );
+  const customsCleanup = workerSource.slice(
+    workerSource.indexOf('async function cleanupCustomsMessages'),
+    workerSource.indexOf('async function saveApplication')
+  );
+  const discardFlow = workerSource.slice(
+    workerSource.indexOf('async function discardWorkingCard'),
+    workerSource.indexOf('async function cleanupTemporaryMessages')
+  );
+  const catalogBackFlow = workerSource.slice(
+    workerSource.indexOf("if (query.data === 'catalog:back:search')"),
+    workerSource.indexOf('const variantsBack')
+  );
+
+  assert.doesNotMatch(temporaryCleanup, /deleteBotMessage|deleteMessage/);
+  assert.doesNotMatch(customsCleanup, /deleteMessage/);
+  assert.doesNotMatch(discardFlow, /deleteBotMessage|deleteMessage/);
+  assert.doesNotMatch(catalogBackFlow, /deleteMessage/);
+  assert.match(workerSource, /else if \(query\.data === 'menu'\) await sendMenu\(env, query\.message\.chat\.id\)/);
+});
+
 test('controlled document errors keep retry, back and main-menu navigation', () => {
   assert.match(workerSource, /📎 Загрузить документ заново/);
   assert.match(workerSource, /callback_data: 'calc:retry:document'/);
