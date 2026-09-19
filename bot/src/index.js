@@ -945,7 +945,15 @@ async function sendCustomsCatalogPrompt(
   customsCurrency = null, customsCurrencyRate = null, customsEuroRate = null,
   customsFeeRange = null
 ) {
-  return sendCustomsPrompt(env, chatId, [
+  const previous = await getCustomsState(env, chatId);
+  const back = mode === 'electric'
+    ? 'customs:electric'
+    : mode === 'under3'
+      ? 'customs:under3'
+      : 'customs:over3';
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: [
     mode === 'electric'
       ? '<b>Сначала определим автомобиль и его мощности</b>'
       : mode === 'under3'
@@ -953,10 +961,17 @@ async function sendCustomsCatalogPrompt(
         : '<b>Теперь рассчитаем утилизационный сбор</b>',
     '',
     'Введите марку, полную модель и год выпуска автомобиля.'
-  ], 'Марка, модель и год', {
-    stage: 'catalog-input', mode, customsDuty, customsCcm, customsValue, customsFee,
-    customsEnteredValue, customsCurrency, customsCurrencyRate, customsEuroRate, customsFeeRange
+    ].join('\n'),
+    parse_mode: 'HTML',
+    reply_markup: customsKeyboard([], back)
   });
+  await setCustomsState(env, chatId, {
+    ...previous,
+    stage: 'catalog-input', mode, customsDuty, customsCcm, customsValue, customsFee,
+    customsEnteredValue, customsCurrency, customsCurrencyRate, customsEuroRate, customsFeeRange,
+    cleanupMessageIds: mergeCustomsMessageIds(previous?.cleanupMessageIds, sent.message_id)
+  });
+  return sent;
 }
 
 async function sendUnder3CatalogPrompt(env, chatId, userId = chatId, notice = '') {
