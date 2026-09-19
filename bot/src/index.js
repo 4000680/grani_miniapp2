@@ -692,15 +692,11 @@ async function deleteBotMessage(env, chatId, messageId, label = 'Temporary messa
 async function discardWorkingCard(env, message, userId = message?.chat?.id) {
   if (!message?.from?.is_bot) return;
   await releaseTemporaryMessage(env, userId, message.message_id);
-  await deleteBotMessage(env, message.chat.id, message.message_id, 'Working card cleanup');
 }
 
 async function cleanupTemporaryMessages(env, userId, chatId, exceptMessageId = null) {
-  const state = await getMessageFlowState(env, userId);
-  for (const messageId of mergeTemporaryMessageIds(state?.temporaryMessageIds)) {
-    if (messageId === exceptMessageId) continue;
-    await deleteBotMessage(env, chatId, messageId);
-  }
+  // Рабочие карточки остаются в истории: очищаем только служебную привязку
+  // к текущему сценарию, а не сообщения пользователя или бота.
   if (exceptMessageId) await setMessageFlowState(env, userId, { temporaryMessageIds: [exceptMessageId] });
   else await clearMessageFlowState(env, userId);
 }
@@ -720,15 +716,8 @@ async function trackCustomsMessages(env, userId, state, ...messageIds) {
 }
 
 async function cleanupCustomsMessages(env, userId, chatId, exceptMessageId = null) {
-  const state = await getCustomsState(env, userId);
-  for (const messageId of mergeCustomsMessageIds(state?.cleanupMessageIds)) {
-    if (messageId === exceptMessageId) continue;
-    try {
-      await telegram(env, 'deleteMessage', { chat_id: chatId, message_id: messageId });
-    } catch (error) {
-      console.warn('Customs message cleanup:', error.message || error);
-    }
-  }
+  // Подтверждения и шаги таможенного расчёта — часть истории расчёта.
+  // При переходе сбрасываем только состояние сценария.
   await clearCustomsState(env, userId);
 }
 
@@ -2502,7 +2491,6 @@ async function handleCatalogCallback(env, query) {
         await sendUnder3CatalogPrompt(env, message.chat.id, userId);
         return;
       }
-      await telegram(env, 'deleteMessage', { chat_id: message.chat.id, message_id: message.message_id });
       await sendCustomsCatalogPrompt(
         env,
         message.chat.id,
@@ -2539,10 +2527,6 @@ async function handleCatalogCallback(env, query) {
   }
   if (query.data === 'catalog:back:weight') {
     if (!sourceParsed) throw new Error('Не удалось восстановить запрос для выбора массы');
-    await telegram(env, 'deleteMessage', {
-      chat_id: message.chat.id,
-      message_id: message.message_id
-    });
     await sendCatalogWeightPrompt(env, message.chat.id, sourceParsed);
     return;
   }
@@ -2885,7 +2869,6 @@ async function handleCalculationCallback(env, query) {
   }
   if (query.data === 'calc:menu') {
     await releaseTemporaryMessage(env, userId, message.message_id);
-    await deleteBotMessage(env, message.chat.id, message.message_id, 'Working card cleanup');
     await sendMenu(env, message.chat.id);
     return;
   }
@@ -2958,7 +2941,7 @@ async function handleUpdate(env, update) {
   if (query.data?.startsWith('catalog:')) await handleCatalogCallback(env, query);
   else if (query.data?.startsWith('customs:')) await handleCustomsCallback(env, query);
   else if (query.data?.startsWith('calc:')) await handleCalculationCallback(env, query);
-  else if (query.data === 'menu') await editMenu(env, query.message);
+  else if (query.data === 'menu') await sendMenu(env, query.message.chat.id);
   else if (query.data?.startsWith('info:')) await showInfo(env, query.message, query.data.slice(5));
 }
 
