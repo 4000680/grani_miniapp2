@@ -51,16 +51,17 @@ test('electric customs flow asks for currency before the amount', () => {
   assert.match(workerSource, /stage: 'catalog-input', mode: 'electric'/);
 });
 
-test('every customs value flow asks for currency and converts to rubles', () => {
-  for (const flow of ['under3', 'over3', 'pickup']) {
+test('стоимость вводится в валюте только там, где она влияет на платежи', () => {
+  for (const flow of ['under3', 'pickup']) {
     assert.match(workerSource, new RegExp(`customs:currency:\\$\\{flow\\}`));
     assert.match(workerSource, new RegExp(`sendCustomsCurrencyPrompt\\(env, [^;]+, '${flow}'`, 's'));
   }
   assert.match(workerSource, /stage: `\$\{flow\}-currency`/);
   assert.match(workerSource, /valueStage = \{/);
   assert.match(workerSource, /under3: 'under3-selected-value'/);
-  assert.match(workerSource, /over3: 'over3-value'/);
   assert.match(workerSource, /pickup: 'pickup-value'/);
+  assert.match(workerSource, /stage: 'over3-fee'/);
+  assert.match(workerSource, /OVER3_CUSTOMS_FEE_BRACKETS/);
   assert.match(workerSource, /resolveCustomsValue\(enteredValue, currency\.code\)/);
   assert.match(workerSource, /customsValueLines\(enteredValue, currency, valueDetails\.currencyRate, value\)/);
   assert.doesNotMatch(workerSource, /Укажите предполагаемую стоимость (?:автомобиля|пикапа) в рублях/);
