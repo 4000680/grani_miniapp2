@@ -81,10 +81,14 @@ test('пикап выбирается по шаблону СЭП, а не по �
   assert.doesNotMatch(source, /Укажите полную технически допустимую массу по шильдику/);
 });
 
-test('возраст пикапа выбирается после модели по полным годам на дату оформления', () => {
+test('возраст пикапа уточняется только для пограничных годов', () => {
   assert.match(source, /async function sendPickupAgePrompt/);
-  assert.match(source, /Для точного расчёта важно определить возраст на дату таможенного оформления/);
-  assert.match(source, /Сколько полных лет будет автомобилю на эту дату/);
+  assert.match(source, /function pickupAgeResolution/);
+  assert.match(source, /if \(ageInYears < 3\) return \{ ageGroup: '0-3' \}/);
+  assert.match(source, /if \(ageInYears === 3\) return \{ choices: \[\['0-3'/);
+  assert.match(source, /if \(ageInYears === 5\) return \{ choices: \[\['3-5'/);
+  assert.match(source, /if \(ageInYears === 7\) return \{ choices: \[\['5-7'/);
+  assert.match(source, /Укажите, сколько полных лет автомобилю по дате выпуска на дату таможенного оформления/);
   assert.match(source, /stage: 'pickup-age'/);
   assert.match(source, /stage: 'pickup-fuel'/);
 });
@@ -96,4 +100,12 @@ test('пикап объясняет запрос объёма и показыв�
   assert.match(source, /Таможенная пошлина \(ставка/);
   assert.match(source, /Объём двигателя:<\/b> \$\{ccm\} см³/);
   assert.doesNotMatch(source, /Ввозная пошлина: \$\{formatMoney\(result\.duty\)\}/);
+});
+
+test('результат пикапа позволяет исправить стоимость и принимает сокращённый ввод', () => {
+  assert.match(source, /function pickupCustomsResultKeyboard/);
+  assert.match(source, /customs:pickup:edit:/);
+  assert.match(source, /Исправьте предполагаемую таможенную стоимость пикапа/);
+  assert.match(source, /Можно написать: 8 млн, 8m, 500 тыс\. или 800 000/);
+  assert.match(source, /parseCurrencyAmount\(message\.text\)/);
 });
