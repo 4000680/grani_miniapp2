@@ -44,3 +44,16 @@ test('чистый электромобиль сразу переводится 
   assert.match(source, /customs:electric:route:/);
   assert.match(source, /showElectricCustomsCurrencyPrompt/);
 });
+
+test('для автомобилей старше 3 лет таможенный сбор выбирается по шести диапазонам', () => {
+  assert.match(source, /const OVER3_CUSTOMS_FEE_BRACKETS = \[/);
+  assert.match(source, /450 тыс\. – 1,2 млн ₽/);
+  assert.match(source, /1,2 – 2,7 млн ₽/);
+  assert.match(source, /2,7 – 4,2 млн ₽/);
+  assert.match(source, /4,2 – 5,5 млн ₽/);
+  assert.match(source, /5,5 – 10 млн ₽/);
+  assert.match(source, /Свыше 10 млн ₽/);
+  assert.match(source, /stage: 'over3-fee'/);
+  assert.match(source, /Стоимость на пошлину не влияет/);
+  assert.doesNotMatch(source, /sendCustomsCurrencyPrompt\(env, message\.chat\.id, userId, 'over3'/);
+});
