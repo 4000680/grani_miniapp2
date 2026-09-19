@@ -9,6 +9,7 @@ import {
   convertCurrencyToRub,
   parseCbrCurrencyRate,
   parseCbrEuroRate,
+  parseCurrencyAmount,
   parsePositiveNumber
 } from '../src/customs-calculation.js';
 
@@ -127,12 +128,18 @@ test('пикапы N2 используют ставки утильсбора д�
   );
 });
 
-test('денежные суммы принимаются с пробелами и запятой', () => {
+test('денежные суммы принимаются с пробелами, запятой и сокращениями', () => {
   assert.equal(parsePositiveNumber('2 500 000'), 2500000);
   assert.equal(parsePositiveNumber('97,7626'), 97.7626);
   assert.equal(parsePositiveNumber('30 000 USD'), 30000);
   assert.equal(parsePositiveNumber('50 000 000 ₩'), 50000000);
   assert.equal(parsePositiveNumber('ошибка'), null);
+  assert.equal(parseCurrencyAmount('8 млн'), 8000000);
+  assert.equal(parseCurrencyAmount('8m'), 8000000);
+  assert.equal(parseCurrencyAmount('500 тыс.'), 500000);
+  assert.equal(parseCurrencyAmount('800 000'), 800000);
+  assert.equal(parseCurrencyAmount('8 mln RUB'), 8000000);
+  assert.equal(parseCurrencyAmount('ошибка'), null);
 });
 
 test('курс евро читается из официального XML ЦБ', () => {
