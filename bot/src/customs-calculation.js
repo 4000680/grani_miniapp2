@@ -29,7 +29,9 @@ const PASSENGER_OVER_3 = {
 const PICKUP_UTIL = [
   { maxKg: 2500, newCoefficient: 6.13, oldCoefficient: 8.91 },
   { maxKg: 3500, newCoefficient: 6.60, oldCoefficient: 9.61 },
-  { maxKg: 5000, newCoefficient: 6.91, oldCoefficient: 10.29 }
+  { maxKg: 5000, newCoefficient: 6.91, oldCoefficient: 10.29 },
+  { maxKg: 8000, newCoefficient: 7.20, oldCoefficient: 16.46 },
+  { maxKg: 12000, newCoefficient: 10.20, oldCoefficient: 27.81 }
 ];
 
 const PICKUP_UTIL_BASE = 150000;
@@ -139,7 +141,7 @@ export function calculatePickup({ customsValueRub, fuel, ageGroup, engineCc, max
   const euro = positiveNumber(euroRate, 'Курс евро');
   if (!['petrol', 'diesel'].includes(fuel)) throw new Error('Неизвестный тип топлива');
   if (!['0-3', '3-5', '5-7', '7+'].includes(ageGroup)) throw new Error('Неизвестная возрастная группа');
-  if (mass > 5000) throw new Error('Расчёт поддерживает пикапы полной массой до 5 тонн');
+  if (mass > 12000) throw new Error('Расчёт поддерживает пикапы полной массой до 12 тонн');
 
   let percent = null;
   let euroPerCc = null;
@@ -171,6 +173,7 @@ export function calculatePickup({ customsValueRub, fuel, ageGroup, engineCc, max
   const utilBracket = PICKUP_UTIL.find(item => mass <= item.maxKg);
   const utilCoefficient = ageGroup === '0-3' ? utilBracket.newCoefficient : utilBracket.oldCoefficient;
   const util = PICKUP_UTIL_BASE * utilCoefficient;
+  const category = mass <= 3500 ? 'N1/N1G' : 'N2';
 
   return {
     customsValueRub: roundRubles(value),
@@ -178,6 +181,7 @@ export function calculatePickup({ customsValueRub, fuel, ageGroup, engineCc, max
     ageGroup,
     engineCc: ccm,
     maxMassKg: mass,
+    category,
     percent,
     euroPerCc,
     percentageAmount: percentageAmount == null ? null : roundRubles(percentageAmount),
