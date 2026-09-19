@@ -69,6 +69,8 @@ test('переход к расчёту утильсбора из таможен�
 });
 
 test('пикап выбирается по шаблону СЭП, а не по ручному вводу массы', () => {
+  assert.match(source, /Выбрать пикап/);
+  assert.doesNotMatch(source, /Выберите возраст автомобиля:/);
   assert.match(source, /Введите марку, полную модель и год выпуска пикапа, чтобы я смог подобрать его в шаблоне СЭП/);
   assert.match(source, /source\?\.customsMode === 'pickup'/);
   assert.match(source, /Полную массу возьмём из выбранного варианта/);
@@ -79,10 +81,19 @@ test('пикап выбирается по шаблону СЭП, а не по �
   assert.doesNotMatch(source, /Укажите полную технически допустимую массу по шильдику/);
 });
 
+test('возраст пикапа выбирается после модели по полным годам на дату оформления', () => {
+  assert.match(source, /async function sendPickupAgePrompt/);
+  assert.match(source, /Для точного расчёта важно определить возраст на дату таможенного оформления/);
+  assert.match(source, /Сколько полных лет будет автомобилю на эту дату/);
+  assert.match(source, /stage: 'pickup-age'/);
+  assert.match(source, /stage: 'pickup-fuel'/);
+});
+
 test('пикап объясняет запрос объёма и показывает ставку таможенной пошлины', () => {
   assert.match(source, /В шаблоне СЭП объём двигателя не указан/);
   assert.match(source, /function pickupVolumeExplanation/);
   assert.match(source, /function pickupDutyLabel/);
   assert.match(source, /Таможенная пошлина \(ставка/);
+  assert.match(source, /Объём двигателя:<\/b> \$\{ccm\} см³/);
   assert.doesNotMatch(source, /Ввозная пошлина: \$\{formatMoney\(result\.duty\)\}/);
 });
