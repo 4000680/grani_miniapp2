@@ -67,3 +67,22 @@ test('переход к расчёту утильсбора из таможен�
   assert.match(catalogPrompt, /: 'customs:over3'/);
   assert.match(catalogPrompt, /Введите марку, полную модель и год выпуска автомобиля/);
 });
+
+test('пикап выбирается по шаблону СЭП, а не по ручному вводу массы', () => {
+  assert.match(source, /Введите марку, полную модель и год выпуска пикапа, чтобы я смог подобрать его в шаблоне СЭП/);
+  assert.match(source, /source\?\.customsMode === 'pickup'/);
+  assert.match(source, /Полную массу возьмём из выбранного варианта/);
+  assert.match(source, /customs:pickup:vehicle:/);
+  assert.match(source, /pickupMass: mass/);
+  assert.match(source, /pickupAgeGroup = state\.ageGroup/);
+  assert.match(source, /fuel: state\.fuel/);
+  assert.doesNotMatch(source, /Укажите полную технически допустимую массу по шильдику/);
+});
+
+test('пикап объясняет запрос объёма и показывает ставку таможенной пошлины', () => {
+  assert.match(source, /В шаблоне СЭП объём двигателя не указан/);
+  assert.match(source, /function pickupVolumeExplanation/);
+  assert.match(source, /function pickupDutyLabel/);
+  assert.match(source, /Таможенная пошлина \(ставка/);
+  assert.doesNotMatch(source, /Ввозная пошлина: \$\{formatMoney\(result\.duty\)\}/);
+});
