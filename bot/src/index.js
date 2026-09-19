@@ -61,6 +61,15 @@ const MENU_TEXT = [
   'Функционал бота постоянно пополняется 🎮'
 ].join('\n');
 
+const OVER3_CUSTOMS_FEE_BRACKETS = [
+  { id: '450-1200', label: '450 тыс. – 1,2 млн ₽', fee: 4924 },
+  { id: '1200-2700', label: '1,2 – 2,7 млн ₽', fee: 13541 },
+  { id: '2700-4200', label: '2,7 – 4,2 млн ₽', fee: 18465 },
+  { id: '4200-5500', label: '4,2 – 5,5 млн ₽', fee: 21344 },
+  { id: '5500-10000', label: '5,5 – 10 млн ₽', fee: 49240 },
+  { id: '10000-plus', label: 'Свыше 10 млн ₽', fee: 73860 }
+];
+
 const INFO = {
   pdf: {
     title: '📎 <b>Расчёт по документу</b>',
@@ -933,7 +942,8 @@ async function handleDateReply(env, message) {
 async function sendCustomsCatalogPrompt(
   env, chatId, customsDuty, mode = 'passenger', customsCcm = null,
   customsValue = null, customsFee = null, customsEnteredValue = null,
-  customsCurrency = null, customsCurrencyRate = null, customsEuroRate = null
+  customsCurrency = null, customsCurrencyRate = null, customsEuroRate = null,
+  customsFeeRange = null
 ) {
   return sendCustomsPrompt(env, chatId, [
     mode === 'electric'
@@ -945,7 +955,7 @@ async function sendCustomsCatalogPrompt(
     'Введите марку, полную модель и год выпуска автомобиля.'
   ], 'Марка, модель и год', {
     stage: 'catalog-input', mode, customsDuty, customsCcm, customsValue, customsFee,
-    customsEnteredValue, customsCurrency, customsCurrencyRate, customsEuroRate
+    customsEnteredValue, customsCurrency, customsCurrencyRate, customsEuroRate, customsFeeRange
   });
 }
 
@@ -1054,6 +1064,36 @@ async function sendCustomsCurrencyPrompt(env, chatId, userId, flow, lines, state
   await setCustomsState(env, userId, {
     ...state,
     stage: `${flow}-currency`,
+    cleanupMessageIds: mergeCustomsMessageIds(state?.cleanupMessageIds, sent.message_id)
+  });
+  return sent;
+}
+
+function over3CustomsFeeKeyboard() {
+  return customsKeyboard(
+    OVER3_CUSTOMS_FEE_BRACKETS.map(item => [{
+      text: `${item.label} · ${formatMoney(item.fee)}`,
+      callback_data: `customs:over3:fee:${item.id}`
+    }]),
+    'customs:over3'
+  );
+}
+
+async function sendOver3CustomsFeePrompt(env, chatId, userId, result, state) {
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: [
+      '<b>Пошлина по объёму двигателя рассчитана.</b>',
+      `Сумма пошлины: <b>${formatMoney(result.duty)}</b>`,
+      '',
+      'Стоимость на пошлину не влияет. Выберите диапазон для расчёта таможенного сбора за операции:'
+    ].join('\n'),
+    parse_mode: 'HTML',
+    reply_markup: over3CustomsFeeKeyboard()
+  });
+  await setCustomsState(env, userId, {
+    ...state,
+    stage: 'over3-fee',
     cleanupMessageIds: mergeCustomsMessageIds(state?.cleanupMessageIds, sent.message_id)
   });
   return sent;
@@ -1282,6 +1322,46 @@ async function handleCustomsCallback(env, query) {
       stage: 'over3-volume', ageGroup: over3[1], cleanupMessageIds: [message.message_id]
     });
   }
+  const over3Fee = data.match(/^customs:over3:fee:(450-1200|1200-2700|2700-4200|4200-5500|5500-10000|10000-plus)$/);
+  if (over3Fee) {
+    const userId = query.from?.id || message.chat.id;
+    const state = await getCustomsState(env, userId);
+    const bracket = OVER3_CUSTOMS_FEE_BRACKETS.find(item => item.id === over3Fee[1]);
+    const ccm = parsePositiveNumber(state?.engineCc);
+    const duty = parsePositiveNumber(state?.customsDuty);
+    const rate = parsePositiveNumber(state?.euroRate);
+    const ageGroup = state?.ageGroup;
+    if (!bracket || !ccm || !duty || !rate || !['3-5', '5+'].includes(ageGroup) || state?.stage !== 'over3-fee') {
+      throw new Error('Шаг выбора диапазона устарел. Начните расчёт заново.');
+    }
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    const sent = await telegram(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: [
+        '✅ <b>Таможенный платёж рассчитан</b>',
+        '',
+        `Возраст: ${ageGroup === '3-5' ? 'от 3 до 5 лет' : 'старше 5 лет'}`,
+        `Объём двигателя: ${ccm} см³`,
+        `Диапазон таможенной стоимости: ${bracket.label}`,
+        `Ставка: ${calculatePassengerOver3({ ageGroup, engineCc: ccm, euroRate: rate }).euroPerCc} €/см³`,
+        `<b>Таможенная пошлина: ${formatMoney(duty)}</b>`,
+        `Таможенный сбор за операции: ${formatMoney(bracket.fee)}`,
+        `<b>Таможенные платежи всего: ${formatMoney(duty + bracket.fee)}</b>`,
+        `Курс евро ЦБ РФ: ${rate.toFixed(4)} ₽`,
+        '',
+        '<i>Диапазон используется только для предварительного расчёта сбора. Итоговую таможенную стоимость определяет таможенный орган.</i>'
+      ].join('\n'),
+      parse_mode: 'HTML',
+      reply_markup: customsKeyboard([[{ text: 'Перейти к расчёту утильсбора', callback_data: `customs:catalog:${duty}:${ccm}` }]], 'customs:over3')
+    });
+    await setCustomsState(env, userId, {
+      stage: 'customs-duty-ready', mode: 'passenger', customsDuty: duty,
+      customsCcm: ccm, customsFee: bracket.fee, customsFeeRange: bracket.label,
+      customsEuroRate: rate, euroRate: rate,
+      cleanupMessageIds: [sent.message_id]
+    });
+    return;
+  }
   if (data === 'customs:electric') {
     await cleanupCustomsMessages(env, query.from?.id || message.chat.id, message.chat.id, message.message_id);
     return editCustomsScreen(env, message, [
@@ -1343,7 +1423,8 @@ async function handleCustomsCallback(env, query) {
       env, message.chat.id, Number(catalog[1]), 'passenger', Number(catalog[2]),
       state?.customsValue || null, state?.customsFee || null,
       state?.customsEnteredValue || null, state?.customsCurrency || null,
-      state?.customsCurrencyRate || null, state?.customsEuroRate || null
+      state?.customsCurrencyRate || null, state?.customsEuroRate || null,
+      state?.customsFeeRange || null
     );
   }
   if (data === 'customs:advice') {
@@ -1398,7 +1479,8 @@ async function handleCustomsReply(env, message) {
         state.customsEnteredValue,
         state.customsCurrency,
         state.customsCurrencyRate,
-        state.customsEuroRate
+        state.customsEuroRate,
+        state.customsFeeRange
       );
       return true;
     }
@@ -1407,6 +1489,7 @@ async function handleCustomsReply(env, message) {
     parsed.customsCcm = state.customsCcm;
     parsed.customsValue = state.customsValue;
     parsed.customsFee = state.customsFee;
+    parsed.customsFeeRange = state.customsFeeRange;
     parsed.customsEnteredValue = state.customsEnteredValue;
     parsed.customsCurrency = state.customsCurrency;
     parsed.customsCurrencyRate = state.customsCurrencyRate;
@@ -1416,6 +1499,7 @@ async function handleCustomsReply(env, message) {
       stage: 'catalog-input', mode,
       customsDuty: state.customsDuty, customsCcm: state.customsCcm,
       customsValue: state.customsValue, customsFee: state.customsFee,
+      customsFeeRange: state.customsFeeRange,
       customsEnteredValue: state.customsEnteredValue,
       customsCurrency: state.customsCurrency,
       customsCurrencyRate: state.customsCurrencyRate,
@@ -1529,14 +1613,9 @@ async function handleCustomsReply(env, message) {
     const rate = await euroRate(env);
     const result = calculatePassengerOver3({ ageGroup, engineCc: ccm, euroRate: rate });
     await cleanupCustomsMessages(env, userId, message.chat.id);
-    await sendCustomsCurrencyPrompt(env, message.chat.id, userId, 'over3', [
-      '<b>Пошлина по объёму двигателя рассчитана.</b>',
-      `Сумма пошлины: ${formatMoney(result.duty)}`,
-      '',
-      'Таможенная стоимость нужна для расчёта государственного таможенного сбора.'
-    ], {
+    await sendOver3CustomsFeePrompt(env, message.chat.id, userId, result, {
       ageGroup, engineCc: ccm, customsDuty: result.duty, euroRate: rate
-    }, `customs:over3:${ageGroup}`);
+    });
     return true;
   }
 
@@ -1799,6 +1878,7 @@ function withCustomsState(parsed, state) {
   parsed.customsCcm = state.customsCcm || null;
   parsed.customsValue = state.customsValue || null;
   parsed.customsFee = state.customsFee || null;
+  parsed.customsFeeRange = state.customsFeeRange || null;
   parsed.customsEnteredValue = state.customsEnteredValue || null;
   parsed.customsCurrency = state.customsCurrency || null;
   parsed.customsCurrencyRate = state.customsCurrencyRate || null;
@@ -2062,6 +2142,7 @@ function formatCatalogResult(candidate, vehicle, util, customs = null) {
     } else if (customs.customsValue) {
       lines.push('Таможенная стоимость: ' + formatMoney(customs.customsValue));
     }
+    if (customs.customsFeeRange) lines.push('Выбранный диапазон: ' + customs.customsFeeRange);
     lines.push('Таможенная пошлина: ' + formatMoney(customs.customsPayments));
     if (customs.euroRate) lines.push('Курс евро ЦБ РФ: ' + Number(customs.euroRate).toFixed(4) + ' ₽');
     lines.push('Таможенный сбор за операции: ' + formatMoney(customs.customsFee));
@@ -2418,7 +2499,8 @@ async function handleCatalogCallback(env, query) {
         sourceParsed.customsEnteredValue,
         sourceParsed.customsCurrency,
         sourceParsed.customsCurrencyRate,
-        sourceParsed.customsEuroRate
+        sourceParsed.customsEuroRate,
+        sourceParsed.customsFeeRange
       );
       return;
     }
@@ -2555,6 +2637,7 @@ async function handleCatalogCallback(env, query) {
     customsFee: Number(sourceParsed.customsFee) || (sourceParsed.customsValue
       ? calculateCustomsProcessingFee(sourceParsed.customsValue)
       : 0),
+    customsFeeRange: sourceParsed.customsFeeRange || null,
     enteredValue: Number(sourceParsed.customsEnteredValue) || null,
     currency: electricCustomsCurrency(sourceParsed.customsCurrency),
     currencyRate: sourceParsed.customsCurrencyRate || null,
