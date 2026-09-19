@@ -93,6 +93,40 @@ test('пикап: бензин до 3 лет и дизель старше 7 ле
   );
 });
 
+test('пикапы N2 используют ставки утильсбора для диапазонов 5–8 и 8–12 тонн', () => {
+  const fiveToEight = calculatePickup({
+    customsValueRub: 3000000,
+    fuel: 'petrol',
+    ageGroup: '0-3',
+    engineCc: 3000,
+    maxMassKg: 6000,
+    euroRate: EURO
+  });
+  assert.deepEqual(
+    { category: fiveToEight.category, utilCoefficient: fiveToEight.utilCoefficient, util: fiveToEight.util },
+    { category: 'N2', utilCoefficient: 7.20, util: 1080000 }
+  );
+
+  const eightToTwelve = calculatePickup({
+    customsValueRub: 3000000,
+    fuel: 'diesel',
+    ageGroup: '7+',
+    engineCc: 3000,
+    maxMassKg: 9000,
+    euroRate: EURO
+  });
+  assert.deepEqual(
+    { category: eightToTwelve.category, utilCoefficient: eightToTwelve.utilCoefficient, util: eightToTwelve.util },
+    { category: 'N2', utilCoefficient: 27.81, util: 4171500 }
+  );
+  assert.throws(
+    () => calculatePickup({
+      customsValueRub: 3000000, fuel: 'petrol', ageGroup: '0-3', engineCc: 3000, maxMassKg: 12001, euroRate: EURO
+    }),
+    /до 12 тонн/
+  );
+});
+
 test('денежные суммы принимаются с пробелами и запятой', () => {
   assert.equal(parsePositiveNumber('2 500 000'), 2500000);
   assert.equal(parsePositiveNumber('97,7626'), 97.7626);
