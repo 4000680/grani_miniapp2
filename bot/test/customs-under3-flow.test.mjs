@@ -57,3 +57,13 @@ test('для автомобилей старше 3 лет таможенный �
   assert.match(source, /Стоимость на пошлину не влияет/);
   assert.doesNotMatch(source, /sendCustomsCurrencyPrompt\(env, message\.chat\.id, userId, 'over3'/);
 });
+
+test('переход к расчёту утильсбора из таможенного расчёта имеет кнопку назад', () => {
+  const catalogPrompt = source.slice(
+    source.indexOf('async function sendCustomsCatalogPrompt'),
+    source.indexOf('async function sendUnder3CatalogPrompt')
+  );
+  assert.match(catalogPrompt, /reply_markup: customsKeyboard\(\[], back\)/);
+  assert.match(catalogPrompt, /: 'customs:over3'/);
+  assert.match(catalogPrompt, /Введите марку, полную модель и год выпуска автомобиля/);
+});
