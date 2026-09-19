@@ -1,8 +1,18 @@
 import { extractTextItems, getDocumentProxy } from 'unpdf';
 import { UTIL_RATES } from './rates-data.js';
 import '../../shared/vehicle-power.js';
+import '../../shared/sbkts-power-parser.js';
 
 const { analyzeVehiclePower } = globalThis.GraniVehiclePower;
+const { parseSbktsPowerData } = globalThis.GraniSbktsPower;
+
+export class DocumentProcessingError extends Error {
+  constructor(code, message, cause = null) {
+    super(message, cause ? { cause } : undefined);
+    this.name = 'DocumentProcessingError';
+    this.code = code;
+  }
+}
 
 const DAY = 24 * 60 * 60 * 1000;
 const RU_MONTHS = {
@@ -51,7 +61,8 @@ function groupLines(items) {
 }
 
 export async function readPdf(bytes) {
-  const pdf = await getDocumentProxy(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+  const data = bytes?.constructor === Uint8Array ? bytes : new Uint8Array(bytes);
+  const pdf = await getDocumentProxy(data);
   const { items } = await extractTextItems(pdf);
   const pages = items.map(groupLines);
   return { pages, text: pages.flat().map(line => line.text).join('\n') };
@@ -86,7 +97,6 @@ function monthNumber(word) {
 function parseSbkts(document) {
   const first = document.pages[0] || [];
   const second = document.pages[1] || [];
-  const third = document.pages[2] || [];
   const brand = pageValue(first, /^МАРКА(?:\s|$)/i, 180);
   const model = pageValue(first, /^КОММЕРЧЕСКОЕ(?:\s|$)/i, 180);
   const vin = pageValue(first, /^ИДЕНТИФИКАЦИОННЫЙ(?:\s|$)/i, 180);
@@ -94,23 +104,38 @@ function parseSbkts(document) {
   const year = numberValue(first, /^ГОД ВЫПУСКА(?:\s|$)/i, 180);
   const category = pageValue(first, /^КАТЕГОРИЯ(?:\s|$)/i, 180)?.match(/[A-ZА-Я]\d/i)?.[0]?.toUpperCase();
   const ccm = numberValue(second, /рабочий объем цилиндров/i, 180);
-  const combustionKw = numberValue(second, /максимальная мощность, кВт/i, 180);
   const maxMass = numberValue(second, /Технически допустимая/i, 180);
-  const electricLabel = third.find(line => /Максимальная 30-минутная/i.test(line.text));
-  const electricKw = electricLabel
-    ? third.filter(line => line.y <= electricLabel.y + 2 && line.y >= electricLabel.y - 50)
-        .flatMap(line => line.items.filter(item => item.x >= 180 && /^\d+(?:[.,]\d+)?$/.test(item.str)))
-        .map(item => Number(item.str.replace(',', '.')))
-    : [];
-  const electric30MinKw = round2(electricKw.reduce((sum, value) => sum + value, 0));
+  const parsedPower = parseSbktsPowerData(document.text);
+  const combustionKw = parsedPower.engineMaxKw;
+  const electricKw = parsedPower.electric30MinKw;
+  const electric30MinKw = parsedPower.electric30MinKwTotal;
   const power = analyzeVehiclePower(document.text, { engineKw: combustionKw, electric30MinKw });
+  const powerErrorCode = parsedPower.ambiguousFields.length
+    ? 'POWER_DATA_AMBIGUOUS'
+    : power.errorCode;
+  const powerError = parsedPower.ambiguousFields.length
+    ? 'В документе найдено несколько разных значений мощности ДВС — требуется проверка'
+    : power.error;
+  console.info('sbkts_power_parse', JSON.stringify({
+    documentType: 'sbkts',
+    hybridTypeSource: power.hybridTypeSource,
+    hybridType: power.hybridType,
+    engineMaxKw: combustionKw,
+    electricMaxKw: parsedPower.electricMaxKw,
+    electric30MinKw: electricKw,
+    electric30MinKwTotal: electric30MinKw,
+    calculatedKw: power.calculatedKw,
+    errorCode: powerErrorCode || null
+  }));
   return {
     type: 'sbkts', brand, model, vin, surname: applicant?.split(/\s+/)[0] || null,
-    year, category, ccm, combustionKw, engineKw: combustionKw, electricKw, electric30MinKw,
+    year, category, ccm, combustionKw, engineKw: combustionKw,
+    engineMaxKw: combustionKw, electricMaxKw: parsedPower.electricMaxKw,
+    electricKw, electric30MinKwList: electricKw, electric30MinKw,
     calculatedKw: power.calculatedKw, totalKw: power.calculatedKw,
     maxMass, issueDate: parseRussianDateFromText(document.text),
     hybridType: power.hybridType, hybridTypeSource: power.hybridTypeSource,
-    powerError: power.error
+    powerError, powerErrorCode
   };
 }
 
@@ -151,7 +176,7 @@ export function parseVehicleDocument(document) {
   const compact = normalize(document.text);
   if (/СВИДЕТЕЛЬСТВО О БЕЗОПАСНОСТИ КОНСТРУКЦИИ/i.test(compact)) return parseSbkts(document);
   if (/Выписка\s+из электронного паспорта транспортного средства/i.test(compact)) return parseEpts(document);
-  throw new Error('Документ не похож на СБКТС или выписку ЭПТС');
+  throw new DocumentProcessingError('DOCUMENT_TYPE_NOT_DETECTED', 'Документ не похож на СБКТС или выписку ЭПТС');
 }
 
 function round2(value) { return Math.round(value * 100) / 100; }
@@ -175,7 +200,7 @@ function rateRow(payer, kw, ccm) {
 
 export function calculateUtil(vehicle, now = new Date()) {
   if (vehicle.category !== 'M1') throw new Error(`Категория ${vehicle.category || 'не определена'} пока не поддерживается`);
-  if (vehicle.powerError) throw new Error(vehicle.powerError);
+  if (vehicle.powerError) throw new DocumentProcessingError(vehicle.powerErrorCode || 'CALCULATION_ERROR', vehicle.powerError);
   if (!vehicle.year || !vehicle.totalKw) throw new Error('Не удалось определить год или расчётную мощность');
   const calculationCcm = ['series', 'ev'].includes(vehicle.hybridType) ? null : vehicle.ccm;
   const commercial = rateRow('commercial', vehicle.totalKw, calculationCcm);
@@ -186,6 +211,17 @@ export function calculateUtil(vehicle, now = new Date()) {
     commercial: age === 'new' ? commercial.sumNew : commercial.sumOld,
     personal: age === 'new' ? personal.sumNew : personal.sumOld
   }));
+}
+
+export async function processVehicleDocument(bytes, now = new Date()) {
+  const document = await readPdf(bytes);
+  if (document.text.replace(/\s/g, '').length < 40) {
+    throw new DocumentProcessingError('PDF_NO_TEXT', 'В PDF нет текстового слоя');
+  }
+  const vehicle = parseVehicleDocument(document);
+  const util = calculateUtil(vehicle, now);
+  const deadline = vehicle.issueDate ? addWorkingDays(vehicle.issueDate, 5) : null;
+  return { document, vehicle, util, deadline };
 }
 
 export function parseFlexibleDate(input) {

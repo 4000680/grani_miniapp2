@@ -45,3 +45,12 @@ test('user messages are not registered for automatic cleanup', () => {
   assert.doesNotMatch(initialTracking, /message\.message_id/);
   assert.match(initialTracking, /message\.reply_to_message\?\.message_id/);
 });
+
+test('controlled document errors keep retry, back and main-menu navigation', () => {
+  assert.match(workerSource, /📎 Загрузить документ заново/);
+  assert.match(workerSource, /callback_data: 'calc:retry:document'/);
+  assert.match(workerSource, /callback_data: 'calc:back:document'/);
+  assert.match(workerSource, /Отправьте СБКТС или выписку ЭПТС в формате PDF\./);
+  assert.match(workerSource, /showInfo\(env, message, 'pdf'\)/);
+  assert.doesNotMatch(workerSource, /Убедитесь, что это СБКТС или выписка ЭПТС с текстовым слоем/);
+});

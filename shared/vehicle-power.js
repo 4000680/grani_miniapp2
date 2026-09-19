@@ -50,23 +50,38 @@
     const hybridType = values.hybridType || null;
     let calculatedKw = null;
     let error = null;
+    let errorCode = null;
 
     if (['parallel', 'parallel-series', 'series-parallel'].includes(hybridType)) {
-      if (!engineKw || !electric30MinKw) error = 'Не удалось определить обе мощности параллельной силовой установки';
+      if (!engineKw) {
+        errorCode = 'ENGINE_POWER_NOT_DETECTED';
+        error = 'Не удалось определить максимальную мощность ДВС';
+      } else if (!electric30MinKw) {
+        errorCode = 'ELECTRIC_30MIN_POWER_NOT_DETECTED';
+        error = 'Не удалось определить 30-минутную мощность электромашины';
+      }
       else calculatedKw = round2(engineKw + electric30MinKw);
     } else if (hybridType === 'series' || hybridType === 'ev') {
-      if (!electric30MinKw) error = 'Не удалось определить 30-минутную мощность электромашины';
+      if (!electric30MinKw) {
+        errorCode = 'ELECTRIC_30MIN_POWER_NOT_DETECTED';
+        error = 'Не удалось определить 30-минутную мощность электромашины';
+      }
       else calculatedKw = round2(electric30MinKw);
     } else if (hybridType === 'combustion') {
-      if (!engineKw) error = 'Не удалось определить мощность двигателя';
+      if (!engineKw) {
+        errorCode = 'ENGINE_POWER_NOT_DETECTED';
+        error = 'Не удалось определить мощность двигателя';
+      }
       else calculatedKw = round2(engineKw);
     } else if (hybridType === 'unknown-hybrid') {
+      errorCode = 'HYBRID_TYPE_NOT_DETECTED';
       error = 'Тип силовой установки требует уточнения: в СБКТС не удалось надёжно определить параллельную или последовательную схему';
     } else {
+      errorCode = 'HYBRID_TYPE_NOT_DETECTED';
       error = 'Не удалось определить тип силовой установки';
     }
 
-    return { engineKw: engineKw || null, electric30MinKw: electric30MinKw || null, calculatedKw, hybridType, error };
+    return { engineKw: engineKw || null, electric30MinKw: electric30MinKw || null, calculatedKw, hybridType, error, errorCode };
   }
 
   function analyzeVehiclePower(text, values = {}) {

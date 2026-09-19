@@ -7,6 +7,7 @@
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="../../application-api.js"></script>
 <script src="../../shared/vehicle-power.js"></script>
+<script src="../../shared/sbkts-power-parser.js"></script>
 <script src="../../shared/catalog-match.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -876,17 +877,13 @@ function parseSbkts(text){
   m = text.match(/рабочий объем цилиндров,[\s\S]{0,20}?(\d+)/);
   if(m) result.ccm = parseInt(m[1]);
 
-  // между "кВт" и числом мощности часто идёт разорванная по строкам подпись "(мин-1)"
-  m = text.match(/максимальная мощность,[\s\S]{0,60}?\)\s*[\r\n]*\s*(\d+(?:[.,]\d+)?)\s*\(/);
-  if(m) result.kw = parseFloat(m[1].replace(',', '.'));
-
-  // Максимальная 30-минутная мощность электромоторов (гибриды/электро) — может быть
-  // от одного до нескольких моторов: после метки идут несколько чисел ПОДРЯД, каждое
-  // на отдельной строке (по одному на мотор), собираем все и суммируем
-  result.electricKwList = extractAllNumbersAfterLabel(text, /Максимальная\s+30-минутная\s*мощность,\s*кВт/i);
-  if(result.electricKwList.length > 0){
-    result.electricKw = result.electricKwList.reduce((a,b)=>a+b, 0);
-  }
+  const parsedPower = GraniSbktsPower.parseSbktsPowerData(text);
+  result.kw = parsedPower.engineMaxKw;
+  result.engineMaxKw = parsedPower.engineMaxKw;
+  result.electricMaxKwList = parsedPower.electricMaxKw;
+  result.electricKwList = parsedPower.electric30MinKw;
+  result.electricKw = parsedPower.electric30MinKwTotal;
+  result.electric30MinKwTotal = parsedPower.electric30MinKwTotal;
 
   m = text.match(/Топливо\s+(\S+)/);
   if(m) result.fuel = m[1].trim();
@@ -903,27 +900,14 @@ function parseSbkts(text){
   result.hybridType = power.hybridType;
   result.hybridTypeSource = power.hybridTypeSource;
   result.powerError = power.error;
+  result.powerErrorCode = parsedPower.ambiguousFields.length
+    ? 'POWER_DATA_AMBIGUOUS'
+    : power.errorCode;
+  if(parsedPower.ambiguousFields.length){
+    result.powerError = 'В документе найдено несколько разных значений мощности ДВС — требуется проверка';
+  }
 
   return result;
-}
-
-// собирает все числа, идущие подряд (каждое на своей строке) сразу после метки —
-// используется для полей, где может быть 1, 2, 3 и более значений (моторы гибрида)
-function extractAllNumbersAfterLabel(text, labelRegex, maxLines){
-  maxLines = maxLines || 10;
-  const m = labelRegex.exec(text);
-  if(!m) return [];
-  const rest = text.slice(m.index + m[0].length);
-  const lines = rest.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s.length>0);
-  const nums = [];
-  for(let i=0; i<Math.min(lines.length, maxLines); i++){
-    if(/^\d+(?:[.,]\d+)?$/.test(lines[i])){
-      nums.push(parseFloat(lines[i].replace(',', '.')));
-    } else {
-      break;
-    }
-  }
-  return nums;
 }
 
 function resolveEngineForUtil(parsed){
@@ -1075,7 +1059,12 @@ function formatSbktsSummary(parsed, engine, calc, deadline){
   html += `<br><b>Объём двигателя:</b> ${engine.ccm ? engine.ccm + ' см³' : 'не используется'}<br>`;
   if(parsed.kw) html += `<b>Мощность ДВС:</b> ${parsed.kw} кВт<br>`;
   if(['series','ev'].includes(parsed.hybridType) && parsed.kw) html += `Мощность ДВС в расчёте не учитывается<br>`;
-  if(parsed.electric30MinKw) html += `<b>30-минутная мощность электромотора:</b> ${parsed.electric30MinKw} кВт<br>`;
+  if(parsed.electric30MinKw){
+    const electricDetails = parsed.electricKwList && parsed.electricKwList.length > 1
+      ? `${parsed.electricKwList.join(' + ')} = ${parsed.electric30MinKw}`
+      : parsed.electric30MinKw;
+    html += `<b>30-минутная мощность электромотора:</b> ${electricDetails} кВт<br>`;
+  }
   html += `<b>Расчётная мощность:</b> ${engine.kw} кВт<br>`;
   if(engine.note) html += `<i>${escapeHtml(engine.note)}</i><br>`;
   html += `<br>`;

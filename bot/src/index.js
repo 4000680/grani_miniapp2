@@ -15,9 +15,9 @@ import {
   addWorkingDays,
   calculatePeni,
   calculateUtil,
+  DocumentProcessingError,
   parseFlexibleDate,
-  parseVehicleDocument,
-  readPdf,
+  processVehicleDocument,
   todayUtc
 } from './document-processing.js';
 import {
@@ -504,7 +504,11 @@ function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(
     lines.push('Мощность ДВС в расчёте не учитывается');
   }
   if (vehicle.electric30MinKw) {
-    lines.push(`<b>30-минутная мощность электромотора:</b> ${vehicle.electric30MinKw} кВт`);
+    const electricParts = vehicle.electric30MinKwList || vehicle.electricKw || [];
+    const electricDetails = electricParts.length > 1
+      ? `${electricParts.join(' + ')} = ${vehicle.electric30MinKw}`
+      : String(vehicle.electric30MinKw);
+    lines.push(`<b>30-минутная мощность электромотора:</b> ${electricDetails} кВт`);
   }
   if (['parallel', 'parallel-series', 'series-parallel'].includes(vehicle.hybridType)) {
     lines.push(`<b>Расчётная мощность:</b> ${vehicle.engineKw || vehicle.combustionKw} + ${vehicle.electric30MinKw} = ${vehicle.totalKw} кВт`);
@@ -805,6 +809,37 @@ function calculationWorkKeyboard() {
       { text: '🏠 Главное меню', callback_data: 'calc:menu' }
     ]]
   };
+}
+
+function documentErrorKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '📎 Загрузить документ заново', callback_data: 'calc:retry:document' }],
+      [
+        { text: '⬅️ Назад', callback_data: 'calc:back:document' },
+        { text: '🏠 Главное меню', callback_data: 'calc:menu' }
+      ]
+    ]
+  };
+}
+
+function documentUploadKeyboard() {
+  return {
+    inline_keyboard: [[
+      { text: '⬅️ Назад', callback_data: 'calc:back:document' },
+      { text: '🏠 Главное меню', callback_data: 'calc:menu' }
+    ]]
+  };
+}
+
+function controlledDocumentError(error) {
+  if (error instanceof DocumentProcessingError) return error;
+  return new DocumentProcessingError('CALCULATION_ERROR', error?.message || String(error), error);
+}
+
+function documentErrorText(error) {
+  const controlled = controlledDocumentError(error);
+  return `Не удалось обработать документ: ${escapeHtml(controlled.message)}.`;
 }
 
 async function sendIssueDatePrompt(env, chatId, cases, notice = '') {
@@ -2541,14 +2576,22 @@ async function handleDocument(env, message) {
   if (!isPdf) {
     const userId = message.from?.id || message.chat.id;
     await cleanupTemporaryMessages(env, userId, message.chat.id);
-    const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Пожалуйста, отправьте документ в формате PDF.' });
+    const sent = await telegram(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: 'Пожалуйста, отправьте документ в формате PDF.',
+      reply_markup: documentErrorKeyboard()
+    });
     await trackTemporaryMessage(env, userId, sent.message_id);
     return;
   }
   if (document.file_size > 20 * 1024 * 1024) {
     const userId = message.from?.id || message.chat.id;
     await cleanupTemporaryMessages(env, userId, message.chat.id);
-    const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Файл больше 20 МБ. Telegram не позволяет боту скачать такой документ.' });
+    const sent = await telegram(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: 'Файл больше 20 МБ. Telegram не позволяет боту скачать такой документ.',
+      reply_markup: documentErrorKeyboard()
+    });
     await trackTemporaryMessage(env, userId, sent.message_id);
     return;
   }
@@ -2561,13 +2604,8 @@ async function handleDocument(env, message) {
     const file = await telegram(env, 'getFile', { file_id: document.file_id });
     const response = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`);
     if (!response.ok) throw new Error('Telegram не отдал файл для скачивания');
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    const parsedDocument = await readPdf(bytes);
-    if (parsedDocument.text.replace(/\s/g, '').length < 40) throw new Error('В PDF нет текстового слоя');
-    const vehicle = parseVehicleDocument(parsedDocument);
-    const util = calculateUtil(vehicle);
+    const { vehicle, util, deadline } = await processVehicleDocument(new Uint8Array(await response.arrayBuffer()));
     const cases = peniCases(util);
-    const deadline = vehicle.issueDate ? addWorkingDays(vehicle.issueDate, 5) : null;
     const result = formatDocumentResult(vehicle, util, deadline);
     await saveApplication(env, message.from?.id, applicationFromVehicle(vehicle, util));
     await telegram(env, 'editMessageText', {
@@ -2581,11 +2619,18 @@ async function handleDocument(env, message) {
     await releaseTemporaryMessage(env, userId, status.message_id);
     if (!vehicle.issueDate) await sendIssueDatePrompt(env, message.chat.id, cases);
   } catch (error) {
+    const controlled = controlledDocumentError(error);
+    console.error('document_processing_error', JSON.stringify({
+      documentType: 'sbkts-or-epts',
+      code: controlled.code,
+      message: controlled.message
+    }));
     await telegram(env, 'editMessageText', {
       chat_id: message.chat.id,
       message_id: status.message_id,
-      text: `Не удалось обработать документ: ${escapeHtml(error.message || error)}. Убедитесь, что это СБКТС или выписка ЭПТС с текстовым слоем.`,
-      parse_mode: 'HTML'
+      text: documentErrorText(controlled),
+      parse_mode: 'HTML',
+      reply_markup: documentErrorKeyboard()
     });
   }
 }
@@ -2642,11 +2687,7 @@ async function handleGroupCalculation(env, query) {
     const file = await telegram(env, 'getFile', { file_id: document.file_id });
     const response = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`);
     if (!response.ok) throw new Error('Telegram не отдал файл для скачивания');
-    const parsedDocument = await readPdf(new Uint8Array(await response.arrayBuffer()));
-    if (parsedDocument.text.replace(/\s/g, '').length < 40) throw new Error('В PDF нет текстового слоя');
-    const vehicle = parseVehicleDocument(parsedDocument);
-    const util = calculateUtil(vehicle);
-    const deadline = vehicle.issueDate ? addWorkingDays(vehicle.issueDate, 5) : null;
+    const { vehicle, util, deadline } = await processVehicleDocument(new Uint8Array(await response.arrayBuffer()));
     await saveApplication(env, query.from?.id, applicationFromVehicle(vehicle, util));
     await telegram(env, 'editMessageText', {
       chat_id: botMessage.chat.id,
@@ -2657,10 +2698,16 @@ async function handleGroupCalculation(env, query) {
     });
     await sendDocumentIdentity(env, botMessage.chat.id, vehicle, sourceMessage.message_id).catch(() => null);
   } catch (error) {
+    const controlled = controlledDocumentError(error);
+    console.error('group_document_processing_error', JSON.stringify({
+      documentType: 'sbkts-or-epts',
+      code: controlled.code,
+      message: controlled.message
+    }));
     await telegram(env, 'editMessageText', {
       chat_id: botMessage.chat.id,
       message_id: botMessage.message_id,
-      text: `Не удалось обработать документ: ${escapeHtml(error.message || error)}. Убедитесь, что это СБКТС или выписка ЭПТС с текстовым слоем.`,
+      text: documentErrorText(controlled),
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [] }
     });
@@ -2749,6 +2796,21 @@ async function handleCalculationCallback(env, query) {
     await trackTemporaryMessage(env, userId, message.message_id);
     return;
   }
+  if (query.data === 'calc:retry:document') {
+    await cleanupTemporaryMessages(env, userId, message.chat.id, message.message_id);
+    await telegram(env, 'editMessageText', {
+      chat_id: message.chat.id,
+      message_id: message.message_id,
+      text: 'Отправьте СБКТС или выписку ЭПТС в формате PDF.',
+      reply_markup: documentUploadKeyboard()
+    });
+    await trackTemporaryMessage(env, userId, message.message_id);
+    return;
+  }
+  if (query.data === 'calc:back:document') {
+    await showInfo(env, message, 'pdf');
+    return;
+  }
   const match = query.data.match(/^calc:peni:(\d{4}-\d{2}-\d{2}):([\d,]+)$/);
   if (!match) return;
   const deadline = parseFlexibleDate(match[1]);
@@ -2825,7 +2887,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'hybrid-search-v18' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'sbkts-power-parser-v19' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
