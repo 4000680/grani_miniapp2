@@ -333,6 +333,23 @@ function customsResultKeyboard(firstRow = null) {
 }
 
 const CUSTOMS_EXPENSES_NOTE = '<i>Расчёт предварительный. Дополнительные расходы не включены: услуги таможенного представителя, доставка, СВХ, оформление СБКТС и ЭПТС.</i>';
+const KW_TO_HP = 1.35962;
+
+function formatPower(kw) {
+  const kilowatts = Number(kw) || 0;
+  return `${kilowatts} кВт (${Math.round(kilowatts * KW_TO_HP)} л. с.)`;
+}
+
+function combustionPowerLines(candidate, vehicle) {
+  const combustionKw = Number(candidate?.combustionKw || vehicle?.combustionKw) || 0;
+  const electricKw = Number(candidate?.electricKw) || 0;
+  if (!combustionKw || !electricKw) return [`<b>Мощность для расчёта:</b> ${formatPower(vehicle.totalKw)}`];
+  return [
+    `<b>Мощность ДВС:</b> ${formatPower(combustionKw)}`,
+    `<b>30-минутная мощность электромотора:</b> ${formatPower(electricKw)}`,
+    `<b>Расчётная мощность:</b> ${combustionKw} + ${electricKw} = ${formatPower(vehicle.totalKw)}`
+  ];
+}
 
 function appendCustomsUtilSummary(lines, item, baseTotal) {
   lines.push(`<b>Утильсбор — ${ageLabel(item.age)}:</b>`);
@@ -358,7 +375,7 @@ function under3CustomsResultText(candidate, vehicle, customs, customsFee, util, 
     '',
     `<b>Автомобиль:</b> ${escapeHtml(candidate.brand + ' ' + candidate.model)}`,
     `<b>Год выпуска:</b> ${candidate.year}`,
-    `<b>Мощность:</b> ${vehicle.totalKw} кВт`,
+    ...combustionPowerLines(candidate, vehicle),
     `<b>Технически допустимая масса:</b> ${vehicle.maxMass || '—'}${vehicle.maxMass ? ' кг' : ''}`,
     `<b>Объём двигателя:</b> ${vehicle.ccm} см³`,
     ...customsValueLines(
@@ -402,6 +419,13 @@ function electricCustomsResultKeyboard(rowIndex, requestedWeight) {
   return customsResultKeyboard([{
     text: '← Исправить стоимость',
     callback_data: `customs:electric:edit:${rowIndex}:${requestedWeight || 0}`
+  }]);
+}
+
+function under3CustomsResultKeyboard(rowIndex, requestedWeight, engineCc, currency) {
+  return customsResultKeyboard([{
+    text: '← Исправить стоимость',
+    callback_data: `customs:under3:edit:${rowIndex}:${requestedWeight || 0}:${engineCc}:${currency}`
   }]);
 }
 
@@ -521,7 +545,7 @@ function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(
   }
   lines.push('', `<b>Объём двигателя:</b> ${vehicle.ccm ? `${vehicle.ccm} см³` : 'не используется'}`);
   if (vehicle.engineKw || vehicle.combustionKw) {
-    lines.push(`<b>Мощность ДВС:</b> ${vehicle.engineKw || vehicle.combustionKw} кВт`);
+    lines.push(`<b>Мощность ДВС:</b> ${formatPower(vehicle.engineKw || vehicle.combustionKw)}`);
   }
   if (['series', 'ev'].includes(vehicle.hybridType) && (vehicle.engineKw || vehicle.combustionKw)) {
     lines.push('Мощность ДВС в расчёте не учитывается');
@@ -531,12 +555,12 @@ function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(
     const electricDetails = electricParts.length > 1
       ? `${electricParts.join(' + ')} = ${vehicle.electric30MinKw}`
       : String(vehicle.electric30MinKw);
-    lines.push(`<b>30-минутная мощность электромотора:</b> ${electricDetails} кВт`);
+    lines.push(`<b>30-минутная мощность электромотора:</b> ${electricDetails} кВт (${Math.round(vehicle.electric30MinKw * KW_TO_HP)} л. с.)`);
   }
   if (['parallel', 'parallel-series', 'series-parallel'].includes(vehicle.hybridType)) {
-    lines.push(`<b>Расчётная мощность:</b> ${vehicle.engineKw || vehicle.combustionKw} + ${vehicle.electric30MinKw} = ${vehicle.totalKw} кВт`);
+    lines.push(`<b>Расчётная мощность:</b> ${vehicle.engineKw || vehicle.combustionKw} + ${vehicle.electric30MinKw} = ${formatPower(vehicle.totalKw)}`);
   } else {
-    lines.push(`<b>Расчётная мощность:</b> ${vehicle.totalKw} кВт`);
+    lines.push(`<b>Расчётная мощность:</b> ${formatPower(vehicle.totalKw)}`);
   }
   lines.push('');
   for (const item of util) {
@@ -1084,12 +1108,15 @@ function electricCustomsVehicleLines(candidate, requestedWeight = null) {
     `<b>Тип автомобиля:</b> ${power.vehicleType}`
   ];
   if (power.combustionKw) {
-    lines.push(`<b>Максимальная мощность ДВС:</b> ${power.combustionKw} кВт`);
+    lines.push(`<b>Максимальная мощность ДВС:</b> ${formatPower(power.combustionKw)}`);
   }
+  const exciseFormula = power.combustionKw
+    ? `${power.combustionKw} + ${power.electricKw} = `
+    : '';
   lines.push(
-    `<b>30-минутная мощность электромоторов:</b> ${power.electricKw} кВт`,
-    `<b>Суммарная мощность для акциза:</b> ${power.excisePowerKw} кВт`,
-    `<b>Мощность для утильсбора:</b> ${power.utilPowerKw} кВт (30-минутная)`
+    `<b>30-минутная мощность электромоторов:</b> ${formatPower(power.electricKw)}`,
+    `<b>Суммарная мощность для акциза:</b> ${exciseFormula}${formatPower(power.excisePowerKw)}`,
+    `<b>Мощность для утильсбора:</b> ${formatPower(power.utilPowerKw)} (30-минутная)`
   );
   const weight = requestedWeight || candidate.mass;
   if (weight) lines.push(`<b>Технически допустимая масса:</b> ${weight} кг`);
@@ -1285,6 +1312,25 @@ async function handleCustomsCallback(env, query) {
   if (data === 'customs:result:new') {
     await clearCustomsState(env, query.from?.id || message.chat.id);
     return sendCustomsIntro(env, message.chat.id);
+  }
+  const editUnder3Value = data.match(/^customs:under3:edit:(\d+):(\d+(?:\.\d+)?):(\d+(?:\.\d+)?):(RUB|USD|EUR|CNY|KRW)$/);
+  if (editUnder3Value) {
+    const userId = query.from?.id || message.chat.id;
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const candidate = getCatalogCandidate(catalog, Number(editUnder3Value[1]));
+    if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
+    const currency = electricCustomsCurrency(editUnder3Value[4]);
+    await cleanupCustomsMessages(env, userId, message.chat.id);
+    return sendCustomsPrompt(env, message.chat.id, [
+      `<b>Исправьте предполагаемую таможенную стоимость автомобиля в ${currency.name}.</b>`,
+      `<i>Выбрано: ${currency.button} (${currency.code}). Можно написать: 8 млн, 8m, 500 тыс. или 800 000.</i>`
+    ], `Стоимость в ${currency.code}`, {
+      stage: 'under3-selected-value',
+      rowIndex: candidate.rowIndex,
+      requestedWeight: Number(editUnder3Value[2]) || candidate.mass || null,
+      engineCc: Number(editUnder3Value[3]),
+      currency: currency.code
+    });
   }
   const editElectricValue = data.match(/^customs:electric:edit:(\d+):(\d+(?:\.\d+)?)$/);
   if (editElectricValue) {
@@ -1743,7 +1789,7 @@ async function handleCustomsReply(env, message) {
       chat_id: message.chat.id,
       text: under3CustomsResultText(candidate, vehicle, customs, customsFee, util, rate, valueDetails),
       parse_mode: 'HTML',
-      reply_markup: customsResultKeyboard()
+      reply_markup: under3CustomsResultKeyboard(candidate.rowIndex, requestedWeight, ccm, currency.code)
     });
     await saveApplication(env, userId, customsApplicationFromVehicle(vehicle, util, {
       customsValue: value,
@@ -2294,12 +2340,12 @@ function formatCatalogResult(candidate, vehicle, util, customs = null) {
     '<b>Год выпуска:</b> ' + candidate.year,
     '<b>Технически допустимая масса:</b> ' + (vehicle.maxMass || candidate.mass || '—') + (vehicle.maxMass || candidate.mass ? ' кг' : ''),
     '<b>Тип:</b> ' + (electric ? 'электромобиль / последовательный гибрид' : 'ДВС / параллельный гибрид'),
-    '<b>Мощность для расчёта:</b> ' + vehicle.totalKw + ' кВт' + (electric ? ' (30-минутная)' : ''),
+    '<b>Мощность для расчёта:</b> ' + formatPower(vehicle.totalKw) + (electric ? ' (30-минутная)' : ''),
   ];
   if (!electric) {
     lines.push('<b>Объём двигателя:</b> группа ' + vehicle.ccm + ' см³');
     if (candidate.electricKw) {
-      lines.push('<i>' + candidate.combustionKw + ' кВт максимальная + ' + candidate.electricKw + ' кВт 30-минутная</i>');
+      lines.push('<i>Мощность ДВС: ' + formatPower(candidate.combustionKw) + '; 30-минутная: ' + formatPower(candidate.electricKw) + '; итого: ' + candidate.combustionKw + ' + ' + candidate.electricKw + ' = ' + formatPower(vehicle.totalKw) + '.</i>');
     }
   }
   lines.push('');
