@@ -30,6 +30,14 @@ test('итог до 3 лет содержит объяснение ставки,
   assert.match(source, /доставка, СВХ, оформление СБКТС и ЭПТС/);
   assert.doesNotMatch(source, /• лаборатория;/);
   assert.match(source, /customs\.selectedBy === 'minimum'/);
+  assert.match(source, /const KW_TO_HP = 1\.35962/);
+  assert.match(source, /function formatPower\(kw\)/);
+  assert.match(source, /\$\{Math\.round\(kilowatts \* KW_TO_HP\)\} л\. с\./);
+  assert.match(source, /function combustionPowerLines/);
+  assert.match(source, /Расчётная мощность:<\/b> \$\{combustionKw\} \+ \$\{electricKw\}/);
+  assert.match(source, /function under3CustomsResultKeyboard/);
+  assert.match(source, /customs:under3:edit:/);
+  assert.match(source, /Исправьте предполагаемую таможенную стоимость автомобиля/);
 });
 
 test('чистый электромобиль сразу переводится в электрорасчёт без запроса объёма', () => {
@@ -108,4 +116,11 @@ test('результат пикапа позволяет исправить ст
   assert.match(source, /Исправьте предполагаемую таможенную стоимость пикапа/);
   assert.match(source, /Можно написать: 8 млн, 8m, 500 тыс\. или 800 000/);
   assert.match(source, /parseCurrencyAmount\(message\.text\)/);
+});
+
+test('лошадиные силы выводятся и в итогах документов, и в электрорасчёте', () => {
+  assert.match(source, /Мощность ДВС:<\/b> \$\{formatPower/);
+  assert.match(source, /30-минутная мощность электромотора:<\/b> \$\{electricDetails\} кВт/);
+  assert.match(source, /Суммарная мощность для акциза:<\/b> \$\{exciseFormula\}\$\{formatPower/);
+  assert.match(source, /Мощность для утильсбора:<\/b> \$\{formatPower/);
 });
