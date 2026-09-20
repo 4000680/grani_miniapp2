@@ -340,13 +340,17 @@ function formatPower(kw) {
   return `${kilowatts} кВт (${Math.round(kilowatts * KW_TO_HP)} л. с.)`;
 }
 
+function formatKw(kw) {
+  return `${Number(kw) || 0} кВт`;
+}
+
 function combustionPowerLines(candidate, vehicle) {
   const combustionKw = Number(candidate?.combustionKw || vehicle?.combustionKw) || 0;
   const electricKw = Number(candidate?.electricKw) || 0;
   if (!combustionKw || !electricKw) return [`<b>Мощность для расчёта:</b> ${formatPower(vehicle.totalKw)}`];
   return [
-    `<b>Мощность ДВС:</b> ${formatPower(combustionKw)}`,
-    `<b>30-минутная мощность электромотора:</b> ${formatPower(electricKw)}`,
+    `<b>Мощность ДВС:</b> ${formatKw(combustionKw)}`,
+    `<b>30-минутная мощность электромотора:</b> ${formatKw(electricKw)}`,
     `<b>Расчётная мощность:</b> ${combustionKw} + ${electricKw} = ${formatPower(vehicle.totalKw)}`
   ];
 }
@@ -498,8 +502,13 @@ async function sendCustomsPrompt(env, chatId, lines, placeholder, state = null) 
 }
 
 async function sendCustomsNotice(env, chatId, text) {
-  const sent = await telegram(env, 'sendMessage', { chat_id: chatId, text, parse_mode: 'HTML' });
   const state = await getCustomsState(env, chatId);
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text,
+    parse_mode: 'HTML',
+    reply_markup: customsKeyboard([], state?.backCallback || 'customs:start')
+  });
   if (state) await trackCustomsMessages(env, chatId, state, sent.message_id);
   return sent;
 }
@@ -545,7 +554,7 @@ function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(
   }
   lines.push('', `<b>Объём двигателя:</b> ${vehicle.ccm ? `${vehicle.ccm} см³` : 'не используется'}`);
   if (vehicle.engineKw || vehicle.combustionKw) {
-    lines.push(`<b>Мощность ДВС:</b> ${formatPower(vehicle.engineKw || vehicle.combustionKw)}`);
+    lines.push(`<b>Мощность ДВС:</b> ${formatKw(vehicle.engineKw || vehicle.combustionKw)}`);
   }
   if (['series', 'ev'].includes(vehicle.hybridType) && (vehicle.engineKw || vehicle.combustionKw)) {
     lines.push('Мощность ДВС в расчёте не учитывается');
@@ -555,7 +564,7 @@ function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(
     const electricDetails = electricParts.length > 1
       ? `${electricParts.join(' + ')} = ${vehicle.electric30MinKw}`
       : String(vehicle.electric30MinKw);
-    lines.push(`<b>30-минутная мощность электромотора:</b> ${electricDetails} кВт (${Math.round(vehicle.electric30MinKw * KW_TO_HP)} л. с.)`);
+    lines.push(`<b>30-минутная мощность электромотора:</b> ${electricDetails} кВт`);
   }
   if (['parallel', 'parallel-series', 'series-parallel'].includes(vehicle.hybridType)) {
     lines.push(`<b>Расчётная мощность:</b> ${vehicle.engineKw || vehicle.combustionKw} + ${vehicle.electric30MinKw} = ${formatPower(vehicle.totalKw)}`);
@@ -852,6 +861,15 @@ function calculationWorkKeyboard() {
   };
 }
 
+function calculationNavigationKeyboard(back = 'calc:menu') {
+  return {
+    inline_keyboard: [[
+      { text: '← Назад', callback_data: back },
+      { text: '🏠 Главное меню', callback_data: 'calc:menu' }
+    ]]
+  };
+}
+
 function documentErrorKeyboard() {
   return {
     inline_keyboard: [
@@ -899,8 +917,9 @@ async function sendIssueDatePrompt(env, chatId, cases, notice = '') {
     chat_id: chatId,
     text: lines.join('\n'),
     parse_mode: 'HTML',
-    reply_markup: { force_reply: true, selective: true, input_field_placeholder: 'Дата оформления СБКТС' }
+    reply_markup: calculationNavigationKeyboard()
   });
+  await setCustomsState(env, chatId, { stage: 'peni-issue-date', peniCases: cases });
   await trackTemporaryMessage(env, chatId, sent.message_id);
   return sent;
 }
@@ -920,7 +939,12 @@ async function sendPlannedDatePrompt(env, chatId, cases, deadline, notice = '') 
     chat_id: chatId,
     text: lines.join('\n'),
     parse_mode: 'HTML',
-    reply_markup: { force_reply: true, selective: true, input_field_placeholder: 'Предполагаемая дата подачи' }
+    reply_markup: calculationNavigationKeyboard()
+  });
+  await setCustomsState(env, chatId, {
+    stage: 'peni-planned-date',
+    peniCases: cases,
+    peniDeadline: deadline.toISOString()
   });
   await trackTemporaryMessage(env, chatId, sent.message_id);
   return sent;
@@ -929,16 +953,17 @@ async function sendPlannedDatePrompt(env, chatId, cases, deadline, notice = '') 
 async function handleDateReply(env, message) {
   const prompt = message.reply_to_message?.text || '';
   const date = parseFlexibleDate(message.text);
-  const issueDatePrompt = prompt.includes('Чтобы рассчитать пени');
-  const plannedDatePrompt = prompt.includes('Планируете подать документы позже');
-  if (!prompt || (!issueDatePrompt && !plannedDatePrompt)) return false;
-  const cases = extractCases(prompt);
+  const state = await getCustomsState(env, message.from?.id || message.chat.id);
+  const issueDatePrompt = prompt.includes('Чтобы рассчитать пени') || state?.stage === 'peni-issue-date';
+  const plannedDatePrompt = prompt.includes('Планируете подать документы позже') || state?.stage === 'peni-planned-date';
+  if ((!prompt && !state) || (!issueDatePrompt && !plannedDatePrompt)) return false;
+  const cases = extractCases(prompt).length ? extractCases(prompt) : (state?.peniCases || []);
   if (!date || !cases.length) {
     if (issueDatePrompt) {
       await sendIssueDatePrompt(env, message.chat.id, cases, 'Не удалось распознать дату. Попробуйте ещё раз.');
     }
     else {
-      const deadline = parseDateFromPrompt(prompt, 'Крайний срок');
+      const deadline = parseDateFromPrompt(prompt, 'Крайний срок') || parseFlexibleDate(state?.peniDeadline);
       if (deadline) await sendPlannedDatePrompt(env, message.chat.id, cases, deadline, 'Не удалось распознать дату. Попробуйте ещё раз.');
     }
     return true;
@@ -953,7 +978,7 @@ async function handleDateReply(env, message) {
       reply_markup: calculationResultKeyboard(cases, deadline)
     });
   } else {
-    const deadline = parseDateFromPrompt(prompt, 'Крайний срок');
+    const deadline = parseDateFromPrompt(prompt, 'Крайний срок') || parseFlexibleDate(state?.peniDeadline);
     if (!deadline) throw new Error('Не удалось восстановить крайний срок из сообщения');
     await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
@@ -962,6 +987,7 @@ async function handleDateReply(env, message) {
       reply_markup: calculationResultKeyboard(cases, deadline)
     });
   }
+  await clearCustomsState(env, message.from?.id || message.chat.id);
   return true;
 }
 
@@ -1108,13 +1134,13 @@ function electricCustomsVehicleLines(candidate, requestedWeight = null) {
     `<b>Тип автомобиля:</b> ${power.vehicleType}`
   ];
   if (power.combustionKw) {
-    lines.push(`<b>Максимальная мощность ДВС:</b> ${formatPower(power.combustionKw)}`);
+    lines.push(`<b>Максимальная мощность ДВС:</b> ${formatKw(power.combustionKw)}`);
   }
   const exciseFormula = power.combustionKw
     ? `${power.combustionKw} + ${power.electricKw} = `
     : '';
   lines.push(
-    `<b>30-минутная мощность электромоторов:</b> ${formatPower(power.electricKw)}`,
+    `<b>30-минутная мощность электромоторов:</b> ${formatKw(power.electricKw)}`,
     `<b>Суммарная мощность для акциза:</b> ${exciseFormula}${formatPower(power.excisePowerKw)}`,
     `<b>Мощность для утильсбора:</b> ${formatPower(power.utilPowerKw)} (30-минутная)`
   );
@@ -2345,7 +2371,7 @@ function formatCatalogResult(candidate, vehicle, util, customs = null) {
   if (!electric) {
     lines.push('<b>Объём двигателя:</b> группа ' + vehicle.ccm + ' см³');
     if (candidate.electricKw) {
-      lines.push('<i>Мощность ДВС: ' + formatPower(candidate.combustionKw) + '; 30-минутная: ' + formatPower(candidate.electricKw) + '; итого: ' + candidate.combustionKw + ' + ' + candidate.electricKw + ' = ' + formatPower(vehicle.totalKw) + '.</i>');
+      lines.push('<i>Мощность ДВС: ' + formatKw(candidate.combustionKw) + '; 30-минутная: ' + formatKw(candidate.electricKw) + '; итого: ' + candidate.combustionKw + ' + ' + candidate.electricKw + ' = ' + formatPower(vehicle.totalKw) + '.</i>');
     }
   }
   lines.push('');
@@ -2525,12 +2551,10 @@ async function sendCatalogWeightPrompt(env, chatId, parsed) {
       'Ответьте на это сообщение только числом.'
     ].join('\n'),
     parse_mode: 'HTML',
-    reply_markup: {
-      force_reply: true,
-      selective: true,
-      input_field_placeholder: 'Масса автомобиля, кг'
-    }
+    reply_markup: calculationNavigationKeyboard()
   });
+  const previous = await getCustomsState(env, chatId);
+  await setCustomsState(env, chatId, { ...previous, catalogWeightQuery: parsed });
   await trackTemporaryMessage(env, chatId, sent.message_id);
   return sent;
 }
@@ -2591,21 +2615,23 @@ async function runCatalogSearch(env, message, parsed, weight) {
       chat_id: message.chat.id,
       message_id: status.message_id,
       text: 'Не удалось выполнить поиск: ' + escapeHtml(error.message || error) + '. Попробуйте ещё раз немного позже.',
-      parse_mode: 'HTML'
+      parse_mode: 'HTML',
+      reply_markup: calculationWorkKeyboard()
     });
   }
 }
 
 async function handleCatalogWeightReply(env, message) {
   const prompt = message.reply_to_message?.text || '';
-  if (!prompt.startsWith('Чтобы найти точную модификацию и мощность')) return false;
   const state = await getCustomsState(env, message.from?.id || message.chat.id);
-  const parsed = withCustomsState(catalogQueryFromWeightPrompt(prompt), state);
+  if (!prompt.startsWith('Чтобы найти точную модификацию и мощность') && !state?.catalogWeightQuery) return false;
+  const parsed = withCustomsState(catalogQueryFromWeightPrompt(prompt) || state?.catalogWeightQuery, state);
   const weight = parseCatalogWeight(message.text);
   if (!parsed || !weight) {
     await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
-      text: 'Не удалось распознать массу. Укажите технически допустимую максимальную массу одним числом в килограммах.'
+      text: 'Не удалось распознать массу. Укажите технически допустимую максимальную массу одним числом в килограммах.',
+      reply_markup: calculationNavigationKeyboard()
     });
     if (parsed) await sendCatalogWeightPrompt(env, message.chat.id, parsed);
     return true;
