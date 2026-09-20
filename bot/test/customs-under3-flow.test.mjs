@@ -34,6 +34,8 @@ test('итог до 3 лет содержит объяснение ставки,
   assert.match(source, /function formatPower\(kw\)/);
   assert.match(source, /\$\{Math\.round\(kilowatts \* KW_TO_HP\)\} л\. с\./);
   assert.match(source, /function combustionPowerLines/);
+  assert.match(source, /function formatKw\(kw\)/);
+  assert.match(source, /Мощность ДВС:<\/b> \$\{formatKw\(combustionKw\)\}/);
   assert.match(source, /Расчётная мощность:<\/b> \$\{combustionKw\} \+ \$\{electricKw\}/);
   assert.match(source, /function under3CustomsResultKeyboard/);
   assert.match(source, /customs:under3:edit:/);
@@ -119,8 +121,16 @@ test('результат пикапа позволяет исправить ст
 });
 
 test('лошадиные силы выводятся и в итогах документов, и в электрорасчёте', () => {
-  assert.match(source, /Мощность ДВС:<\/b> \$\{formatPower/);
+  assert.match(source, /Мощность ДВС:<\/b> \$\{formatKw/);
   assert.match(source, /30-минутная мощность электромотора:<\/b> \$\{electricDetails\} кВт/);
   assert.match(source, /Суммарная мощность для акциза:<\/b> \$\{exciseFormula\}\$\{formatPower/);
   assert.match(source, /Мощность для утильсбора:<\/b> \$\{formatPower/);
+});
+
+test('ошибки и ручные вводы сохраняют навигацию', () => {
+  assert.match(source, /async function sendCustomsNotice/);
+  assert.match(source, /reply_markup: customsKeyboard\(\[\], state\?\.backCallback \|\| 'customs:start'\)/);
+  assert.match(source, /function calculationNavigationKeyboard/);
+  assert.match(source, /reply_markup: calculationNavigationKeyboard\(\)/);
+  assert.match(source, /catalogWeightQuery: parsed/);
 });
