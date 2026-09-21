@@ -47,6 +47,7 @@
   function calculateVehiclePower(values = {}) {
     const engineKw = Number(values.engineKw) || 0;
     const electric30MinKw = Number(values.electric30MinKw) || 0;
+    const hasExplicitZero30MinPower = values.electric30MinKwSpecified === true && electric30MinKw === 0;
     const hybridType = values.hybridType || null;
     let calculatedKw = null;
     let error = null;
@@ -56,7 +57,7 @@
       if (!engineKw) {
         errorCode = 'ENGINE_POWER_NOT_DETECTED';
         error = 'Не удалось определить максимальную мощность ДВС';
-      } else if (!electric30MinKw) {
+      } else if (!electric30MinKw && !hasExplicitZero30MinPower) {
         errorCode = 'ELECTRIC_30MIN_POWER_NOT_DETECTED';
         error = 'Не удалось определить 30-минутную мощность электромашины';
       }
