@@ -42,6 +42,38 @@ test('parses an EPTS layout and uses the TR TS category', () => {
   ]);
 });
 
+test('parses M1 hybrid data from a second EPTS page without adding the vehicle mass to kW', () => {
+  const document = {
+    text: [
+      'Выписка из электронного паспорта транспортного средства',
+      'комбинированная энергоустановка параллельного типа',
+      'максимальная 30-минутная мощность 58'
+    ].join('\n'),
+    pages: [
+      [
+        line(658, 'Марка', 'Toyota'),
+        line(638, 'Коммерческое наименование', 'CAMRY'),
+        line(566, 'Категория в соответствии с ТР ТС 018/2011', 'M1'),
+        line(466, 'Месяц и год изготовления', 'август 2026')
+      ],
+      [
+        line(308, '– рабочий объем цилиндров (см³)', '1987'),
+        line(291, '– максимальная мощность (кВт) (мин-1)', '112 (6000)'),
+        line(270, '– максимальная 30-минутная мощность (кВт)', '58'),
+        line(252, 'Технически допустимая максимальная масса', '2070')
+      ]
+    ]
+  };
+  const vehicle = parseVehicleDocument(document);
+  assert.deepEqual(
+    { category: vehicle.category, ccm: vehicle.ccm, combustionKw: vehicle.combustionKw, electricKw: vehicle.electricKw, totalKw: vehicle.totalKw, maxMass: vehicle.maxMass, hybridType: vehicle.hybridType },
+    { category: 'M1', ccm: 1987, combustionKw: 112, electricKw: [58], totalKw: 170, maxMass: 2070, hybridType: 'parallel' }
+  );
+  assert.deepEqual(calculateUtil(vehicle, new Date('2026-09-21T00:00:00Z')), [
+    { age: 'new', commercial: 1010400, personal: 1010400 }
+  ]);
+});
+
 test('calculates pickup util from an EPTS N1G category and full mass', () => {
   const document = {
     text: 'Выписка\nиз электронного паспорта транспортного средства',
