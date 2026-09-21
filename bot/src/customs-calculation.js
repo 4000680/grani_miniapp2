@@ -134,6 +134,20 @@ export function calculateElectricCustoms({ customsValueRub, excisePowerKw, power
   };
 }
 
+export function calculatePickupUtil({ maxMassKg, age }) {
+  const mass = positiveNumber(maxMassKg, 'Полная масса');
+  if (!['new', 'old'].includes(age)) throw new Error('Неизвестная возрастная группа');
+  if (mass > 12000) throw new Error('Расчёт поддерживает пикапы полной массой до 12 тонн');
+  const bracket = PICKUP_UTIL.find(item => mass <= item.maxKg);
+  const utilCoefficient = age === 'new' ? bracket.newCoefficient : bracket.oldCoefficient;
+  return {
+    maxMassKg: mass,
+    age,
+    utilCoefficient,
+    util: roundRubles(PICKUP_UTIL_BASE * utilCoefficient)
+  };
+}
+
 export function calculatePickup({ customsValueRub, fuel, ageGroup, engineCc, maxMassKg, euroRate }) {
   const value = positiveNumber(customsValueRub, 'Таможенная стоимость');
   const ccm = positiveNumber(engineCc, 'Объём двигателя');
@@ -170,9 +184,7 @@ export function calculatePickup({ customsValueRub, fuel, ageGroup, engineCc, max
 
   const vatBase = value + duty;
   const vat = vatBase * VAT_RATE;
-  const utilBracket = PICKUP_UTIL.find(item => mass <= item.maxKg);
-  const utilCoefficient = ageGroup === '0-3' ? utilBracket.newCoefficient : utilBracket.oldCoefficient;
-  const util = PICKUP_UTIL_BASE * utilCoefficient;
+  const pickupUtil = calculatePickupUtil({ maxMassKg: mass, age: ageGroup === '0-3' ? 'new' : 'old' });
   const category = mass <= 3500 ? 'N1/N1G' : 'N2';
 
   return {
@@ -190,9 +202,9 @@ export function calculatePickup({ customsValueRub, fuel, ageGroup, engineCc, max
     vatBase: roundRubles(vatBase),
     vat: roundRubles(vat),
     customsTotal: roundRubles(duty + vat),
-    utilCoefficient,
-    util: roundRubles(util),
-    total: roundRubles(duty + vat + util)
+    utilCoefficient: pickupUtil.utilCoefficient,
+    util: pickupUtil.util,
+    total: roundRubles(duty + vat + pickupUtil.util)
   };
 }
 
