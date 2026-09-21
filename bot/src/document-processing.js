@@ -1,5 +1,6 @@
 import { extractTextItems, getDocumentProxy } from 'unpdf';
 import { UTIL_RATES } from './rates-data.js';
+import { calculatePickupUtil } from './customs-calculation.js';
 import '../../shared/vehicle-power.js';
 import '../../shared/sbkts-power-parser.js';
 
@@ -81,6 +82,14 @@ function numberValue(lines, label, minX) {
   return match ? Number(match[0].replace(',', '.')) : null;
 }
 
+function vehicleCategory(value) {
+  return normalize(value)?.match(/N1G|[A-ZА-Я]\d/i)?.[0]?.toUpperCase() || null;
+}
+
+function isPickupCategory(category) {
+  return ['N1', 'N1G', 'N2'].includes(category);
+}
+
 function parseRussianDateFromText(text) {
   let match = normalize(text).match(/Дата\s+оформления[^\d]{0,40}(\d{1,2})[\s"'«»]*([а-яё]+)\s+(\d{4})/i);
   if (!match) return null;
@@ -102,7 +111,7 @@ function parseSbkts(document) {
   const vin = pageValue(first, /^ИДЕНТИФИКАЦИОННЫЙ(?:\s|$)/i, 180);
   const applicant = pageValue(first, /^ЗАЯВИТЕЛЬ И ЕГО АДРЕС(?:\s|$)/i, 180);
   const year = numberValue(first, /^ГОД ВЫПУСКА(?:\s|$)/i, 180);
-  const category = pageValue(first, /^КАТЕГОРИЯ(?:\s|$)/i, 180)?.match(/[A-ZА-Я]\d/i)?.[0]?.toUpperCase();
+  const category = vehicleCategory(pageValue(first, /^КАТЕГОРИЯ(?:\s|$)/i, 180));
   const ccm = numberValue(second, /рабочий объем цилиндров/i, 180);
   const maxMass = numberValue(second, /Технически допустимая/i, 180);
   const parsedPower = parseSbktsPowerData(document.text);
@@ -150,7 +159,7 @@ function parseEpts(document) {
   const vin = pageValue(first, /^Идентификационный номер(?:\s|$)/i, 350);
   const yearText = pageValue(first, /^Месяц и год изготовления(?:\s|$)/i, 350);
   const year = Number(yearText?.match(/\b(19|20)\d{2}\b/)?.[0]) || null;
-  const category = pageValue(first, /^Категория в соответствии с ТР ТС/i, 350)?.match(/[A-ZА-Я]\d/i)?.[0]?.toUpperCase();
+  const category = vehicleCategory(pageValue(first, /^Категория в соответствии с ТР ТС/i, 350));
   const ccm = numberValue(first, /рабочий объем цилиндров/i, 350);
   const combustionKw = numberValue(first, /максимальная мощность \(кВт\)/i, 350);
   const maxMass = numberValue(first, /Технически допустимая максимальная масса/i, 350);
@@ -203,6 +212,13 @@ function rateRow(payer, kw, ccm) {
 }
 
 export function calculateUtil(vehicle, now = new Date()) {
+  if (isPickupCategory(vehicle.category)) {
+    if (!vehicle.year || !vehicle.maxMass) throw new Error('Не удалось определить год выпуска или полную массу пикапа');
+    return ageStatus(vehicle.year, now).map(age => {
+      const pickup = calculatePickupUtil({ maxMassKg: vehicle.maxMass, age });
+      return { age, commercial: pickup.util, personal: pickup.util, pickup: true, utilCoefficient: pickup.utilCoefficient };
+    });
+  }
   if (vehicle.category !== 'M1') throw new Error(`Категория ${vehicle.category || 'не определена'} пока не поддерживается`);
   if (vehicle.powerError) throw new DocumentProcessingError(vehicle.powerErrorCode || 'CALCULATION_ERROR', vehicle.powerError);
   if (!vehicle.year || !vehicle.totalKw) throw new Error('Не удалось определить год или расчётную мощность');
