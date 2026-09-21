@@ -559,7 +559,7 @@ function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(
   if (['series', 'ev'].includes(vehicle.hybridType) && (vehicle.engineKw || vehicle.combustionKw)) {
     lines.push('Мощность ДВС в расчёте не учитывается');
   }
-  if (vehicle.electric30MinKw) {
+  if (vehicle.electric30MinKw || vehicle.electric30MinKwList?.length) {
     const electricParts = vehicle.electric30MinKwList || vehicle.electricKw || [];
     const electricDetails = electricParts.length > 1
       ? `${electricParts.join(' + ')} = ${vehicle.electric30MinKw}`
