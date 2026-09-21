@@ -6,6 +6,7 @@ import {
   calculatePassengerOver3,
   calculatePassengerUnder3,
   calculatePickup,
+  calculatePickupUtil,
   convertCurrencyToRub,
   parseCbrCurrencyRate,
   parseCbrEuroRate,
@@ -126,6 +127,12 @@ test('пикапы N2 используют ставки утильсбора д�
     }),
     /до 12 тонн/
   );
+});
+
+test('утильсбор пикапа можно рассчитать по документу без таможенной стоимости', () => {
+  assert.deepEqual(calculatePickupUtil({ maxMassKg: 3220, age: 'new' }), {
+    maxMassKg: 3220, age: 'new', utilCoefficient: 6.6, util: 990000
+  });
 });
 
 test('денежные суммы принимаются с пробелами, запятой и сокращениями', () => {
