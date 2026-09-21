@@ -82,6 +82,46 @@ function numberValue(lines, label, minX) {
   return match ? Number(match[0].replace(',', '.')) : null;
 }
 
+function pageValueFromDocument(pages, label, minX) {
+  for (const lines of pages) {
+    const value = pageValue(lines, label, minX);
+    if (value) return value;
+  }
+  return null;
+}
+
+function numberValueFromDocument(pages, label, minX) {
+  for (const lines of pages) {
+    const value = numberValue(lines, label, minX);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function eptsThirtyMinutePowers(pages) {
+  const label = /30-минутная.*мощность|максимальная 30-минутная/i;
+  const values = [];
+  for (const lines of pages) {
+    for (let index = 0; index < lines.length; index++) {
+      if (!label.test(lines[index].text)) continue;
+      const inline = numberValue([lines[index]], label, 350);
+      if (inline !== null) {
+        values.push(inline);
+        continue;
+      }
+      for (let offset = 1; offset <= 2 && index + offset < lines.length; offset++) {
+        const next = lines[index + offset];
+        const value = next.items.find(item => item.x >= 350 && /^\d+(?:[.,]\d+)?$/.test(item.str));
+        if (value) {
+          values.push(Number(value.str.replace(',', '.')));
+          break;
+        }
+      }
+    }
+  }
+  return values;
+}
+
 function vehicleCategory(value) {
   return normalize(value)?.match(/N1G|[A-ZА-Я]\d/i)?.[0]?.toUpperCase() || null;
 }
@@ -160,28 +200,26 @@ function parseEpts(document) {
   const yearText = pageValue(first, /^Месяц и год изготовления(?:\s|$)/i, 350);
   const year = Number(yearText?.match(/\b(19|20)\d{2}\b/)?.[0]) || null;
   const category = vehicleCategory(pageValue(first, /^Категория в соответствии с ТР ТС/i, 350));
-  const ccm = numberValue(first, /рабочий объем цилиндров/i, 350);
-  const combustionKw = numberValue(first, /максимальная мощность \(кВт\)/i, 350);
-  const maxMass = numberValue(first, /Технически допустимая максимальная масса/i, 350);
+  const ccm = numberValueFromDocument(document.pages, /рабочий объем цилиндров/i, 350);
+  const combustionKw = numberValueFromDocument(document.pages, /максимальная мощность \(кВт\)/i, 350);
+  const maxMass = numberValueFromDocument(document.pages, /Технически допустимая максимальная масса/i, 350);
   let owner = null;
   for (const lines of document.pages) {
     owner ||= pageValue(lines, /^Собственник(?:\s|$)/i, 350);
   }
-  const electricKw = [];
-  for (const lines of document.pages) {
-    const label = lines.find(line => /30-минутная.*мощность|максимальная 30-минутная/i.test(line.text));
-    if (!label) continue;
-    electricKw.push(...lines
-      .filter(line => line.y <= label.y + 2 && line.y >= label.y - 50)
-      .flatMap(line => line.items.filter(item => item.x >= 350 && /^\d+(?:[.,]\d+)?$/.test(item.str)))
-      .map(item => Number(item.str.replace(',', '.'))));
-  }
+  const electricKw = eptsThirtyMinutePowers(document.pages);
+  const electric30MinKw = electricKw.length ? round2(electricKw.reduce((sum, value) => sum + value, 0)) : null;
+  const power = analyzeVehiclePower(document.text, {
+    engineKw: combustionKw,
+    electric30MinKw,
+    electric30MinKwSpecified: electricKw.length > 0
+  });
   return {
     type: 'epts', brand, model, vin, surname: owner?.split(/\s+/)[0] || null, year, yearText, category, ccm, combustionKw,
-    electricKw,
-    totalKw: round2((combustionKw || 0) + electricKw.reduce((sum, value) => sum + value, 0)),
+    engineKw: combustionKw, electricKw, electric30MinKwList: electricKw, electric30MinKw,
+    totalKw: power.calculatedKw,
     maxMass, issueDate: null,
-    hybridType: electricKw.length && combustionKw ? 'гибрид' : null
+    hybridType: power.hybridType, powerError: power.error, powerErrorCode: power.errorCode
   };
 }
 
