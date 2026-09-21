@@ -77,6 +77,29 @@ test('parses SБКТС and adds every 30-minute electric power', () => {
   assert.equal(peni.total, 680.96);
 });
 
+test('treats a placeholder 30-minute power below 1 kW in SBKTS as zero', () => {
+  const document = {
+    text: [
+      'СВИДЕТЕЛЬСТВО О БЕЗОПАСНОСТИ КОНСТРУКЦИИ ТРАНСПОРТНОГО СРЕДСТВА',
+      'Гибридное транспортное средство параллельного типа.',
+      'Двигатель внутреннего сгорания (марка, тип) B58B30',
+      '- максимальная мощность, кВт 280 (5000)',
+      'Электромашина (марка, тип) отсутствует',
+      'Максимальная 30-минутная мощность, кВт 0,0001',
+      'Дата оформления " 20 " сентября 2026 г.'
+    ].join('\n'),
+    pages: [
+      [line(476, 'МАРКА', 'BMW', 206), line(460, 'КОММЕРЧЕСКОЕ', 'X6 XDRIVE40I M SPORT', 206), line(401, 'ИДЕНТИФИКАЦИОННЫЙ', 'TESTVN00000000003', 206), line(374, 'ГОД ВЫПУСКА', '2024 г.', 206), line(358, 'КАТЕГОРИЯ', 'M1', 206)],
+      [line(567, 'Технически допустимая максимальная масса', '2900', 206), line(277, '- рабочий объем цилиндров,', '2998', 206), line(234, '- максимальная мощность, кВт', '280 (5000)', 206)]
+    ]
+  };
+  const vehicle = parseVehicleDocument(document);
+  assert.equal(vehicle.hybridType, 'parallel');
+  assert.deepEqual(vehicle.electricKw, [0]);
+  assert.equal(vehicle.electric30MinKw, 0);
+  assert.equal(vehicle.totalKw, 280);
+});
+
 test('accepts common Russian date formats', () => {
   for (const value of ['02.09.2026', '2/9/26', '2026-09-02', '2 сентября 2026', 'сентябрь 2, 2026']) {
     assert.equal(toIso(parseFlexibleDate(value)), '2026-09-02');
