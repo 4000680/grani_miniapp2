@@ -542,6 +542,7 @@ function formatPeniCompact(cases, deadline, target) {
 
 function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc()) {
   const title = vehicle.type === 'sbkts' ? 'СБКТС распознан' : 'Выписка ЭПТС распознана';
+  const isPickup = ['N1', 'N1G', 'N2'].includes(vehicle.category);
   const lines = [
     `✅ <b>${title}</b>`,
     '',
@@ -549,30 +550,39 @@ function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(
     `<b>Год выпуска:</b> ${vehicle.year}`,
     `<b>Категория:</b> ${escapeHtml(vehicle.category)}`,
   ];
-  if (vehicle.hybridType && vehicle.hybridType !== 'combustion') {
+  if (!isPickup && vehicle.hybridType && vehicle.hybridType !== 'combustion') {
     lines.push(`<b>Тип гибрида:</b> ${escapeHtml(hybridTypeLabel(vehicle.hybridType))}`);
   }
   lines.push('', `<b>Объём двигателя:</b> ${vehicle.ccm ? `${vehicle.ccm} см³` : 'не используется'}`);
-  if (vehicle.engineKw || vehicle.combustionKw) {
+  if (isPickup) {
+    lines.push(`<b>Полная масса:</b> ${vehicle.maxMass ? `${vehicle.maxMass} кг` : 'не определена'}`);
+  }
+  if (!isPickup && (vehicle.engineKw || vehicle.combustionKw)) {
     lines.push(`<b>Мощность ДВС:</b> ${formatKw(vehicle.engineKw || vehicle.combustionKw)}`);
   }
-  if (['series', 'ev'].includes(vehicle.hybridType) && (vehicle.engineKw || vehicle.combustionKw)) {
+  if (!isPickup && ['series', 'ev'].includes(vehicle.hybridType) && (vehicle.engineKw || vehicle.combustionKw)) {
     lines.push('Мощность ДВС в расчёте не учитывается');
   }
-  if (vehicle.electric30MinKw || vehicle.electric30MinKwList?.length) {
+  if (!isPickup && (vehicle.electric30MinKw || vehicle.electric30MinKwList?.length)) {
     const electricParts = vehicle.electric30MinKwList || vehicle.electricKw || [];
     const electricDetails = electricParts.length > 1
       ? `${electricParts.join(' + ')} = ${vehicle.electric30MinKw}`
       : String(vehicle.electric30MinKw);
     lines.push(`<b>30-минутная мощность электромотора:</b> ${electricDetails} кВт`);
   }
-  if (['parallel', 'parallel-series', 'series-parallel'].includes(vehicle.hybridType)) {
+  if (!isPickup && ['parallel', 'parallel-series', 'series-parallel'].includes(vehicle.hybridType)) {
     lines.push(`<b>Расчётная мощность:</b> ${vehicle.engineKw || vehicle.combustionKw} + ${vehicle.electric30MinKw} = ${formatPower(vehicle.totalKw)}`);
-  } else {
+  } else if (!isPickup) {
     lines.push(`<b>Расчётная мощность:</b> ${formatPower(vehicle.totalKw)}`);
   }
   lines.push('');
   for (const item of util) {
+    if (item.pickup) {
+      lines.push(`<b>${ageLabel(item.age)}</b>`);
+      lines.push(`<b>Утилизационный сбор для пикапа: ${formatMoney(item.commercial)}</b>`);
+      lines.push(`Ставка определена по категории ${escapeHtml(vehicle.category)} и полной массе.`);
+      continue;
+    }
     if (item.personal !== item.commercial) {
       lines.push(`<b>${ageLabel(item.age)}</b>`);
       lines.push(`<b>Утилизационный сбор: ${formatMoney(item.personal)}</b>`);
