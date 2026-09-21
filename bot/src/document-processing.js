@@ -109,7 +109,11 @@ function parseSbkts(document) {
   const combustionKw = parsedPower.engineMaxKw;
   const electricKw = parsedPower.electric30MinKw;
   const electric30MinKw = parsedPower.electric30MinKwTotal;
-  const power = analyzeVehiclePower(document.text, { engineKw: combustionKw, electric30MinKw });
+  const power = analyzeVehiclePower(document.text, {
+    engineKw: combustionKw,
+    electric30MinKw,
+    electric30MinKwSpecified: electricKw.length > 0
+  });
   const powerErrorCode = parsedPower.ambiguousFields.length
     ? 'POWER_DATA_AMBIGUOUS'
     : power.errorCode;
