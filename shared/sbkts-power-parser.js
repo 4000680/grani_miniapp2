@@ -1,5 +1,8 @@
 (function installSbktsPowerParser(globalScope) {
   const NUMBER_RE = /\d+(?:[.,]\d+)?/g;
+  // В СБКТС иногда указывают техническое значение 0,0001 кВт вместо
+  // отсутствующей 30-минутной мощности. Это не фактическая мощность.
+  const MIN_MEANINGFUL_30_MIN_POWER_KW = 1;
 
   function normalizeLine(value) {
     return String(value || '')
@@ -145,7 +148,8 @@
     const engineCandidates = enginePowerCandidates(lines);
     const distinctEngineCandidates = [...new Set(engineCandidates)];
     const electricMaxKw = collectElectricMaximumPowers(lines);
-    const electric30MinKw = collectThirtyMinutePowers(lines);
+    const electric30MinKw = collectThirtyMinutePowers(lines)
+      .map(value => value < MIN_MEANINGFUL_30_MIN_POWER_KW ? 0 : value);
     const ambiguousFields = distinctEngineCandidates.length > 1 ? ['engineMaxKw'] : [];
 
     return {
