@@ -42,6 +42,42 @@ test('parses an EPTS layout and uses the TR TS category', () => {
   ]);
 });
 
+test('calculates pickup util from an EPTS N1G category and full mass', () => {
+  const document = {
+    text: 'Выписка\nиз электронного паспорта транспортного средства',
+    pages: [[
+      line(658, 'Марка', 'RAM'),
+      line(638, 'Коммерческое наименование', '1500 REBEL'),
+      line(566, 'Категория в соответствии с ТР ТС 018/2011', 'N1G'),
+      line(466, 'Месяц и год изготовления', 'сентябрь 2025'),
+      line(308, '– рабочий объем цилиндров (см³)', '2993'),
+      line(252, 'Технически допустимая максимальная масса', '3220')
+    ]]
+  };
+  const vehicle = parseVehicleDocument(document);
+  assert.deepEqual(
+    { category: vehicle.category, year: vehicle.year, ccm: vehicle.ccm, maxMass: vehicle.maxMass },
+    { category: 'N1G', year: 2025, ccm: 2993, maxMass: 3220 }
+  );
+  assert.deepEqual(calculateUtil(vehicle, new Date('2026-09-21T00:00:00Z')), [
+    { age: 'new', commercial: 990000, personal: 990000, pickup: true, utilCoefficient: 6.6 }
+  ]);
+});
+
+test('calculates pickup util from an SBKTS N1 category and full mass', () => {
+  const document = {
+    text: 'СВИДЕТЕЛЬСТВО О БЕЗОПАСНОСТИ КОНСТРУКЦИИ ТРАНСПОРТНОГО СРЕДСТВА',
+    pages: [
+      [line(476, 'МАРКА', 'TEST', 206), line(460, 'КОММЕРЧЕСКОЕ', 'PICKUP', 206), line(374, 'ГОД ВЫПУСКА', '2024 г.', 206), line(358, 'КАТЕГОРИЯ', 'N1', 206)],
+      [line(567, 'Технически допустимая максимальная масса', '3000', 206), line(277, '- рабочий объем цилиндров,', '2000', 206)]
+    ]
+  };
+  const vehicle = parseVehicleDocument(document);
+  assert.deepEqual(calculateUtil(vehicle, new Date('2026-09-21T00:00:00Z')), [
+    { age: 'new', commercial: 990000, personal: 990000, pickup: true, utilCoefficient: 6.6 }
+  ]);
+});
+
 test('parses SБКТС and adds every 30-minute electric power', () => {
   const document = {
     text: [
