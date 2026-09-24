@@ -137,6 +137,27 @@ function parseRussianDateFromText(text) {
   return month ? validDate(Number(match[3]), month, Number(match[1])) : null;
 }
 
+function parseManufactureMonth(value) {
+  const text = normalize(value).toLowerCase();
+  const yearMatch = text.match(/\b(?:19|20)\d{2}\b/);
+  if (!yearMatch) return null;
+  const prefix = text.slice(0, yearMatch.index);
+  const monthWord = prefix.match(/[а-яё]+/i)?.[0];
+  if (monthWord) return monthNumber(monthWord);
+  const numericMonth = prefix.match(/(?:^|\D)(0?[1-9]|1[0-2])\s*[./-]?\s*$/);
+  return numericMonth ? Number(numericMonth[1]) : null;
+}
+
+function parseSbktsManufactureMonth(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  for (const line of lines) {
+    if (!/(?:месяц\s+и\s+год\s+изготовления|дата\s+изготовления|дата\s+выпуска)/i.test(line)) continue;
+    const month = parseManufactureMonth(line);
+    if (month) return month;
+  }
+  return null;
+}
+
 function monthNumber(word) {
   const value = String(word).toLowerCase();
   for (const [prefix, month] of Object.entries(RU_MONTHS)) if (value.startsWith(prefix)) return month;
@@ -151,6 +172,7 @@ function parseSbkts(document) {
   const vin = pageValue(first, /^ИДЕНТИФИКАЦИОННЫЙ(?:\s|$)/i, 180);
   const applicant = pageValue(first, /^ЗАЯВИТЕЛЬ И ЕГО АДРЕС(?:\s|$)/i, 180);
   const year = numberValue(first, /^ГОД ВЫПУСКА(?:\s|$)/i, 180);
+  const manufactureMonth = parseSbktsManufactureMonth(document.text);
   const category = vehicleCategory(pageValue(first, /^КАТЕГОРИЯ(?:\s|$)/i, 180));
   const ccm = numberValue(second, /рабочий объем цилиндров/i, 180);
   const maxMass = numberValue(second, /Технически допустимая/i, 180);
@@ -182,7 +204,7 @@ function parseSbkts(document) {
   }));
   return {
     type: 'sbkts', brand, model, vin, surname: applicant?.split(/\s+/)[0] || null,
-    year, category, ccm, combustionKw, engineKw: combustionKw,
+    year, manufactureMonth, category, ccm, combustionKw, engineKw: combustionKw,
     engineMaxKw: combustionKw, electricMaxKw: parsedPower.electricMaxKw,
     electricKw, electric30MinKwList: electricKw, electric30MinKw,
     calculatedKw: power.calculatedKw, totalKw: power.calculatedKw,
@@ -199,6 +221,7 @@ function parseEpts(document) {
   const vin = pageValue(first, /^Идентификационный номер(?:\s|$)/i, 350);
   const yearText = pageValue(first, /^Месяц и год изготовления(?:\s|$)/i, 350);
   const year = Number(yearText?.match(/\b(19|20)\d{2}\b/)?.[0]) || null;
+  const manufactureMonth = parseManufactureMonth(yearText);
   const category = vehicleCategory(pageValue(first, /^Категория в соответствии с ТР ТС/i, 350));
   const ccm = numberValueFromDocument(document.pages, /рабочий объем цилиндров/i, 350);
   const combustionKw = numberValueFromDocument(document.pages, /максимальная мощность \(кВт\)/i, 350);
@@ -215,7 +238,7 @@ function parseEpts(document) {
     electric30MinKwSpecified: electricKw.length > 0
   });
   return {
-    type: 'epts', brand, model, vin, surname: owner?.split(/\s+/)[0] || null, year, yearText, category, ccm, combustionKw,
+    type: 'epts', brand, model, vin, surname: owner?.split(/\s+/)[0] || null, year, manufactureMonth, yearText, category, ccm, combustionKw,
     engineKw: combustionKw, electricKw, electric30MinKwList: electricKw, electric30MinKw,
     totalKw: power.calculatedKw,
     maxMass, cargoType: detectCargoType(document.text), issueDate: null,
@@ -232,13 +255,17 @@ export function parseVehicleDocument(document) {
 
 function round2(value) { return Math.round(value * 100) / 100; }
 
-function ageStatus(year, now = new Date()) {
+function ageStatus(year, now = new Date(), manufactureMonth = null) {
   const difference = now.getUTCFullYear() - year;
-  return difference > 3 ? ['old'] : difference < 3 ? ['new'] : ['new', 'old'];
+  if (difference > 3) return ['old'];
+  if (difference < 3) return ['new'];
+  if (!manufactureMonth) return ['new', 'old'];
+  const ageInMonths = difference * 12 + now.getUTCMonth() + 1 - manufactureMonth;
+  return ageInMonths < 36 ? ['new'] : ['old'];
 }
 
 export function calculateUtil(vehicle, now = new Date(), calculationYear = now.getUTCFullYear()) {
-  const ages = vehicle.ageGroup ? [vehicle.ageGroup] : ageStatus(vehicle.year, now);
+  const ages = vehicle.ageGroup ? [vehicle.ageGroup] : ageStatus(vehicle.year, now, vehicle.manufactureMonth);
   if (ages.some(age => age !== 'new' && age !== 'old')) throw new Error('Не удалось определить возрастную категорию автомобиля');
   if (isCargoCategory(vehicle.category)) {
     if (!vehicle.year || !vehicle.maxMass) throw new Error('Не удалось определить год выпуска или технически допустимую максимальную массу');
