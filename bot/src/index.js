@@ -76,6 +76,10 @@ const INFO = {
     title: '📎 <b>Расчёт по документу</b>',
     text: 'Отправьте в этот чат PDF-файл СБКТС или выписку ЭПТС — можно просто переслать документ из другого чата. 🛞'
   },
+  laboratories: {
+    title: '🧪 <b>Список лабораторий</b>',
+    text: 'Раздел готовится к добавлению.'
+  },
   payment: {
     title: '💳 <b>Реквизиты для оплаты утильсбора</b>',
     text: [
@@ -145,13 +149,11 @@ function escapeHtml(value) {
 }
 
 function menuKeyboard(env) {
-  const app = env.MINI_APP_URL || 'https://4000680.github.io/grani_miniapp2/';
   return {
     inline_keyboard: [
       [{ text: '🚗 Таможенное оформление', callback_data: 'customs:start' }],
-      [{ text: '🛞 Рассчитать утильсбор', web_app: { url: app + 'tabs/utilsbor/index.html' } }],
-      [{ text: '📅 Рассчитать пени', web_app: { url: app + 'tabs/utilsbor/index.html?mode=peni' } }],
-      [{ text: '📟 Рассчитать по СБКТС или ЭПТС', callback_data: 'info:pdf' }],
+      [{ text: '🛞 Рассчитать утильсбор', callback_data: 'menu:util' }],
+      [{ text: '🧪 Список лабораторий', callback_data: 'info:laboratories' }],
       [{ text: '💳 Реквизиты для оплаты утильсбора', callback_data: 'info:payment' }],
       [{ text: '📄 Получить ЭПТС по VIN', callback_data: 'info:epts' }],
       [{ text: '🔎 Запросить скрин СБКТС', callback_data: 'info:sbkts' }],
@@ -3228,7 +3230,7 @@ async function handleUpdate(env, update) {
   if (query.data?.startsWith('catalog:')) await handleCatalogCallback(env, query);
   else if (query.data?.startsWith('customs:')) await handleCustomsCallback(env, query);
   else if (query.data?.startsWith('calc:')) await handleCalculationCallback(env, query);
-  else if (query.data === 'menu') await sendMenu(env, query.message.chat.id);
+  else if (query.data === 'menu' || query.data === 'menu:util') await sendMenu(env, query.message.chat.id);
   else if (query.data?.startsWith('info:')) await showInfo(env, query.message, query.data.slice(5));
 }
 
