@@ -238,9 +238,11 @@ function ageStatus(year, now = new Date()) {
 }
 
 export function calculateUtil(vehicle, now = new Date(), calculationYear = now.getUTCFullYear()) {
+  const ages = vehicle.ageGroup ? [vehicle.ageGroup] : ageStatus(vehicle.year, now);
+  if (ages.some(age => age !== 'new' && age !== 'old')) throw new Error('Не удалось определить возрастную категорию автомобиля');
   if (isCargoCategory(vehicle.category)) {
     if (!vehicle.year || !vehicle.maxMass) throw new Error('Не удалось определить год выпуска или технически допустимую максимальную массу');
-    return ageStatus(vehicle.year, now).map(age => {
+    return ages.map(age => {
       const rate = selectUtilRate({
         category: vehicle.category, vehicleType: vehicle.cargoType,
         maxMass: vehicle.maxMass, age, year: calculationYear
@@ -268,7 +270,7 @@ export function calculateUtil(vehicle, now = new Date(), calculationYear = now.g
   const commercial = selectUtilRate({ category: 'M1', powertrain, payer: 'commercial', ccm: calculationCcm, powerKw: vehicle.totalKw, age: 'new', year: calculationYear });
   const personal = selectUtilRate({ category: 'M1', powertrain, payer: 'personal', ccm: calculationCcm, powerKw: vehicle.totalKw, age: 'new', year: calculationYear });
   if (!commercial || !personal) throw new Error('Для этих характеристик не найдена ставка');
-  return ageStatus(vehicle.year, now).map(age => ({
+  return ages.map(age => ({
     age,
     commercial: selectUtilRate({ category: 'M1', powertrain, payer: 'commercial', ccm: calculationCcm, powerKw: vehicle.totalKw, age, year: calculationYear }).amount,
     personal: selectUtilRate({ category: 'M1', powertrain, payer: 'personal', ccm: calculationCcm, powerKw: vehicle.totalKw, age, year: calculationYear }).amount
