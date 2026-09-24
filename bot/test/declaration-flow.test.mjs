@@ -45,3 +45,21 @@ test('акциз по декларации не начисляется для к
     assert.equal(result.vat, 253_000, category);
   }
 });
+
+test('N3 declaration calculates one selected commercial rate and builds penalty base from final formula total', () => {
+  const result = calculateDeclarationPayment({
+    priceRub: 10_000_000,
+    vehicle: {
+      category: 'N3', year: 2023, ageGroup: 'old', totalKw: 338,
+      maxMass: 19500, cargoType: 'cargo'
+    },
+    paidDutyRub: 0,
+    paidVatRub: 0
+  });
+  assert.deepEqual(result.util.map(({ age, amount, dutyDifference, vatDifference, total }) => ({
+    age, amount, dutyDifference, vatDifference, total
+  })), [{
+    age: 'old', amount: 6069000, dutyDifference: 1500000,
+    vatDifference: 2530000, total: 10099000
+  }]);
+});
