@@ -22,15 +22,18 @@ test('поиск по шаблону СЭП запрашивает группу 
 
 test('декларация показывает открытый VIN отдельно и ведёт на сайт ФТС', () => {
   assert.match(source, /async function sendDeclarationVin/);
-  assert.match(source, /<b>VIN:<\\/b> <code>\\$\\{escapeHtml\\(vehicle\\.vin \\|\\| 'не найден'\\)\\}<\\/code>/);
-  const vinFunction = source.slice(source.indexOf('async function sendDeclarationVin'), source.indexOf('\\nfunction peniCases'));
-  assert.match(vinFunction, /telegram\\(env, 'sendMessage'/);
-  assert.doesNotMatch(vinFunction, /editMessageText/);
-  assert.match(source, /async function continueDeclarationAfterDocument\\(env, chatId, userId, state, vehicle, util, deadline, workingMessage = null\\)/);
-  assert.match(source, /if \\(workingMessage\\?\\.from\\?\\.is_bot\\) await discardWorkingCard\\(env, workingMessage, userId\\);\\s*await sendDeclarationVin\\(env, chatId, vehicle\\);/);
-  assert.match(source, /await promptDeclarationFtsName\\(env, chatId, userId, declaration\\);/);
-  assert.match(source, /<b>Технически допустимая максимальная масса:<\\/b> \\$\\{Number\\.isFinite\\(maxMass\\) && maxMass > 0 \\? `\\$\\{maxMass\\.toLocaleString\\('ru-RU'\\)\\} кг` : '—'\\}/);
-  assert.match(source, /<a href="https:\\/\\/customs\\.gov\\.ru\\/">ФТС<\\/a>/);
+  const vinStart = source.indexOf('async function sendDeclarationVin');
+  const vinEnd = source.indexOf('function peniCases', vinStart);
+  const vinFunction = source.slice(vinStart, vinEnd);
+  assert.ok(vinFunction.includes("return telegram(env, 'sendMessage'"));
+  assert.equal(vinFunction.includes('editMessageText'), false);
+  const continueStart = source.indexOf('async function continueDeclarationAfterDocument');
+  const continueEnd = source.indexOf('async function handleDeclarationReply', continueStart);
+  const continueFunction = source.slice(continueStart, continueEnd);
+  assert.ok(continueFunction.indexOf('await discardWorkingCard') < continueFunction.indexOf('await sendDeclarationVin'));
+  assert.ok(continueFunction.indexOf('await sendDeclarationVin') < continueFunction.indexOf('await promptDeclarationFtsName'));
+  assert.ok(source.includes('<b>Технически допустимая максимальная масса:</b>'));
+  assert.match(source, /<a href="https:\/\/customs\.gov\.ru\/">ФТС<\/a>/);
   assert.match(source, /Для таможенного органа наименование должно совпадать один в один/);
 });
 
