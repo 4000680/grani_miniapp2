@@ -63,3 +63,17 @@ test('N3 declaration calculates one selected commercial rate and builds penalty 
     vatDifference: 2530000, total: 10099000
   }]);
 });
+
+test('declaration can recalculate commercial util at 2027 coefficients', () => {
+  const vehicle = {
+    category: 'N3', year: 2023, ageGroup: 'old', totalKw: 338,
+    maxMass: 19500, cargoType: 'cargo'
+  };
+  const current = calculateDeclarationPayment({ priceRub: 10_000_000, vehicle, calculationYear: 2026 });
+  const nextYear = calculateDeclarationPayment({ priceRub: 10_000_000, vehicle, calculationYear: 2027 });
+  assert.equal(current.util[0].coefficient, 40.46);
+  assert.equal(current.util[0].amount, 6_069_000);
+  assert.equal(nextYear.util[0].coefficient, 44.51);
+  assert.equal(nextYear.util[0].amount, 6_676_500);
+  assert.equal(nextYear.calculationYear, 2027);
+});
