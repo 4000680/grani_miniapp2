@@ -33,17 +33,35 @@ test('декларация показывает открытый VIN отдел�
 test('документ N3 после уточнения продолжается в расчёте по декларации, а не в обычном расчёте утильсбора', () => {
   assert.match(source, /const mode = declarationState\?\.mode === 'declaration' \? 'declaration' : 'util';/);
   assert.match(source, /continueDeclarationAfterDocument\(env, message\.chat\.id, userId, state, vehicle, util, deadline, message\)/);
-  assert.match(source, /const ageChoice = query\.data\.match\(\/\^calc:age:\(new\|old\)\$\//);
+  assert.match(source, /if \(util\.length > 1\) \{[\s\S]*?stage: 'document-age'[\s\S]*?documentAgePrompt\(vehicle\)/);
+  assert.match(source, /Возраст автомобиля для расчёта определяется по месяцу выпуска\. В документе месяц не указан/);
+  assert.match(source, /text: 'До 3 лет', callback_data: 'calc:age:new'/);
+  assert.match(source, /text: 'Старше 3 лет', callback_data: 'calc:age:old'/);
+  assert.match(source, /callback_data: backCallback/);
+  assert.match(source, /callback_data: 'declaration:result:menu'/);
+  assert.match(source, /if \(declarationState\?\.mode === 'declaration'\) \{[\s\S]*?continueDeclarationAfterDocument\(env, message\.chat\.id, userId, declarationState, vehicle, util, deadline, status\)/);
   assert.match(source, /if \(state\.mode === 'declaration'\) \{[\s\S]*?continueDeclarationAfterDocument\(env, message\.chat\.id, userId, state, vehicle, util, deadline, message\)/);
   assert.match(source, /<b>Коммерческий утилизационный сбор \(\$\{ageLabel\(item\.age\)\}\):<\/b>/);
   assert.match(source, /const debts = payment\.util\.map\(item => \(\{ label: ageLabel\(item\.age\), sum: item\.total \}\)\)/);
 });
 
-test('возрастной выбор и уточнение типа грузового авто имеют кнопки назад и главное меню', () => {
-  assert.match(source, /function documentAgeKeyboard\(mode\)/);
-  assert.match(source, /callback_data: back/);
-  assert.match(source, /callback_data: menu/);
-  assert.match(source, /mode === 'declaration' \? 'declaration:back:start' : 'calc:back:document'/);
+test('в декларационном потоке после документа нет кнопки пересчёта на 2027 год', () => {
+  const start = source.indexOf("if (declarationState?.mode === 'declaration')");
+  const branch = source.slice(start, source.indexOf('const cases = peniCases(util);', start));
+  assert.doesNotMatch(branch, /2027|calc:year/);
+});
+
+test('возврат с уточнения возраста возвращает к предыдущему выбору типа грузовика', () => {
+  assert.match(source, /reply_markup: documentAgeKeyboard\('calc:cargo:back'\)/);
+  assert.match(source, /if \(query\.data === 'calc:cargo:back'\)/);
+  assert.match(source, /cargoTypePrompt\(vehicle, state\.cargoCandidates, true\)/);
+});
+
+test('финальная карточка декларационного расчёта содержит кнопку назад к последнему параметру', () => {
+  assert.match(source, /callback_data: 'declaration:back:paid-vat'/);
+  assert.match(source, /if \(query\.data === 'declaration:back:paid-vat' && state\.stage === 'result'\)/);
+  assert.match(source, /stage: 'paid-vat'/);
+  assert.match(source, /text: 'Укажите уплаченный НДС по коду <b>50-10<\/b> как указано в декларации\.'/);
 });
 
 test('декларация использует утверждённые формулировки старта и платежей', () => {
