@@ -1,4 +1,5 @@
 import { calculateUtil } from './document-processing.js';
+import { selectUtilRate } from '../../shared/util-rate-selector.js';
 import { DECLARATION_PRICE_LIST } from './declaration-price-list.js';
 import { electricExciseRate } from './customs-calculation.js';
 
@@ -39,11 +40,26 @@ export function findDeclarationPrice(name) {
   return { exact, closest };
 }
 
-export function commercialDeclarationUtil(vehicle) {
+export function commercialDeclarationUtil(vehicle, calculationYear = new Date().getUTCFullYear()) {
   const utilVehicle = String(vehicle?.category || '').toUpperCase() === 'M1G'
     ? { ...vehicle, category: 'M1' }
     : vehicle;
-  return calculateUtil(utilVehicle).map(item => ({ age: item.age, amount: item.commercial }));
+  const calculationCcm = ['series', 'ev'].includes(utilVehicle?.hybridType) ? null : utilVehicle?.ccm;
+  const powertrain = calculationCcm ? 'combustion' : 'electric';
+  return calculateUtil(utilVehicle, new Date(), calculationYear).map(item => {
+    const rate = String(utilVehicle?.category || '').toUpperCase() === 'M1'
+      ? selectUtilRate({
+          category: 'M1', powertrain, payer: 'commercial', ccm: calculationCcm,
+          powerKw: utilVehicle?.totalKw, age: item.age, year: calculationYear
+        })
+      : null;
+    return {
+      age: item.age,
+      amount: item.commercial,
+      coefficient: item.utilCoefficient ?? item.utilRate?.coefficient ?? rate?.coefficient ?? null,
+      calculationYear: item.utilRate?.calculationYear ?? rate?.calculationYear ?? calculationYear
+    };
+  });
 }
 
 function declarationExciseApplies(category) {
@@ -51,7 +67,7 @@ function declarationExciseApplies(category) {
   return normalizedCategory === 'M1' || normalizedCategory === 'M1G';
 }
 
-export function calculateDeclarationPayment({ priceRub, vehicle, paidDutyRub = 0, paidVatRub = 0 }) {
+export function calculateDeclarationPayment({ priceRub, vehicle, paidDutyRub = 0, paidVatRub = 0, calculationYear = new Date().getUTCFullYear() }) {
   const price = Number(priceRub);
   const powerKw = Number(vehicle?.totalKw);
   if (!Number.isFinite(price) || price <= 0) throw new Error('Не указана стоимость автомобиля');
@@ -62,11 +78,11 @@ export function calculateDeclarationPayment({ priceRub, vehicle, paidDutyRub = 0
     ? Math.round(hp * electricExciseRate(powerKw))
     : 0;
   const vat = Math.round((price + duty + excise) * 0.22);
-  const util = commercialDeclarationUtil(vehicle).map(item => ({
+  const util = commercialDeclarationUtil(vehicle, calculationYear).map(item => ({
     ...item,
     dutyDifference: Math.round(duty - paidDutyRub),
     vatDifference: Math.round(vat - paidVatRub),
     total: Math.round(duty - paidDutyRub + vat - paidVatRub + excise + item.amount)
   }));
-  return { price, duty, excise, vat, util };
+  return { price, duty, excise, vat, util, calculationYear };
 }
