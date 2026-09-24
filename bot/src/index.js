@@ -70,8 +70,8 @@ const MENU_TEXT = [
 const DECLARATION_START_TEXT = [
   '🧾 <b>Расчёт утильсбора по декларации</b>',
   '',
-  'Загрузите PDF СБКТС или выписку ЭПТС.',
-  'Либо напишите марку, модель и год выпуска автомобиля — я найду его в шаблоне СЭП для дальнейшего расчёта по декларации.'
+  'Загрузите СБКТС или выписку ЭПТС.',
+  'Либо напишите марку, модель и год выпуска автомобиля — я найду его в шаблоне СЭП.'
 ].join('\n');
 
 const UTIL_START_TEXT = [
@@ -642,6 +642,19 @@ async function sendDocumentIdentity(env, chatId, vehicle, replyToMessageId = nul
       allow_sending_without_reply: true
     } : undefined
   });
+}
+
+async function sendDeclarationVin(env, chatId, vehicle, workingMessage = null) {
+  const text = `<b>VIN:</b> <code>${escapeHtml(vehicle.vin || 'не найден')}</code>`;
+  if (workingMessage?.from?.is_bot) {
+    return telegram(env, 'editMessageText', {
+      chat_id: chatId,
+      message_id: workingMessage.message_id,
+      text,
+      parse_mode: 'HTML'
+    });
+  }
+  return telegram(env, 'sendMessage', { chat_id: chatId, text, parse_mode: 'HTML' });
 }
 
 function peniCases(util) {
@@ -3011,8 +3024,8 @@ async function handleDocument(env, message) {
     if (!response.ok) throw new Error('Telegram не отдал файл для скачивания');
     const { vehicle, util, deadline } = await processVehicleDocument(new Uint8Array(await response.arrayBuffer()));
     if (declarationState?.mode === 'declaration') {
-      await promptDeclarationFtsName(env, message.chat.id, userId, { ...declarationState, vehicle, util, deadline: deadline?.toISOString?.() || null }, status);
-      await sendDocumentIdentity(env, message.chat.id, vehicle, message.message_id).catch(() => null);
+      await sendDeclarationVin(env, message.chat.id, vehicle, status);
+      await promptDeclarationFtsName(env, message.chat.id, userId, { ...declarationState, vehicle, util, deadline: deadline?.toISOString?.() || null });
       return;
     }
     const cases = peniCases(util);
@@ -3303,8 +3316,8 @@ async function promptDeclarationFtsName(env, chatId, userId, state, workingMessa
     '',
     ...declarationVehicleLines(next.vehicle),
     '',
-    'Проверьте VIN на сайте ФТС и пришлите сюда <b>точное наименование</b> автомобиля, как оно указано на сайте ФТС.',
-    '<i>Для таможни наименование должно совпадать один в один.</i>'
+    'Проверьте VIN на сайте <a href="https://customs.gov.ru/">ФТС</a> и пришлите сюда <b>точное наименование</b> автомобиля, как оно указано на сайте ФТС.',
+    '<i>Для таможенного органа наименование должно совпадать один в один.</i>'
   ].join('\n');
   if (workingMessage?.from?.is_bot) {
     await telegram(env, 'editMessageText', { chat_id: chatId, message_id: workingMessage.message_id, text, parse_mode: 'HTML', reply_markup: declarationKeyboard([], next.backFromFts || 'declaration:back:start') });
@@ -3346,7 +3359,7 @@ async function handleDeclarationReply(env, message) {
       const rub = convertCurrencyToRub(amount, currencyRate);
       if (state.stage === 'paid-duty') {
         await setCustomsState(env, userId, { ...state, stage: 'paid-vat', paidDuty: amount, paidDutyRub: rub, currencyRate });
-        const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: `Пошлина принята: <b>${formatCurrencyAmount(amount, country.currency)}</b>.\n\nТеперь укажите уплаченный НДС по коду <b>50-10</b> в ${country.name}.`, parse_mode: 'HTML', reply_markup: declarationKeyboard([], 'declaration:back:country') });
+        const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: `Пошлина принята: <b>${formatCurrencyAmount(amount, country.currency)}</b>.\n\nТеперь укажите уплаченный НДС по коду <b>50-10</b> как указано в декларации.`, parse_mode: 'HTML', reply_markup: declarationKeyboard([], 'declaration:back:country') });
         await trackTemporaryMessage(env, userId, sent.message_id);
         return true;
       }
@@ -3404,7 +3417,7 @@ async function handleDeclarationCallback(env, query) {
   if (!countryMatch) return;
   const country = DECLARATION_COUNTRIES[countryMatch[1]];
   await setCustomsState(env, userId, { ...state, stage: 'paid-duty', country: countryMatch[1] });
-  await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: `Страна: <b>${country.label}</b>.\n\nУкажите уплаченную таможенную пошлину по коду <b>20-10</b> в ${country.name}.`, parse_mode: 'HTML', reply_markup: declarationKeyboard([], 'declaration:back:country') });
+  await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: `Страна: <b>${country.label}</b>.\n\nУкажите уплаченную таможенную пошлину по коду <b>20-10</b> как указано в декларации.`, parse_mode: 'HTML', reply_markup: declarationKeyboard([], 'declaration:back:country') });
 }
 
 async function sendCalculationStart(env, chatId, userId = chatId) {
