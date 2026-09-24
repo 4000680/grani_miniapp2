@@ -33,6 +33,11 @@ import {
   parsePositiveNumber
 } from './customs-calculation.js';
 import { electricCustomsPowerDetails } from './electric-customs-flow.js';
+import {
+  DECLARATION_COUNTRIES,
+  calculateDeclarationPayment,
+  findDeclarationPrice
+} from './declaration-flow.js';
 import { isPermanentResultText } from './message-policy.js';
 export { ApplicationsStore } from './applications-store.js';
 
@@ -62,10 +67,11 @@ const MENU_TEXT = [
   'Функционал бота постоянно пополняется 🎮'
 ].join('\n');
 
-const UTIL_MENU_TEXT = [
-  '📟 Для расчёта утильсбора отправьте PDF-файл СБКТС или выписку ЭПТС.',
+const DECLARATION_START_TEXT = [
+  '🧾 <b>Расчёт утильсбора по декларации</b>',
   '',
-  '🎛️ Для поиска по шаблону СЭП напишите марку, модель и год выпуска.'
+  'Загрузите PDF СБКТС или выписку ЭПТС.',
+  'Либо напишите марку, модель и год выпуска автомобиля — я найду его в шаблоне СЭП для дальнейшего расчёта по декларации.'
 ].join('\n');
 
 const OVER3_CUSTOMS_FEE_BRACKETS = [
@@ -84,10 +90,6 @@ const INFO = {
   },
   laboratories: {
     title: '🧪 <b>Список лабораторий</b>',
-    text: 'Раздел готовится к добавлению.'
-  },
-  declaration: {
-    title: '🧾 <b>Расчёт утильсбора по декларации</b>',
     text: 'Раздел готовится к добавлению.'
   },
   payment: {
@@ -163,7 +165,6 @@ function menuKeyboard(env) {
     inline_keyboard: [
       [{ text: '🚗 Таможенное оформление', callback_data: 'customs:start' }],
       [{ text: '🛞 Рассчитать утильсбор', callback_data: 'menu:util' }],
-      [{ text: '🧾 Расчёт утильсбора по декларации', callback_data: 'info:declaration' }],
       [{ text: '🧪 Список лабораторий', callback_data: 'info:laboratories' }],
       [{ text: '💳 Реквизиты для оплаты утильсбора', callback_data: 'info:payment' }],
       [{ text: '📄 Получить ЭПТС по VIN', callback_data: 'info:epts' }],
@@ -228,7 +229,11 @@ const ELECTRIC_CUSTOMS_CURRENCIES = {
   USD: { button: '🇺🇸 Доллары', name: 'долларах США', code: 'USD', symbol: '$' },
   EUR: { button: '🇪🇺 Евро', name: 'евро', code: 'EUR', symbol: '€' },
   CNY: { button: '🇨🇳 Юани', name: 'китайских юанях', code: 'CNY', symbol: '¥' },
-  KRW: { button: '🇰🇷 Воны', name: 'корейских вонах', code: 'KRW', symbol: '₩' }
+  KRW: { button: '🇰🇷 Воны', name: 'корейских вонах', code: 'KRW', symbol: '₩' },
+  AMD: { button: '🇦🇲 Драмы', name: 'армянских драмах', code: 'AMD', symbol: '֏' },
+  BYN: { button: '🇧🇾 Белорусские рубли', name: 'белорусских рублях', code: 'BYN', symbol: 'Br' },
+  KGS: { button: '🇰🇬 Сомы', name: 'киргизских сомах', code: 'KGS', symbol: 'с' },
+  KZT: { button: '🇰🇿 Тенге', name: 'казахстанских тенге', code: 'KZT', symbol: '₸' }
 };
 
 async function euroRate(env) {
@@ -2919,6 +2924,10 @@ async function handleCatalogCallback(env, query) {
     hybridType: electric ? 'электромобиль / последовательный гибрид' : 'ДВС / параллельный гибрид'
   };
   const util = calculateUtil(vehicle);
+  if (state?.mode === 'declaration') {
+    await promptDeclarationFtsName(env, message.chat.id, query.from?.id || message.chat.id, { ...state, vehicle, util }, message);
+    return;
+  }
   if (sourceParsed?.customsMode === 'electric') {
     await showElectricCustomsCurrencyPrompt(
       env,
@@ -2984,15 +2993,21 @@ async function handleDocument(env, message) {
     return;
   }
   const userId = message.from?.id || message.chat.id;
+  const declarationState = await getCustomsState(env, userId);
   await cleanupTemporaryMessages(env, userId, message.chat.id);
   await telegram(env, 'sendChatAction', { chat_id: message.chat.id, action: 'typing' });
-  const status = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: '📄 Читаю документ и рассчитываю утильсбор…' });
+  const status = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: declarationState?.mode === 'declaration' ? '📄 Читаю документ для расчёта по декларации…' : '📄 Читаю документ и рассчитываю утильсбор…' });
   await trackTemporaryMessage(env, userId, status.message_id);
   try {
     const file = await telegram(env, 'getFile', { file_id: document.file_id });
     const response = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`);
     if (!response.ok) throw new Error('Telegram не отдал файл для скачивания');
     const { vehicle, util, deadline } = await processVehicleDocument(new Uint8Array(await response.arrayBuffer()));
+    if (declarationState?.mode === 'declaration') {
+      await promptDeclarationFtsName(env, message.chat.id, userId, { ...declarationState, vehicle, util, deadline: deadline?.toISOString?.() || null }, status);
+      await sendDocumentIdentity(env, message.chat.id, vehicle, message.message_id).catch(() => null);
+      return;
+    }
     const cases = peniCases(util);
     const result = formatDocumentResult(vehicle, util, deadline);
     await saveApplication(env, message.from?.id, applicationFromVehicle(vehicle, util));
@@ -3129,27 +3144,6 @@ async function editMenu(env, message) {
   return edited;
 }
 
-function utilMenuKeyboard() {
-  return {
-    inline_keyboard: [[
-      { text: '← Назад', callback_data: 'menu:util:back' },
-      { text: '🏠 Главное меню', callback_data: 'menu:util:home' }
-    ]]
-  };
-}
-
-async function showUtilMenu(env, message) {
-  const edited = await telegram(env, 'editMessageText', {
-    chat_id: message.chat.id,
-    message_id: message.message_id,
-    text: UTIL_MENU_TEXT,
-    parse_mode: 'HTML',
-    reply_markup: utilMenuKeyboard()
-  });
-  await trackTemporaryMessage(env, message.chat.id, message.message_id);
-  return edited;
-}
-
 async function showInfo(env, message, section) {
   const info = INFO[section];
   if (!info) return;
@@ -3164,6 +3158,187 @@ async function showInfo(env, message, section) {
   });
   await trackTemporaryMessage(env, message.chat.id, message.message_id);
   return edited;
+}
+
+function declarationKeyboard(rows = [], back = 'declaration:back:start') {
+  return {
+    inline_keyboard: [
+      ...rows,
+      [{ text: '← Назад', callback_data: back }, { text: '🏠 Главное меню', callback_data: 'calc:menu' }]
+    ]
+  };
+}
+
+function declarationCountryKeyboard() {
+  return declarationKeyboard([
+    [{ text: '🇰🇬 Киргизия', callback_data: 'declaration:country:KG' }],
+    [{ text: '🇦🇲 Армения', callback_data: 'declaration:country:AM' }],
+    [{ text: '🇧🇾 Беларусь', callback_data: 'declaration:country:BY' }],
+    [{ text: '🇰🇿 Казахстан', callback_data: 'declaration:country:KZ' }]
+  ], 'declaration:back:fts');
+}
+
+function declarationResultKeyboard() {
+  return {
+    inline_keyboard: [[
+      { text: '🔄 Новый расчёт', callback_data: 'declaration:result:new' },
+      { text: '🏠 Главное меню', callback_data: 'declaration:result:menu' }
+    ]]
+  };
+}
+
+function declarationVehicleLines(vehicle) {
+  return [
+    `<b>Автомобиль:</b> ${escapeHtml([vehicle.brand, vehicle.model].filter(Boolean).join(' ') || '—')}`,
+    `<b>Год выпуска:</b> ${vehicle.year || '—'}`,
+    `<b>Мощность:</b> ${vehicle.totalKw ? formatPower(vehicle.totalKw) : '—'}`
+  ];
+}
+
+function declarationResultText(state, payment) {
+  const country = DECLARATION_COUNTRIES[state.country];
+  const lines = [
+    '✅ <b>Расчёт утильсбора по декларации</b>',
+    '',
+    ...declarationVehicleLines(state.vehicle),
+    `<b>Наименование ФТС:</b> ${escapeHtml(state.ftsName)}`,
+    `<b>Стоимость по перечню:</b> ${formatMoney(payment.price, true)}`,
+    '',
+    '<b>Российские платежи</b>',
+    `Таможенная пошлина 15%: ${formatMoney(payment.duty)}`,
+    `Акциз: ${formatMoney(payment.excise)}`,
+    `НДС 22%: ${formatMoney(payment.vat)}`,
+    '',
+    `<b>Страна декларации:</b> ${country.label}`,
+    `Пошлина (20-10): ${formatCurrencyAmount(state.paidDuty, country.currency)} = ${formatMoney(state.paidDutyRub)}`,
+    `НДС (50-10): ${formatCurrencyAmount(state.paidVat, country.currency)} = ${formatMoney(state.paidVatRub)}`,
+    ...(state.currencyRate?.code === 'RUB' ? [] : [formatCbrRate(state.currencyRate)]),
+    '',
+    'Утилизационный сбор рассчитан по коммерческой ставке.',
+    'При расчёте автомобиля по декларации льготная ставка не применяется.',
+    ''
+  ];
+  for (const item of payment.util) {
+    lines.push(`<b>${ageLabel(item.age)}</b>`);
+    lines.push(`Доплата таможенной пошлины: ${formatMoney(item.dutyDifference)}`);
+    lines.push(`Доплата НДС: ${formatMoney(item.vatDifference)}`);
+    lines.push(`<b>Коммерческий утилизационный сбор: ${formatMoney(item.amount)}</b>`);
+    lines.push(`<b>Итого к оплате: ${formatMoney(item.total)}</b>`);
+  }
+  if (state.deadline) {
+    const debts = payment.util.map(item => ({ label: ageLabel(item.age), sum: item.total }));
+    lines.push('', `<b>Дата оформления СБКТС:</b> ${formatDate(new Date(state.vehicle.issueDate))}`, `<b>Крайний срок уплаты: ${formatDate(new Date(state.deadline))}</b>`, formatPeniCompact(debts, new Date(state.deadline), todayUtc()));
+  }
+  return lines.join('\n');
+}
+
+async function sendDeclarationStart(env, chatId, userId = chatId) {
+  await cleanupTemporaryMessages(env, userId, chatId);
+  await setCustomsState(env, userId, { mode: 'declaration', stage: 'input' });
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: DECLARATION_START_TEXT,
+    parse_mode: 'HTML'
+  });
+  await trackTemporaryMessage(env, userId, sent.message_id);
+  return sent;
+}
+
+async function promptDeclarationFtsName(env, chatId, userId, state, workingMessage = null) {
+  const next = { ...state, mode: 'declaration', stage: 'fts-name' };
+  await setCustomsState(env, userId, next);
+  const text = [
+    '✅ <b>Автомобиль найден для расчёта</b>',
+    '',
+    ...declarationVehicleLines(next.vehicle),
+    '',
+    'Проверьте VIN на сайте ФТС и пришлите сюда <b>точное наименование</b> автомобиля, как оно указано на сайте ФТС.',
+    '<i>Для таможни наименование должно совпадать один в один.</i>'
+  ].join('\n');
+  if (workingMessage?.from?.is_bot) {
+    await telegram(env, 'editMessageText', { chat_id: chatId, message_id: workingMessage.message_id, text, parse_mode: 'HTML', reply_markup: declarationKeyboard([], 'declaration:back:start') });
+    await trackTemporaryMessage(env, userId, workingMessage.message_id);
+  } else {
+    const sent = await telegram(env, 'sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', reply_markup: declarationKeyboard([], 'declaration:back:start') });
+    await trackTemporaryMessage(env, userId, sent.message_id);
+  }
+}
+
+async function handleDeclarationReply(env, message) {
+  const userId = message.from?.id || message.chat.id;
+  const state = await getCustomsState(env, userId);
+  if (state?.mode !== 'declaration') return false;
+  if (state.stage === 'input') return false;
+  if (state.stage === 'fts-name') {
+    const found = findDeclarationPrice(message.text);
+    if (found.exact) {
+      await setCustomsState(env, userId, { ...state, stage: 'country', ftsName: message.text.trim(), priceName: found.exact.name, priceRub: found.exact.price });
+      const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: `✅ <b>Точное совпадение найдено</b>\n\n<b>Наименование:</b> ${escapeHtml(found.exact.name)}\n<b>Стоимость:</b> ${formatMoney(found.exact.price, true)}\n\nВыберите страну, в которой выдана декларация:`, parse_mode: 'HTML', reply_markup: declarationCountryKeyboard() });
+      await trackTemporaryMessage(env, userId, sent.message_id);
+      return true;
+    }
+    const rows = found.closest.map((item, index) => [{ text: `${item.name} — ${formatMoney(item.price)}`.slice(0, 60), callback_data: `declaration:price:${index}` }]);
+    await setCustomsState(env, userId, { ...state, stage: 'price-choice', ftsName: message.text.trim(), closest: found.closest });
+    const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Точного наименования в перечне не найдено. Ниже — ближайшие варианты. Для таможни наименование должно совпадать один в один.', parse_mode: 'HTML', reply_markup: declarationKeyboard(rows, 'declaration:back:fts') });
+    await trackTemporaryMessage(env, userId, sent.message_id);
+    return true;
+  }
+  if (state.stage === 'paid-duty' || state.stage === 'paid-vat') {
+    const amount = parseCurrencyAmount(message.text);
+    if (!amount || amount < 0) {
+      await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Укажите сумму числом, например: <b>125000,50</b>.', parse_mode: 'HTML', reply_markup: declarationKeyboard([], 'declaration:back:country') });
+      return true;
+    }
+    const country = DECLARATION_COUNTRIES[state.country];
+    try {
+      const currencyRate = state.currencyRate || await cbrCurrencyRate(country.currency);
+      const rub = convertCurrencyToRub(amount, currencyRate);
+      if (state.stage === 'paid-duty') {
+        await setCustomsState(env, userId, { ...state, stage: 'paid-vat', paidDuty: amount, paidDutyRub: rub, currencyRate });
+        const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: `Пошлина принята: <b>${formatCurrencyAmount(amount, country.currency)}</b>.\n\nТеперь укажите уплаченный НДС по коду <b>50-10</b> в ${country.name}.`, parse_mode: 'HTML', reply_markup: declarationKeyboard([], 'declaration:back:country') });
+        await trackTemporaryMessage(env, userId, sent.message_id);
+        return true;
+      }
+      const complete = { ...state, paidVat: amount, paidVatRub: rub, currencyRate };
+      const payment = calculateDeclarationPayment(complete);
+      await saveApplication(env, userId, applicationFromVehicle(complete.vehicle, payment.util.map(item => ({ age: item.age, personal: item.amount, commercial: item.amount }))));
+      await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: declarationResultText(complete, payment), parse_mode: 'HTML', reply_markup: declarationResultKeyboard() });
+      await clearCustomsState(env, userId);
+      return true;
+    } catch (error) {
+      await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: `Не удалось выполнить расчёт: ${escapeHtml(error.message || error)}.`, parse_mode: 'HTML', reply_markup: declarationKeyboard([], 'declaration:back:country') });
+      return true;
+    }
+  }
+  return false;
+}
+
+async function handleDeclarationCallback(env, query) {
+  const message = query.message;
+  const userId = query.from?.id || message.chat.id;
+  const state = await getCustomsState(env, userId);
+  if (query.data === 'declaration:result:menu') return sendMenu(env, message.chat.id);
+  if (query.data === 'declaration:result:new') return sendDeclarationStart(env, message.chat.id, userId);
+  if (state?.mode !== 'declaration') return;
+  if (query.data === 'declaration:back:start') return sendDeclarationStart(env, message.chat.id, userId);
+  if (query.data === 'declaration:back:fts') return promptDeclarationFtsName(env, message.chat.id, userId, { ...state, stage: 'fts-name' }, message);
+  if (query.data === 'declaration:back:country') {
+    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: 'Выберите страну, в которой выдана декларация:', reply_markup: declarationCountryKeyboard() });
+    return;
+  }
+  const price = query.data.match(/^declaration:price:(\d+)$/);
+  if (price) {
+    const item = state.closest?.[Number(price[1])];
+    if (!item) return;
+    await setCustomsState(env, userId, { ...state, stage: 'country', priceName: item.name, priceRub: item.price });
+    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: `Выбран ближайший вариант:\n<b>${escapeHtml(item.name)}</b>\nСтоимость: <b>${formatMoney(item.price, true)}</b>\n\nВыберите страну декларации:`, parse_mode: 'HTML', reply_markup: declarationCountryKeyboard() });
+    return;
+  }
+  const countryMatch = query.data.match(/^declaration:country:(KG|AM|BY|KZ)$/);
+  if (!countryMatch) return;
+  const country = DECLARATION_COUNTRIES[countryMatch[1]];
+  await setCustomsState(env, userId, { ...state, stage: 'paid-duty', country: countryMatch[1] });
+  await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: `Страна: <b>${country.label}</b>.\n\nУкажите уплаченную таможенную пошлину по коду <b>20-10</b> в ${country.name}.`, parse_mode: 'HTML', reply_markup: declarationKeyboard([], 'declaration:back:country') });
 }
 
 async function sendCalculationStart(env, chatId, userId = chatId) {
@@ -3246,6 +3421,7 @@ async function handleUpdate(env, update) {
     }
     if (await handleDateReply(env, update.message)) return;
     if (await handleCustomsReply(env, update.message)) return;
+    if (await handleDeclarationReply(env, update.message)) return;
     if (await handleCatalogWeightReply(env, update.message)) return;
     if (await handleCatalogText(env, update.message)) return;
     return;
@@ -3261,9 +3437,10 @@ async function handleUpdate(env, update) {
   if (!query.message) return;
   if (query.data?.startsWith('catalog:')) await handleCatalogCallback(env, query);
   else if (query.data?.startsWith('customs:')) await handleCustomsCallback(env, query);
+  else if (query.data?.startsWith('declaration:')) await handleDeclarationCallback(env, query);
   else if (query.data?.startsWith('calc:')) await handleCalculationCallback(env, query);
-  else if (query.data === 'menu' || query.data === 'menu:util:back' || query.data === 'menu:util:home') await editMenu(env, query.message);
-  else if (query.data === 'menu:util') await showUtilMenu(env, query.message);
+  else if (query.data === 'menu') await editMenu(env, query.message);
+  else if (query.data === 'menu:util') await sendDeclarationStart(env, query.message.chat.id, query.from?.id || query.message.chat.id);
   else if (query.data?.startsWith('info:')) await showInfo(env, query.message, query.data.slice(5));
 }
 

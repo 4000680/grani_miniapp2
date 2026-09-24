@@ -7,6 +7,7 @@ const workerSource = await readFile(new URL('../src/index.js', import.meta.url),
 
 test('recognizes every completed calculation as a permanent result', () => {
   for (const text of [
+    '✅ Расчёт утильсбора по декларации',
     '✅ Расчёт утильсбора\nBMW 318 2022',
     '✅ СБКТС распознан',
     '✅ Выписка ЭПТС распознана',
@@ -68,7 +69,7 @@ test('chain navigation clears only bot working cards and keeps final results', (
   assert.match(customsCleanup, /deleteBotMessage/);
   assert.match(discardFlow, /deleteBotMessage/);
   assert.match(catalogBackFlow, /discardWorkingCard/);
-  assert.match(workerSource, /else if \(query\.data === 'menu' \|\| query\.data === 'menu:util:back' \|\| query\.data === 'menu:util:home'\) await editMenu\(env, query\.message\)/);
+  assert.match(workerSource, /else if \(query\.data === 'menu'\) await editMenu\(env, query\.message\)/);
 });
 
 test('controlled document errors keep retry, back and main-menu navigation', () => {
