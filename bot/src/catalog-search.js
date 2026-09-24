@@ -58,20 +58,35 @@ export function getCatalogCandidate(catalog, rowIndex) {
   return row ? candidateFromRow(catalog, row, Number(rowIndex)) : null;
 }
 
+function lowerBoundBrand(rows, brandIndex) {
+  let left=0,right=rows.length;
+  while(left<right){const middle=(left+right)>>1;if(Number(rows[middle][0])<brandIndex)left=middle+1;else right=middle;}
+  return left;
+}
+
 function catalogIndex(catalog) {
   if (catalogIndexes.has(catalog)) return catalogIndexes.get(catalog);
-  const entries = new Map();
-  for (let rowIndex=0; rowIndex<catalog.rows.length; rowIndex++) {
-    const row=catalog.rows[rowIndex], key=`${row[0]}:${row[1]}:${row[2]}`;
+  const result={
+    brands:catalog.brands.map((brand,brandIndex)=>({
+      brandIndex,brand:brand||'',brandTokens:searchTokens(brand),brandCanonical:transliterate(brand).replace(/\s/g,'')
+    })),
+    entriesByBrand:new Map()
+  };
+  catalogIndexes.set(catalog,result);
+  return result;
+}
+
+function catalogEntriesForBrand(catalog,index,brandIndex) {
+  if(index.entriesByBrand.has(brandIndex))return index.entriesByBrand.get(brandIndex);
+  const entries=new Map(),start=lowerBoundBrand(catalog.rows,brandIndex),end=lowerBoundBrand(catalog.rows,brandIndex+1);
+  const brand=catalog.brands[brandIndex]||'',brandTokens=searchTokens(brand),brandCanonical=transliterate(brand).replace(/\s/g,'');
+  for(let rowIndex=start;rowIndex<end;rowIndex++){
+    const row=catalog.rows[rowIndex],key=`${row[1]}:${row[2]}`;
     let entry=entries.get(key);
-    if (!entry) {
-      const brand=catalog.brands[row[0]]||'', model=catalog.models[row[1]]||'';
-      entry={key,brandIndex:row[0],modelIndex:row[1],brand,model,year:Number(row[2]),rowIndexes:[],brandTokens:searchTokens(brand),modelTokens:searchTokens(model),brandCanonical:transliterate(brand).replace(/\s/g,'')};
-      entries.set(key,entry);
-    }
+    if(!entry){const model=catalog.models[row[1]]||'';entry={key,brandIndex,modelIndex:row[1],brand,model,year:Number(row[2]),rowIndexes:[],brandTokens,modelTokens:searchTokens(model),brandCanonical};entries.set(key,entry);}
     entry.rowIndexes.push(rowIndex);
   }
-  const result=[...entries.values()]; catalogIndexes.set(catalog,result); return result;
+  const result=[...entries.values()];index.entriesByBrand.set(brandIndex,result);return result;
 }
 
 function brandMatch(queryTokens, entry) {
@@ -88,8 +103,8 @@ function brandMatch(queryTokens, entry) {
   return best;
 }
 
-function scoreEntry(parsedQuery, entry) {
-  const queryTokens=searchTokens(parsedQuery.vehicleText), brand=brandMatch(queryTokens,entry);
+function scoreEntry(parsedQuery, entry, knownBrandMatch=null) {
+  const queryTokens=searchTokens(parsedQuery.vehicleText), brand=knownBrandMatch||brandMatch(queryTokens,entry);
   const modelQuery=queryTokens.filter((_,index)=>index<brand.start||index>=brand.start+brand.count);
   if (!modelQuery.length) return {score:brand.score*0.78,brandScore:brand.score,modelScore:0,exact:false,broad:true,strongMatches:0,relatedBrand:brand.related};
   const queryScores=modelQuery.map(token=>Math.max(0,...entry.modelTokens.map(candidate=>tokenSimilarity(token,candidate))));
@@ -107,19 +122,56 @@ function scoreEntry(parsedQuery, entry) {
   return {score:brand.score*0.4+Math.max(0,modelScore)*0.6,brandScore:brand.score,modelScore:Math.max(0,modelScore),exact,broad:false,strongMatches,relatedBrand:brand.related};
 }
 
+function exactBrandMatch(queryTokens,entry) {
+  const count=Math.min(Math.max(1,entry.brandTokens.length),queryTokens.length);
+  for(let start=0;start<=queryTokens.length-count;start++){
+    const part=queryTokens.slice(start,start+count).join(' '),canonical=transliterate(part).replace(/\s/g,'');
+    if(canonical===entry.brandCanonical)return {score:1,start,count,queryBrand:part,related:false};
+  }
+  return null;
+}
+
+function appendRelatedBrands(selected,index,queryTokens) {
+  const selectedIndexes=new Set(selected.map(item=>item.entry.brandIndex));
+  for(const item of [...selected]){
+    const related=RELATED_BRANDS[normalizeCatalogText(item.queryBrand)];
+    if(!related)continue;
+    for(const candidate of index.brands){
+      if(!related.has(normalizeCatalogText(candidate.brand))||selectedIndexes.has(candidate.brandIndex))continue;
+      selected.push({...brandMatch(queryTokens,candidate),entry:candidate,score:1,related:true});
+      selectedIndexes.add(candidate.brandIndex);
+    }
+  }
+  return selected;
+}
+
+function candidateBrands(catalog,parsedQuery) {
+  const index=catalogIndex(catalog),queryTokens=searchTokens(parsedQuery.vehicleText);
+  const exact=index.brands.flatMap(entry=>{const match=exactBrandMatch(queryTokens,entry);return match?[{...match,entry}]:[];});
+  if(exact.length)return {index,selected:appendRelatedBrands(exact,index,queryTokens)};
+  const ranked=index.brands.map(entry=>({...brandMatch(queryTokens,entry),entry})).sort((a,b)=>b.score-a.score);
+  const topScore=ranked[0]?.score||0;
+  const minimum=topScore===1?0.8:Math.max(0.3,topScore-0.5);
+  const selected=ranked.filter(item=>item.score>=minimum).slice(0,24);
+  return {index,selected:appendRelatedBrands(selected,index,queryTokens)};
+}
+
 function rankedEntries(catalog, parsedQuery, mode) {
   if (!parsedQuery) return [];
   const matches=[];
-  for (const entry of catalogIndex(catalog)) {
-    if (parsedQuery.year && entry.year!==parsedQuery.year) continue;
-    const rank=scoreEntry(parsedQuery,entry);
-    if (mode==='exact') { if (!rank.exact) continue; }
-    else {
-      if (rank.brandScore<0.35 && !rank.strongMatches) continue;
-      if (!rank.broad && !rank.strongMatches && rank.modelScore<0.48 && rank.brandScore<0.95) continue;
-      if (rank.score<0.52 && rank.brandScore<0.95) continue;
+  const {index,selected}=candidateBrands(catalog,parsedQuery);
+  for(const selectedBrand of selected){
+    for (const entry of catalogEntriesForBrand(catalog,index,selectedBrand.entry.brandIndex)) {
+      if (parsedQuery.year && entry.year!==parsedQuery.year) continue;
+      const rank=scoreEntry(parsedQuery,entry,selectedBrand);
+      if (mode==='exact') { if (!rank.exact) continue; }
+      else {
+        if (rank.brandScore<0.35 && !rank.strongMatches) continue;
+        if (!rank.broad && !rank.strongMatches && rank.modelScore<0.48 && rank.brandScore<0.95) continue;
+        if (rank.score<0.52 && rank.brandScore<0.95) continue;
+      }
+      matches.push({...entry,...rank,rowsCount:entry.rowIndexes.length});
     }
-    matches.push({...entry,...rank,rowsCount:entry.rowIndexes.length});
   }
   return matches.sort((a,b)=>b.score-a.score||b.year-a.year||a.model.localeCompare(b.model,'ru'));
 }

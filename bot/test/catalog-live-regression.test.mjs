@@ -48,3 +48,13 @@ test('the live template search remains universal across unrelated brands', () =>
     assert.equal(first.model.toUpperCase(), model, query);
   }
 });
+
+test('the live template finds GEELY STARSHIP without building the full catalog index', () => {
+  const started = performance.now();
+  const rows = matches('geely starship 7 2026');
+  const elapsed = performance.now() - started;
+  assert.equal(rows[0].brand, 'GEELY');
+  assert.equal(rows[0].model, 'GALAXY STARSHIP 7 EM-I');
+  assert.equal(rows[0].year, 2026);
+  assert.ok(elapsed < 500, `cold search took ${elapsed.toFixed(1)} ms`);
+});
