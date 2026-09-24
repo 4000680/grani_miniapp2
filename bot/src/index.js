@@ -565,47 +565,48 @@ function formatPeniCompact(cases, deadline, target) {
   return lines.join('\n');
 }
 
-function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc()) {
+function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(), calculationYear = todayUtc().getUTCFullYear()) {
   const title = vehicle.type === 'sbkts' ? 'СБКТС распознан' : 'Выписка ЭПТС распознана';
-  const isPickup = ['N1', 'N1G', 'N2'].includes(vehicle.category);
+  const isCargo = ['N1', 'N1G', 'N2', 'N3'].includes(vehicle.category);
   const lines = [
     `✅ <b>${title}</b>`,
     '',
     `<b>Автомобиль:</b> ${escapeHtml([vehicle.brand, vehicle.model].filter(Boolean).join(' ') || '—')}`,
     `<b>Год выпуска:</b> ${vehicle.year}`,
     `<b>Категория:</b> ${escapeHtml(vehicle.category)}`,
+    `<b>Год ставок:</b> ${calculationYear}`,
   ];
-  if (!isPickup && vehicle.hybridType && vehicle.hybridType !== 'combustion') {
+  if (!isCargo && vehicle.hybridType && vehicle.hybridType !== 'combustion') {
     lines.push(`<b>Тип гибрида:</b> ${escapeHtml(hybridTypeLabel(vehicle.hybridType))}`);
   }
   lines.push('', `<b>Объём двигателя:</b> ${vehicle.ccm ? `${vehicle.ccm} см³` : 'не используется'}`);
-  if (isPickup) {
-    lines.push(`<b>Полная масса:</b> ${vehicle.maxMass ? `${vehicle.maxMass} кг` : 'не определена'}`);
+  if (isCargo) {
+    lines.push(`<b>Технически допустимая максимальная масса:</b> ${vehicle.maxMass ? `${vehicle.maxMass} кг` : 'не определена'}`);
   }
-  if (!isPickup && (vehicle.engineKw || vehicle.combustionKw)) {
+  if (!isCargo && (vehicle.engineKw || vehicle.combustionKw)) {
     lines.push(`<b>Мощность ДВС:</b> ${formatKw(vehicle.engineKw || vehicle.combustionKw)}`);
   }
-  if (!isPickup && ['series', 'ev'].includes(vehicle.hybridType) && (vehicle.engineKw || vehicle.combustionKw)) {
+  if (!isCargo && ['series', 'ev'].includes(vehicle.hybridType) && (vehicle.engineKw || vehicle.combustionKw)) {
     lines.push('Мощность ДВС в расчёте не учитывается');
   }
-  if (!isPickup && (vehicle.electric30MinKw || vehicle.electric30MinKwList?.length)) {
+  if (!isCargo && (vehicle.electric30MinKw || vehicle.electric30MinKwList?.length)) {
     const electricParts = vehicle.electric30MinKwList || vehicle.electricKw || [];
     const electricDetails = electricParts.length > 1
       ? `${electricParts.join(' + ')} = ${vehicle.electric30MinKw}`
       : String(vehicle.electric30MinKw);
     lines.push(`<b>30-минутная мощность электромотора:</b> ${electricDetails} кВт`);
   }
-  if (!isPickup && ['parallel', 'parallel-series', 'series-parallel'].includes(vehicle.hybridType)) {
+  if (!isCargo && ['parallel', 'parallel-series', 'series-parallel'].includes(vehicle.hybridType)) {
     lines.push(`<b>Расчётная мощность:</b> ${vehicle.engineKw || vehicle.combustionKw} + ${vehicle.electric30MinKw} = ${formatPower(vehicle.totalKw)}`);
-  } else if (!isPickup) {
+  } else if (!isCargo) {
     lines.push(`<b>Расчётная мощность:</b> ${formatPower(vehicle.totalKw)}`);
   }
   lines.push('');
   for (const item of util) {
-    if (item.pickup) {
+    if (item.cargo || item.pickup) {
       lines.push(`<b>${ageLabel(item.age)}</b>`);
-      lines.push(`<b>Утилизационный сбор для пикапа: ${formatMoney(item.commercial)}</b>`);
-      lines.push(`Ставка определена по категории ${escapeHtml(vehicle.category)} и полной массе.`);
+      lines.push(`<b>Утилизационный сбор: ${formatMoney(item.commercial)}</b>`);
+      lines.push(`Ставка: ${escapeHtml(item.utilRate?.vehicleTypeLabel || 'грузовой автомобиль')}; коэффициент ${item.utilCoefficient}; год ставок ${item.utilRate?.calculationYear || new Date().getUTCFullYear()}.`);
       continue;
     }
     if (item.personal !== item.commercial) {
@@ -890,8 +891,9 @@ function encodePeniCallback(cases, deadline) {
   return `calc:peni:${deadline.toISOString().slice(0, 10)}:${cases.map(item => item.sum).join(',')}`;
 }
 
-function calculationResultKeyboard(cases = [], deadline = null) {
+function calculationResultKeyboard(cases = [], deadline = null, allow2027 = false) {
   const rows = [];
+  if (allow2027) rows.push([{ text: '📅 Рассчитать на 2027 год', callback_data: 'calc:year:2027' }]);
   if (deadline) rows.push([{ text: '📅 Рассчитать пени на другую дату', callback_data: encodePeniCallback(cases, deadline) }]);
   rows.push([
     { text: '🔄 Новый расчёт', callback_data: 'calc:result:new' },
@@ -3031,18 +3033,47 @@ async function handleDocument(env, message) {
     const cases = peniCases(util);
     const result = formatDocumentResult(vehicle, util, deadline);
     await saveApplication(env, message.from?.id, applicationFromVehicle(vehicle, util));
+    const flow = await getMessageFlowState(env, userId);
+    await setMessageFlowState(env, userId, { ...flow, utilYearContext: { vehicle, deadline: deadline?.toISOString?.() || null } });
     await telegram(env, 'editMessageText', {
       chat_id: message.chat.id,
       message_id: status.message_id,
       text: result,
       parse_mode: 'HTML',
-      reply_markup: calculationResultKeyboard(cases, deadline)
+      reply_markup: calculationResultKeyboard(cases, deadline, todayUtc().getUTCFullYear() < 2027)
     });
     await sendDocumentIdentity(env, message.chat.id, vehicle, message.message_id).catch(() => null);
     await releaseTemporaryMessage(env, userId, status.message_id);
     if (!vehicle.issueDate) await sendIssueDatePrompt(env, message.chat.id, cases);
   } catch (error) {
     const controlled = controlledDocumentError(error);
+    if (controlled.code === 'CARGO_TYPE_REQUIRED' && controlled.details?.vehicle && controlled.details?.candidates?.length) {
+      const vehicle = controlled.details.vehicle;
+      await setCustomsState(env, userId, { stage: 'cargo-type', vehicle });
+      await telegram(env, 'editMessageText', {
+        chat_id: message.chat.id,
+        message_id: status.message_id,
+        text: [
+          '🚚 <b>Нужно уточнить тип грузового автомобиля</b>',
+          '',
+          `Категория: ${escapeHtml(vehicle.category)}`,
+          `Технически допустимая максимальная масса: ${vehicle.maxMass} кг`,
+          '',
+          'Выберите подходящий тип — это нужно для выбора ставки утильсбора.'
+        ].join('\n'),
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            ...controlled.details.candidates.map(item => ([{ text: item.label, callback_data: `calc:cargo:${item.id}` }])),
+            [
+              { text: '← Назад', callback_data: 'calc:back:document' },
+              { text: '🏠 Главное меню', callback_data: 'calc:menu' }
+            ]
+          ]
+        }
+      });
+      return;
+    }
     console.error('document_processing_error', JSON.stringify({
       documentType: 'sbkts-or-epts',
       code: controlled.code,
@@ -3471,6 +3502,43 @@ async function handleCalculationCallback(env, query) {
   }
   if (query.data === 'calc:back:document') {
     await showInfo(env, message, 'pdf');
+    return;
+  }
+  if (query.data === 'calc:year:2027') {
+    const flow = await getMessageFlowState(env, userId);
+    const vehicle = flow?.utilYearContext?.vehicle;
+    if (!vehicle) return;
+    const deadline = flow.utilYearContext.deadline ? new Date(flow.utilYearContext.deadline) : null;
+    const util = calculateUtil(vehicle, todayUtc(), 2027);
+    const cases = peniCases(util);
+    await telegram(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: `📅 <b>Расчёт на 2027 год</b>\n\n${formatDocumentResult(vehicle, util, deadline, todayUtc(), 2027)}`,
+      parse_mode: 'HTML',
+      reply_markup: calculationResultKeyboard(cases, deadline)
+    });
+    return;
+  }
+  const cargoType = query.data.match(/^calc:cargo:(cargo|tractor|tractor-international|dump-truck|van)$/);
+  if (cargoType) {
+    const state = await getCustomsState(env, userId);
+    if (state?.stage !== 'cargo-type' || !state.vehicle) return;
+    const vehicle = { ...state.vehicle, cargoType: cargoType[1] };
+    const util = calculateUtil(vehicle);
+    const deadline = vehicle.issueDate ? addWorkingDays(vehicle.issueDate, 5) : null;
+    const cases = peniCases(util);
+    await saveApplication(env, query.from?.id, applicationFromVehicle(vehicle, util));
+    const flow = await getMessageFlowState(env, userId);
+    await setMessageFlowState(env, userId, { ...flow, utilYearContext: { vehicle, deadline: deadline?.toISOString?.() || null } });
+    await telegram(env, 'editMessageText', {
+      chat_id: message.chat.id,
+      message_id: message.message_id,
+      text: formatDocumentResult(vehicle, util, deadline),
+      parse_mode: 'HTML',
+      reply_markup: calculationResultKeyboard(cases, deadline, todayUtc().getUTCFullYear() < 2027)
+    });
+    await clearCustomsState(env, userId);
+    if (!vehicle.issueDate) await sendIssueDatePrompt(env, message.chat.id, cases);
     return;
   }
   const match = query.data.match(/^calc:peni:(\d{4}-\d{2}-\d{2}):([\d,]+)$/);

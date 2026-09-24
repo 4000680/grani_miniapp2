@@ -1,6 +1,5 @@
 import { extractTextItems, getDocumentProxy } from 'unpdf';
-import { UTIL_RATES } from './rates-data.js';
-import { calculatePickupUtil } from './customs-calculation.js';
+import { cargoTypeCandidates, detectCargoType, selectUtilRate } from '../../shared/util-rate-selector.js';
 import '../../shared/vehicle-power.js';
 import '../../shared/sbkts-power-parser.js';
 
@@ -8,10 +7,11 @@ const { analyzeVehiclePower } = globalThis.GraniVehiclePower;
 const { parseSbktsPowerData } = globalThis.GraniSbktsPower;
 
 export class DocumentProcessingError extends Error {
-  constructor(code, message, cause = null) {
+  constructor(code, message, cause = null, details = null) {
     super(message, cause ? { cause } : undefined);
     this.name = 'DocumentProcessingError';
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -126,8 +126,8 @@ function vehicleCategory(value) {
   return normalize(value)?.match(/N1G|[A-ZА-Я]\d/i)?.[0]?.toUpperCase() || null;
 }
 
-function isPickupCategory(category) {
-  return ['N1', 'N1G', 'N2'].includes(category);
+function isCargoCategory(category) {
+  return ['N1', 'N1G', 'N2', 'N3'].includes(category);
 }
 
 function parseRussianDateFromText(text) {
@@ -186,7 +186,7 @@ function parseSbkts(document) {
     engineMaxKw: combustionKw, electricMaxKw: parsedPower.electricMaxKw,
     electricKw, electric30MinKwList: electricKw, electric30MinKw,
     calculatedKw: power.calculatedKw, totalKw: power.calculatedKw,
-    maxMass, issueDate: parseRussianDateFromText(document.text),
+    maxMass, cargoType: detectCargoType(document.text), issueDate: parseRussianDateFromText(document.text),
     hybridType: power.hybridType, hybridTypeSource: power.hybridTypeSource,
     powerError, powerErrorCode
   };
@@ -218,7 +218,7 @@ function parseEpts(document) {
     type: 'epts', brand, model, vin, surname: owner?.split(/\s+/)[0] || null, year, yearText, category, ccm, combustionKw,
     engineKw: combustionKw, electricKw, electric30MinKwList: electricKw, electric30MinKw,
     totalKw: power.calculatedKw,
-    maxMass, issueDate: null,
+    maxMass, cargoType: detectCargoType(document.text), issueDate: null,
     hybridType: power.hybridType, powerError: power.error, powerErrorCode: power.errorCode
   };
 }
@@ -237,37 +237,41 @@ function ageStatus(year, now = new Date()) {
   return difference > 3 ? ['old'] : difference < 3 ? ['new'] : ['new', 'old'];
 }
 
-function rateRow(payer, kw, ccm) {
-  const commercial = payer === 'commercial';
-  const isElectric = !ccm;
-  const matches = UTIL_RATES.filter(row => {
-    const payerMatches = commercial ? row.payer.toLowerCase().startsWith('коммерч') : row.payer.toLowerCase().startsWith('личн');
-    const electricMatches = row.engine.toLowerCase().startsWith('электро') === isElectric;
-    const ccmMatches = isElectric || (ccm >= (row.ccmFrom ?? 0) && ccm <= (row.ccmTo ?? Infinity));
-    return payerMatches && electricMatches && ccmMatches && kw >= row.kwFrom && kw <= (row.kwTo ?? Infinity);
-  });
-  return matches[0] || null;
-}
-
-export function calculateUtil(vehicle, now = new Date()) {
-  if (isPickupCategory(vehicle.category)) {
-    if (!vehicle.year || !vehicle.maxMass) throw new Error('Не удалось определить год выпуска или полную массу пикапа');
+export function calculateUtil(vehicle, now = new Date(), calculationYear = now.getUTCFullYear()) {
+  if (isCargoCategory(vehicle.category)) {
+    if (!vehicle.year || !vehicle.maxMass) throw new Error('Не удалось определить год выпуска или технически допустимую максимальную массу');
     return ageStatus(vehicle.year, now).map(age => {
-      const pickup = calculatePickupUtil({ maxMassKg: vehicle.maxMass, age });
-      return { age, commercial: pickup.util, personal: pickup.util, pickup: true, utilCoefficient: pickup.utilCoefficient };
+      const rate = selectUtilRate({
+        category: vehicle.category, vehicleType: vehicle.cargoType,
+        maxMass: vehicle.maxMass, age, year: calculationYear
+      });
+      if (rate?.ambiguous) {
+        throw new DocumentProcessingError(
+          'CARGO_TYPE_REQUIRED',
+          'Нужно уточнить тип грузового автомобиля',
+          null,
+          { vehicle, candidates: rate.candidates || cargoTypeCandidates({ category: vehicle.category, maxMass: vehicle.maxMass, age, year: calculationYear }) }
+        );
+      }
+      if (!rate) throw new Error('Для этой категории и технически допустимой максимальной массы не найдена ставка');
+      return {
+        age, commercial: rate.amount, personal: rate.amount, cargo: true,
+        utilCoefficient: rate.coefficient, utilRate: rate
+      };
     });
   }
   if (vehicle.category !== 'M1') throw new Error(`Категория ${vehicle.category || 'не определена'} пока не поддерживается`);
   if (vehicle.powerError) throw new DocumentProcessingError(vehicle.powerErrorCode || 'CALCULATION_ERROR', vehicle.powerError);
   if (!vehicle.year || !vehicle.totalKw) throw new Error('Не удалось определить год или расчётную мощность');
   const calculationCcm = ['series', 'ev'].includes(vehicle.hybridType) ? null : vehicle.ccm;
-  const commercial = rateRow('commercial', vehicle.totalKw, calculationCcm);
-  const personal = rateRow('personal', vehicle.totalKw, calculationCcm);
+  const powertrain = calculationCcm ? 'combustion' : 'electric';
+  const commercial = selectUtilRate({ category: 'M1', powertrain, payer: 'commercial', ccm: calculationCcm, powerKw: vehicle.totalKw, age: 'new', year: calculationYear });
+  const personal = selectUtilRate({ category: 'M1', powertrain, payer: 'personal', ccm: calculationCcm, powerKw: vehicle.totalKw, age: 'new', year: calculationYear });
   if (!commercial || !personal) throw new Error('Для этих характеристик не найдена ставка');
   return ageStatus(vehicle.year, now).map(age => ({
     age,
-    commercial: age === 'new' ? commercial.sumNew : commercial.sumOld,
-    personal: age === 'new' ? personal.sumNew : personal.sumOld
+    commercial: selectUtilRate({ category: 'M1', powertrain, payer: 'commercial', ccm: calculationCcm, powerKw: vehicle.totalKw, age, year: calculationYear }).amount,
+    personal: selectUtilRate({ category: 'M1', powertrain, payer: 'personal', ccm: calculationCcm, powerKw: vehicle.totalKw, age, year: calculationYear }).amount
   }));
 }
 

@@ -36,10 +36,10 @@ test('акциз по декларации начисляется для кат�
 });
 
 test('акциз по декларации не начисляется для категорий N1, N1G и N2', () => {
-  for (const category of ['N1', 'N1G', 'N2']) {
+  for (const [category, maxMass] of [['N1', 3000], ['N1G', 3000], ['N2', 6000]]) {
     const result = calculateDeclarationPayment({
       priceRub: 1_000_000,
-      vehicle: { category, year: 2025, totalKw: 100, ccm: 2000, maxMass: 3000, hybridType: 'combustion' }
+      vehicle: { category, year: 2025, totalKw: 100, ccm: 2000, maxMass, hybridType: 'combustion' }
     });
     assert.equal(result.excise, 0, category);
     assert.equal(result.vat, 253_000, category);

@@ -318,40 +318,26 @@ const WELCOME_HTML = APP_MODE === 'peni'
   : '👋 Привет! Помогу с расчётом <b>мощности и утильсбора</b> для любого авто.<br><br>Есть два способа:<br><br>🔍 <b>По характеристикам</b> — напишите марку, модель и год выпуска<br><i>Например: Mazda CX-5 2026</i><br><br>📄 <b>По СБКТС</b> — прикрепите PDF через скрепку, и я сразу посчитаю утильсбор и пени за просрочку';
 
 /* ============== ДАННЫЕ ============== */
-let UTIL_TABLE = null; // строится из rates.xlsx функцией loadRates()
-const RATES_FILE = 'rates.xlsx';
+let UTIL_TABLE = null; // строится из единого JSON-справочника функцией loadRates()
+const RATES_FILE = '../../shared/util-rates.json';
 
-// Плоский формат rates.xlsx (лист "Ставки", заголовок в первой строке):
-// Категория ТС | Тип двигателя (ДВС/Электро/гибрид) | Плательщик (Коммерческий/Личное пользование) |
-// Объём от, см³ | Объём до, см³ | Мощность от, кВт | Мощность до, кВт |
-// Коэфф. (новое, до 3 лет) | Сумма руб (новое, до 3 лет) | Коэфф. (старше 3 лет) | Сумма руб (старше 3 лет)
-//
-
-// Сейчас калькулятор использует только категорию "M1" (легковые). Строки с другими
-// категориями (например N1) можно добавлять в файл заранее — они будут прочитаны и
-// сохранены в UTIL_TABLE_RAW, но расчёт по ним потребует доп. доработки кода (выбор
-// категории у пользователя), которой сейчас нет.
-let UTIL_TABLE_RAW = []; // все строки как есть, на будущее (для категорий, ещё не подключённых к расчёту)
+let UTIL_TABLE_RAW = []; // записи единого справочника, включая N1/N2/N3
 
 async function loadRates(){
   const resp = await fetch(RATES_FILE);
   if(!resp.ok) throw new Error(`не найден файл ${RATES_FILE} (HTTP ${resp.status})`);
-  const buf = await resp.arrayBuffer();
-  const wb = XLSX.read(buf, {type:'array'});
-  const sheetName = wb.SheetNames.includes('Ставки') ? 'Ставки' : wb.SheetNames[0];
-  const ws = wb.Sheets[sheetName];
-  const raw = XLSX.utils.sheet_to_json(ws, {defval:null}); // объекты по названиям колонок из заголовка
-
+  const directory = await resp.json();
+  const raw = directory.records || [];
   UTIL_TABLE_RAW = raw;
+  const calculationYear = Math.max(2025, Math.min(2030, new Date().getFullYear()));
 
   const table = {
     commercial: {electric: [], ice: {"0-1000":[], "1000-2000":[], "2000-3000":[], "3000-3500":[], "3500+":[]}},
     personal:   {electric: [], ice: {"0-1000":[], "1000-2000":[], "2000-3000":[], "3000-3500":[], "3500+":[]}}
   };
 
-  function ccmToBucket(from, to){
-    // определяем корзину объёма по границам диапазона строки файла
-    if(from === null && to === null) return null; // электро
+  function ccmToBucket(from){
+    if(from === null || from === undefined) return null;
     const f = Number(from)||0;
     if(f < 1000) return "0-1000";
     if(f < 2000) return "1000-2000";
@@ -360,31 +346,27 @@ async function loadRates(){
     return "3500+";
   }
 
+  const grouped = new Map();
   for(const r of raw){
-    const category = String(r['Категория ТС']||'').trim().toUpperCase();
-    if(category !== 'M1') continue; // пока считаем только M1; другие категории — на будущее
-
-    const payerRaw = String(r['Плательщик']||'').trim().toLowerCase();
-    const payer = payerRaw.startsWith('коммерч') ? 'commercial' : (payerRaw.startsWith('личн') ? 'personal' : null);
-    if(!payer) continue;
-
-    const engineType = String(r['Тип двигателя']||'').trim().toLowerCase();
-    const isElectric = engineType.startsWith('электро');
-
-    const bracket = {
-      kwMin: Number(r['Мощность от, кВт']) || 0,
-      kwMax: (r['Мощность до, кВт'] === null || r['Мощность до, кВт'] === '') ? Infinity : Number(r['Мощность до, кВт']),
-      coefNew: Number(r['Коэфф. (новое, до 3 лет)']),
-      sumNew: Number(r['Сумма руб (новое, до 3 лет)']),
-      coefOld: Number(r['Коэфф. (старше 3 лет)']),
-      sumOld: Number(r['Сумма руб (старше 3 лет)']),
+    const coefficients = r.coefficients?.[calculationYear];
+    if(r.category !== 'M1' || !coefficients) continue;
+    const key = [r.payer, r.powertrain, r.ccm?.min, r.ccm?.max, r.power?.min, r.power?.max].join('|');
+    const bracket = grouped.get(key) || {
+      kwMin: Number(r.power?.min) || 0,
+      kwMax: r.power?.max == null ? Infinity : Number(r.power.max),
+      coefNew: null, sumNew: null, coefOld: null, sumOld: null
     };
-
+    if(coefficients.new != null) { bracket.coefNew = Number(coefficients.new); bracket.sumNew = Math.round(Number(r.baseRate) * Number(coefficients.new)); }
+    if(coefficients.old != null) { bracket.coefOld = Number(coefficients.old); bracket.sumOld = Math.round(Number(r.baseRate) * Number(coefficients.old)); }
+    grouped.set(key, bracket);
+    const payer = r.payer;
+    const isElectric = r.powertrain === 'electric';
+    if(!table[payer]) continue;
     if(isElectric){
-      table[payer].electric.push(bracket);
+      if(!table[payer].electric.includes(bracket)) table[payer].electric.push(bracket);
     } else {
-      const bucket = ccmToBucket(r['Объём от, см³'], r['Объём до, см³']);
-      if(bucket && table[payer].ice[bucket]) table[payer].ice[bucket].push(bracket);
+      const bucket = ccmToBucket(r.ccm?.min);
+      if(bucket && table[payer].ice[bucket] && !table[payer].ice[bucket].includes(bracket)) table[payer].ice[bucket].push(bracket);
     }
   }
 

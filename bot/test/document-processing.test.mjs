@@ -91,9 +91,11 @@ test('calculates pickup util from an EPTS N1G category and full mass', () => {
     { category: vehicle.category, year: vehicle.year, ccm: vehicle.ccm, maxMass: vehicle.maxMass },
     { category: 'N1G', year: 2025, ccm: 2993, maxMass: 3220 }
   );
-  assert.deepEqual(calculateUtil(vehicle, new Date('2026-09-21T00:00:00Z')), [
-    { age: 'new', commercial: 990000, personal: 990000, pickup: true, utilCoefficient: 6.6 }
-  ]);
+  const result = calculateUtil(vehicle, new Date('2026-09-21T00:00:00Z'))[0];
+  assert.deepEqual(
+    { age: result.age, commercial: result.commercial, personal: result.personal, coefficient: result.utilCoefficient, type: result.utilRate.vehicleType },
+    { age: 'new', commercial: 990000, personal: 990000, coefficient: 6.6, type: 'cargo' }
+  );
 });
 
 test('calculates pickup util from an SBKTS N1 category and full mass', () => {
@@ -105,9 +107,11 @@ test('calculates pickup util from an SBKTS N1 category and full mass', () => {
     ]
   };
   const vehicle = parseVehicleDocument(document);
-  assert.deepEqual(calculateUtil(vehicle, new Date('2026-09-21T00:00:00Z')), [
-    { age: 'new', commercial: 990000, personal: 990000, pickup: true, utilCoefficient: 6.6 }
-  ]);
+  const result = calculateUtil(vehicle, new Date('2026-09-21T00:00:00Z'))[0];
+  assert.deepEqual(
+    { age: result.age, commercial: result.commercial, personal: result.personal, coefficient: result.utilCoefficient, type: result.utilRate.vehicleType },
+    { age: 'new', commercial: 990000, personal: 990000, coefficient: 6.6, type: 'cargo' }
+  );
 });
 
 test('parses SБКТС and adds every 30-minute electric power', () => {
