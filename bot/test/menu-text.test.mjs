@@ -12,14 +12,18 @@ test('первый запуск показывает полное приветс
 });
 
 
-test('главное меню открывает расчёт по декларации из раздела утильсбора', () => {
+test('главное меню разделяет обычный расчёт утильсбора и расчёт по декларации', () => {
   assert.match(source, /text: '🛞 Рассчитать утильсбор', callback_data: 'menu:util'/);
-  assert.doesNotMatch(source, /text: '🧾 Расчёт утильсбора по декларации'/);
+  assert.match(source, /text: '🧾 Рассчитать утильсбор по декларации', callback_data: 'menu:declaration'/);
   assert.match(source, /text: '🧪 Список лабораторий', callback_data: 'info:laboratories'/);
   assert.doesNotMatch(source, /text: '📅 Рассчитать пени'/);
   assert.doesNotMatch(source, /text: '📟 Рассчитать по СБКТС или ЭПТС'/);
   assert.doesNotMatch(source, /web_app:\s*\{/);
-  assert.match(source, /query\.data === 'menu:util'\) await sendDeclarationStart\(env, query\.message\.chat\.id, query\.from\?\.id \|\| query\.message\.chat\.id\)/);
+  assert.match(source, /query\.data === 'menu:util'\) await showUtilStart\(env, query\.message\)/);
+  assert.match(source, /query\.data === 'menu:declaration'\) await sendDeclarationStart\(env, query\.message\.chat\.id, query\.from\?\.id \|\| query\.message\.chat\.id\)/);
+  assert.match(source, /const UTIL_START_TEXT = \[/);
+  assert.match(source, /Для расчёта утильсбора отправьте PDF-файл СБКТС или выписку ЭПТС/);
+  assert.match(source, /Для поиска по шаблону СЭП напишите марку, модель и год выпуска/);
 });
 
 test('старт расчёта по декларации просит документ или поиск СЭП без кнопок выбора', () => {
