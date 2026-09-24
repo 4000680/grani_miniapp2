@@ -2921,7 +2921,7 @@ async function handleCatalogCallback(env, query) {
     vin: null,
     surname: null,
     year: candidate.year,
-    category: 'M1',
+    category: null,
     ccm,
     combustionKw: candidate.combustionKw,
     electricKw: candidate.electricKw ? [candidate.electricKw] : [],
@@ -2930,11 +2930,11 @@ async function handleCatalogCallback(env, query) {
     issueDate: null,
     hybridType: electric ? 'электромобиль / последовательный гибрид' : 'ДВС / параллельный гибрид'
   };
-  const util = calculateUtil(vehicle);
   if (state?.mode === 'declaration') {
-    await promptDeclarationFtsName(env, message.chat.id, query.from?.id || message.chat.id, { ...state, vehicle, util }, message);
+    await promptDeclarationCategory(env, message.chat.id, query.from?.id || message.chat.id, { ...state, vehicle, categoryBack: backCallback }, message);
     return;
   }
+  const util = calculateUtil(vehicle);
   if (sourceParsed?.customsMode === 'electric') {
     await showElectricCustomsCurrencyPrompt(
       env,
@@ -3201,6 +3201,13 @@ function declarationCountryKeyboard() {
   ], 'declaration:back:fts');
 }
 
+function declarationCategoryKeyboard(back = 'declaration:back:start') {
+  return declarationKeyboard([
+    [{ text: 'M1 / M1G', callback_data: 'declaration:category:passenger' }],
+    [{ text: 'N1 / N2', callback_data: 'declaration:category:cargo' }]
+  ], back);
+}
+
 function declarationResultKeyboard() {
   return {
     inline_keyboard: [[
@@ -3214,6 +3221,7 @@ function declarationVehicleLines(vehicle) {
   return [
     `<b>Автомобиль:</b> ${escapeHtml([vehicle.brand, vehicle.model].filter(Boolean).join(' ') || '—')}`,
     `<b>Год выпуска:</b> ${vehicle.year || '—'}`,
+    `<b>Категория:</b> ${escapeHtml(vehicle.categoryLabel || vehicle.category || '—')}`,
     `<b>Мощность:</b> ${vehicle.totalKw ? formatPower(vehicle.totalKw) : '—'}`
   ];
 }
@@ -3267,6 +3275,26 @@ async function sendDeclarationStart(env, chatId, userId = chatId) {
   return sent;
 }
 
+async function promptDeclarationCategory(env, chatId, userId, state, workingMessage = null) {
+  const next = { ...state, mode: 'declaration', stage: 'category' };
+  await setCustomsState(env, userId, next);
+  const text = [
+    '✅ <b>Автомобиль найден для расчёта</b>',
+    '',
+    ...declarationVehicleLines(next.vehicle),
+    '',
+    'Укажите категорию автомобиля для расчёта по декларации:'
+  ].join('\n');
+  const reply_markup = declarationCategoryKeyboard(next.categoryBack);
+  if (workingMessage?.from?.is_bot) {
+    await telegram(env, 'editMessageText', { chat_id: chatId, message_id: workingMessage.message_id, text, parse_mode: 'HTML', reply_markup });
+    await trackTemporaryMessage(env, userId, workingMessage.message_id);
+  } else {
+    const sent = await telegram(env, 'sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', reply_markup });
+    await trackTemporaryMessage(env, userId, sent.message_id);
+  }
+}
+
 async function promptDeclarationFtsName(env, chatId, userId, state, workingMessage = null) {
   const next = { ...state, mode: 'declaration', stage: 'fts-name' };
   await setCustomsState(env, userId, next);
@@ -3279,10 +3307,10 @@ async function promptDeclarationFtsName(env, chatId, userId, state, workingMessa
     '<i>Для таможни наименование должно совпадать один в один.</i>'
   ].join('\n');
   if (workingMessage?.from?.is_bot) {
-    await telegram(env, 'editMessageText', { chat_id: chatId, message_id: workingMessage.message_id, text, parse_mode: 'HTML', reply_markup: declarationKeyboard([], 'declaration:back:start') });
+    await telegram(env, 'editMessageText', { chat_id: chatId, message_id: workingMessage.message_id, text, parse_mode: 'HTML', reply_markup: declarationKeyboard([], next.backFromFts || 'declaration:back:start') });
     await trackTemporaryMessage(env, userId, workingMessage.message_id);
   } else {
-    const sent = await telegram(env, 'sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', reply_markup: declarationKeyboard([], 'declaration:back:start') });
+    const sent = await telegram(env, 'sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', reply_markup: declarationKeyboard([], next.backFromFts || 'declaration:back:start') });
     await trackTemporaryMessage(env, userId, sent.message_id);
   }
 }
@@ -3344,6 +3372,7 @@ async function handleDeclarationCallback(env, query) {
   if (query.data === 'declaration:result:new') return sendDeclarationStart(env, message.chat.id, userId);
   if (state?.mode !== 'declaration') return;
   if (query.data === 'declaration:back:start') return sendDeclarationStart(env, message.chat.id, userId);
+  if (query.data === 'declaration:back:category') return promptDeclarationCategory(env, message.chat.id, userId, { ...state, stage: 'category' }, message);
   if (query.data === 'declaration:back:fts') return promptDeclarationFtsName(env, message.chat.id, userId, { ...state, stage: 'fts-name' }, message);
   if (query.data === 'declaration:back:country') {
     await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: 'Выберите страну, в которой выдана декларация:', reply_markup: declarationCountryKeyboard() });
@@ -3355,6 +3384,20 @@ async function handleDeclarationCallback(env, query) {
     if (!item) return;
     await setCustomsState(env, userId, { ...state, stage: 'country', priceName: item.name, priceRub: item.price });
     await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: `Выбран ближайший вариант:\n<b>${escapeHtml(item.name)}</b>\nСтоимость: <b>${formatMoney(item.price, true)}</b>\n\nВыберите страну декларации:`, parse_mode: 'HTML', reply_markup: declarationCountryKeyboard() });
+    return;
+  }
+  const category = query.data.match(/^declaration:category:(passenger|cargo)$/);
+  if (category) {
+    const vehicle = category[1] === 'passenger'
+      ? { ...state.vehicle, category: 'M1', categoryLabel: 'M1 / M1G' }
+      : { ...state.vehicle, category: 'N1', categoryLabel: 'N1 / N2' };
+    const util = calculateUtil(vehicle);
+    await promptDeclarationFtsName(env, message.chat.id, userId, {
+      ...state,
+      vehicle,
+      util,
+      backFromFts: 'declaration:back:category'
+    }, message);
     return;
   }
   const countryMatch = query.data.match(/^declaration:country:(KG|AM|BY|KZ)$/);
