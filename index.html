@@ -1,246 +1,98 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Брокер ГРАНИ</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#f3f8fa">
+<title>Брокер Грани</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="application-api.js"></script>
 <style>
-  :root{
-    --h-bg:#F4F5F7; --h-surface:#FFFFFF; --h-border:#E6E8EC;
-    --h-text-primary:#0E1013; --h-text-body:#1F2430; --h-text-secondary:#4B5563;
-    --h-text-muted:#6B7280; --h-text-faint:#9AA0AA;
-    --h-accent:#2C6BFF; --h-accent-tint:#EDF2FF; --h-ink:#0E1013;
-  }
-  *{box-sizing:border-box;}
-  html,body{height:100%; margin:0;}
-  body{
-    background:var(--h-bg); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    overflow-x:hidden;
-  }
-  #home-screen{min-height:100vh; min-height:100dvh; background:var(--h-bg); -webkit-overflow-scrolling:touch;}
-  .home-topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 8px;}
-  .home-topbar .dots{display:flex;align-items:center;gap:6px;background:rgba(14,16,19,0.06);border-radius:999px;padding:5px 10px;color:var(--h-text-secondary);font-size:13px;letter-spacing:2px;}
-  .home-brand{display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px 24px 20px;}
-  .home-logo{width:76px;height:76px;border-radius:22px;background:var(--h-ink);display:flex;align-items:center;justify-content:center;box-shadow:0 10px 24px rgba(14,16,19,0.18);}
-  .home-logo img{width:44px;height:auto;display:block;}
-  .home-title{font-family:'Unbounded',sans-serif;color:var(--h-text-primary);font-size:21px;font-weight:700;letter-spacing:0.06em;}
-  .home-subtitle{color:var(--h-text-muted);font-size:13.5px;line-height:1.5;text-align:center;max-width:280px;}
-  .home-badges{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;}
-  .home-badge{background:#fff;border:1px solid var(--h-border);color:var(--h-text-secondary);font-size:12px;font-weight:500;border-radius:999px;padding:5px 12px;}
-  .home-cta{display:flex;align-items:center;gap:14px;background:linear-gradient(135deg,#2C6BFF 0%,#1E4FD6 100%);border-radius:18px;padding:16px;margin:4px 16px 0;cursor:pointer;box-shadow:0 10px 24px rgba(44,107,255,0.28);border:none;text-align:left;width:calc(100% - 32px);font-family:inherit;}
-  .home-cta:active{filter:brightness(0.96);}
-  .home-cta-icon{width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.16);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-  .home-cta-text{display:flex;flex-direction:column;gap:2px;}
-  .home-cta-title{color:#fff;font-size:15px;font-weight:600;}
-  .home-cta-sub{color:rgba(255,255,255,0.78);font-size:12.5px;}
-  .home-cta-arrow{margin-left:auto;flex-shrink:0;}
-  .home-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px 16px 4px;}
-  .home-tile{background:#fff;border:1px solid var(--h-border);border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:10px;cursor:pointer;opacity:0.55;text-align:left;font-family:inherit;}
-  .home-tile.enabled{opacity:1;}
-  .home-tile.wide{grid-column:1 / -1;flex-direction:row;align-items:center;gap:10px;}
-  .home-tile-icon{width:38px;height:38px;border-radius:11px;background:var(--h-accent-tint);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-  .home-tile-label{color:var(--h-text-body);font-size:13.5px;font-weight:500;line-height:1.3;}
-  .home-section-head{display:flex;align-items:center;justify-content:space-between;padding:18px 16px 8px;}
-  .home-section-title{color:var(--h-text-primary);font-size:16px;font-weight:600;}
-  .home-section-link{color:var(--h-accent);font-size:13px;font-weight:500;background:none;border:none;font-family:inherit;cursor:pointer;padding:0;}
-  .home-request-card{margin:4px 16px 0;background:#fff;border:1px solid var(--h-border);border-radius:18px;padding:16px;display:flex;flex-direction:column;gap:12px;opacity:0.55;}
-  .home-request-card.saved{opacity:1;margin-bottom:10px;}
-  .home-request-top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
-  .home-request-id{color:var(--h-text-primary);font-size:14.5px;font-weight:600;}
-  .home-request-status{background:var(--h-accent-tint);color:var(--h-accent);font-size:12px;font-weight:600;border-radius:999px;padding:4px 10px;}
-  .home-request-meta{display:flex;flex-direction:column;gap:3px;}
-  .home-request-line{color:var(--h-text-secondary);font-size:13.5px;}
-  .home-request-vin{color:var(--h-text-faint);font-size:12px;font-family:ui-monospace,monospace;}
-  .home-progress{display:flex;gap:5px;}
-  .home-progress span{flex:1;height:4px;border-radius:2px;background:var(--h-border);}
-  .home-progress span.filled{background:var(--h-accent);}
-  .home-request-bottom{display:flex;align-items:center;justify-content:space-between;}
-  .home-request-updated{color:var(--h-text-faint);font-size:12px;}
-  .home-request-more{color:var(--h-accent);font-size:12.5px;font-weight:500;background:none;border:none;font-family:inherit;cursor:pointer;padding:0;}
-  .home-new-request{background:var(--h-ink);border-radius:16px;padding:15px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;border:none;width:calc(100% - 32px);margin:0 16px;font-family:inherit;}
-  .home-new-request span{color:#fff;font-size:15px;font-weight:600;}
-  .home-footer-pad{padding:16px 16px calc(16px + env(safe-area-inset-bottom,0px));}
-  .home-empty{margin:4px 16px 0;padding:22px 16px;background:#fff;border:1px solid var(--h-border);border-radius:18px;color:var(--h-text-muted);font-size:13.5px;line-height:1.45;text-align:center;}
-  .home-requests-error{color:#B42318;}
+:root{--bg:#f2f7f9;--surface:#fff;--ink:#12233e;--muted:#687991;--line:#e0e9ed;--green:#078c68;--green2:#0aa77d;--blue:#2473bd;--pale:#eaf6f3;--shadow:0 8px 24px rgba(18,45,67,.08);--safe:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}body{overflow-x:hidden}button{font:inherit;color:inherit}.app{min-height:100dvh;padding-bottom:calc(82px + var(--safe))}.view{display:none;max-width:680px;margin:0 auto;padding:0 16px 24px;animation:appear .18s ease}.view.active{display:block}@keyframes appear{from{opacity:.65;transform:translateY(4px)}to{opacity:1;transform:none}}
+.top{height:58px;display:flex;align-items:center;justify-content:space-between}.brand{display:flex;align-items:center;gap:9px}.brand-mark{width:35px;height:35px}.brand-name{font-weight:800;font-size:15px;letter-spacing:.05em}.brand-caption{font-size:10px;letter-spacing:.13em;color:var(--muted);margin-top:2px}.icon-button{border:0;background:#e7f0f4;width:40px;height:40px;border-radius:14px;display:grid;place-items:center;font-size:19px}
+.hero{position:relative;min-height:354px;overflow:hidden;border-radius:28px;background:linear-gradient(155deg,#dff3f4 0%,#b5dbe8 43%,#eef7f8 74%,#d5ede9 100%);box-shadow:var(--shadow);padding:26px 22px 0;margin-top:5px}.hero:before{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,.12),rgba(8,50,78,.02) 58%,rgba(7,33,50,.27))}.hero-copy{position:relative;z-index:1}.eyebrow{color:var(--green);font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}.hero h1{font-size:35px;line-height:1.06;letter-spacing:-.045em;margin:12px 0 10px;max-width:300px}.hero h1 em{font-style:normal;color:var(--green)}.hero p{font-size:15px;line-height:1.5;color:#4c627b;margin:0;max-width:255px}.hero-car{position:absolute;left:-7px;bottom:2px;width:calc(100% + 14px);height:190px;z-index:1}.hero-car svg{width:100%;height:100%;display:block}.hero-cta{position:relative;z-index:2;width:100%;border:1px solid rgba(255,255,255,.86);background:rgba(255,255,255,.95);backdrop-filter:blur(12px);border-radius:19px;min-height:83px;margin-top:-4px;display:flex;align-items:center;gap:14px;padding:14px;box-shadow:var(--shadow);text-align:left;cursor:pointer}.cta-icon{width:48px;height:48px;display:grid;place-items:center;flex:none;border-radius:16px;background:#def4eb;color:var(--green);font-size:24px}.cta-copy{flex:1}.cta-copy strong{display:block;font-size:16px}.cta-copy small{display:block;color:var(--muted);line-height:1.35;margin-top:4px;font-size:12px}.arrow{font-size:24px;color:#778da1}
+.section-head{display:flex;align-items:center;justify-content:space-between;margin:23px 2px 11px}.section-head h2{font-size:19px;margin:0;letter-spacing:-.02em}.text-link{border:0;background:none;color:var(--green);font-size:14px;font-weight:700;padding:6px;cursor:pointer}.actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.action{min-height:100px;border:1px solid rgba(255,255,255,.9);border-radius:19px;background:var(--surface);box-shadow:0 4px 13px rgba(18,45,67,.045);padding:13px 8px;display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;text-align:left;cursor:pointer}.action:active,.category:active,.hero-cta:active{transform:scale(.985)}.action-icon{width:36px;height:36px;border-radius:12px;display:grid;place-items:center;background:#e9f4fa;color:var(--blue);font-size:20px}.action span:last-child{font-size:12.5px;line-height:1.25;font-weight:650}.latest{display:flex;flex-direction:column;gap:9px}.calc-card{background:white;border:1px solid var(--line);border-radius:17px;padding:14px;box-shadow:0 4px 12px rgba(18,45,67,.04);cursor:pointer}.calc-title{font-size:14px;font-weight:700;line-height:1.35}.calc-meta{display:flex;justify-content:space-between;gap:10px;color:var(--muted);font-size:12px;margin-top:7px}.calc-total{font-size:15px;font-weight:750;color:var(--green);white-space:nowrap}.empty{padding:20px;border:1px dashed #cbdce2;border-radius:17px;background:rgba(255,255,255,.66);color:var(--muted);text-align:center;font-size:13px;line-height:1.5}
+.nav{position:fixed;z-index:20;bottom:0;left:0;right:0;padding:8px 12px calc(8px + var(--safe));background:rgba(250,253,253,.94);backdrop-filter:blur(18px);border-top:1px solid rgba(216,230,234,.9)}.nav-inner{max-width:520px;margin:auto;display:grid;grid-template-columns:repeat(3,1fr)}.nav button{background:none;border:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:3px;color:#748398;padding:4px;cursor:pointer}.nav button b{font-size:19px;line-height:1.2}.nav button span{font-size:10.5px;font-weight:600}.nav button.active{color:var(--green)}
+.page-head{display:flex;align-items:center;gap:11px;padding:8px 0 16px}.page-head h1{font-size:24px;letter-spacing:-.035em;margin:0;flex:1}.back{border:0;border-radius:14px;width:42px;height:42px;background:#e7f0f4;font-size:21px;cursor:pointer}.customs-banner{border-radius:23px;min-height:180px;padding:22px;color:#fff;overflow:hidden;position:relative;background:linear-gradient(110deg,rgba(9,44,67,.92),rgba(5,93,100,.73)),linear-gradient(135deg,#5798ab,#1c5675);box-shadow:var(--shadow);margin-bottom:14px}.customs-banner:after{content:'🚘';position:absolute;font-size:114px;right:3px;bottom:-19px;opacity:.72;filter:drop-shadow(0 8px 8px #14394a)}.customs-banner h2{font-size:23px;margin:0 0 9px;max-width:270px}.customs-banner p{font-size:13px;line-height:1.45;margin:0;max-width:240px;color:#e1f1f3}.categories{display:flex;flex-direction:column;gap:10px}.category{display:flex;align-items:center;gap:13px;padding:11px;border:1px solid var(--line);border-radius:19px;background:#fff;text-align:left;box-shadow:0 4px 12px rgba(18,45,67,.04);cursor:pointer}.category-visual{flex:none;width:91px;height:72px;border-radius:14px;background:linear-gradient(145deg,#eaf3f6,#dbe9ed);display:grid;place-items:center;font-size:45px}.category-copy{flex:1}.category-copy strong{font-size:14px;line-height:1.25;display:block}.category-copy small{font-size:11.5px;line-height:1.35;color:var(--muted);display:block;margin-top:5px}.category .arrow{font-size:21px;padding-right:4px}.notice{margin-top:14px;padding:13px 15px;border-radius:16px;background:#e6f1f3;color:#607587;font-size:12px;line-height:1.45}.consult{width:100%;margin-top:13px;border:0;background:linear-gradient(100deg,var(--green),var(--green2));color:white;border-radius:17px;padding:15px;font-weight:700;cursor:pointer}
+.history-list{display:flex;flex-direction:column;gap:10px}.history-item{background:#fff;border:1px solid var(--line);border-radius:18px;padding:14px}.history-top{display:flex;justify-content:space-between;gap:10px}.history-name{font-size:14px;font-weight:750}.badge{font-size:10px;font-weight:700;color:var(--blue);background:#eaf3fa;border-radius:999px;padding:5px 8px;white-space:nowrap}.history-vin{color:#8998a8;font:11px ui-monospace,monospace;margin-top:5px}.history-foot{display:flex;align-items:end;justify-content:space-between;gap:10px;margin-top:11px}.history-time{font-size:11px;color:var(--muted)}.history-amount{font-size:14px;font-weight:750;color:var(--green)}.history-buttons{display:flex;gap:8px;margin-top:12px}.small-btn{flex:1;border:1px solid var(--line);border-radius:12px;background:#f8fbfc;padding:9px 8px;font-size:12px;font-weight:700;cursor:pointer}.small-btn.primary{background:var(--pale);border-color:#c8e8dc;color:#067b5d}
+.profile-card{padding:22px 18px;background:white;border:1px solid var(--line);border-radius:23px;box-shadow:var(--shadow);text-align:center}.avatar{width:82px;height:82px;object-fit:cover;border-radius:28px;background:#e3f1f3;margin:auto auto 12px;display:grid;place-items:center;color:var(--green);font-size:28px;font-weight:800}.profile-name{font-size:21px;font-weight:800}.profile-user{color:var(--muted);font-size:13px;margin-top:4px}.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:19px}.stat{padding:12px 5px;border:1px solid var(--line);border-radius:15px;background:#fafcfd}.stat strong{display:block;font-size:20px;color:var(--green)}.stat span{display:block;font-size:10px;color:var(--muted);margin-top:4px;line-height:1.25}.profile-last{margin-top:14px;color:var(--muted);font-size:12px}
+.detail-sheet{position:fixed;inset:0;z-index:30;background:rgba(10,24,40,.42);display:none;align-items:flex-end}.detail-sheet.open{display:flex}.detail-panel{width:100%;max-height:87dvh;overflow:auto;background:#f8fbfc;border-radius:24px 24px 0 0;padding:17px 16px calc(20px + var(--safe));animation:slide .2s ease}.detail-top{display:flex;align-items:center;gap:10px}.detail-top h2{font-size:17px;margin:0;flex:1}.close-detail{width:35px;height:35px;background:#e5eef1;border:0;border-radius:12px;font-size:20px}.result-text{white-space:pre-wrap;overflow-wrap:anywhere;background:#fff;border:1px solid var(--line);border-radius:16px;padding:15px;font-size:13px;line-height:1.55;margin-top:13px;max-height:55dvh;overflow:auto}.result-text b,.result-text strong{font-weight:750}.detail-actions{display:flex;gap:9px;margin-top:12px}.detail-actions button{flex:1}
+.loading{opacity:.6;pointer-events:none}.status{font-size:12px;color:var(--muted);text-align:center;padding:8px}
+@media(min-width:600px){.view{padding-left:22px;padding-right:22px}.hero{min-height:390px;padding:31px 28px 0}.hero h1{font-size:42px}.hero-car{height:220px}.actions{gap:12px}.action{min-height:112px;padding:15px}.action span:last-child{font-size:13px}.category-visual{width:115px;height:84px}}
 </style>
 </head>
 <body>
-
-<div id="home-screen">
-  <div class="home-topbar">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6B7280" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"></path></svg>
-    <div style="display:flex;flex-direction:column;align-items:center;gap:1px;">
-      <span style="color:#0E1013;font-size:14px;font-weight:600;">Брокер ГРАНИ</span>
-      <span style="color:#9AA0AA;font-size:11px;">мини-приложение</span>
-    </div>
-    <div class="dots">⋯</div>
+<div class="app">
+<section id="home" class="view active">
+  <header class="top"><div class="brand"><svg class="brand-mark" viewBox="0 0 48 48" aria-hidden="true"><path fill="#087b83" d="M24 2 47 44H1z"/><path fill="#eaf7f7" d="m24 13 13 24H11z"/><path fill="#159e80" d="m24 22 7 13H17z"/></svg><div><div class="brand-name">БРОКЕР ГРАНИ</div><div class="brand-caption">ТАМОЖЕННЫЕ УСЛУГИ</div></div></div><button class="icon-button" data-screen="profile" aria-label="Профиль">♙</button></header>
+  <div class="hero"><div class="hero-copy"><div class="eyebrow">Сопровождение авто</div><h1>Утилизационный <em>сбор</em></h1><p>Просто. Надёжно.<br>С поддержкой специалистов.</p></div><div class="hero-car" aria-hidden="true"><svg viewBox="0 0 520 210" fill="none"><path d="M0 142 78 99l51 24 80-69 72 51 67-40 64 44 108-53v154H0z" fill="#d7eef0"/><path d="m0 160 95-54 50 36 93-71 75 60 70-46 54 37 83-37v125H0z" fill="#a8d1d4"/><path d="M0 179h520v31H0z" fill="#426875"/><path d="m54 164 25-33c6-8 17-13 28-13h202c14 0 27 6 36 17l25 29 34 8v22H44v-19z" fill="#183347"/><path d="m111 124 35-1 29-30h107l35 31z" fill="#d8ebed" stroke="#23475c" stroke-width="4"/><path d="M181 98v25m67-30v30M86 153h45m214 0h39" stroke="#7fc6c0" stroke-width="5" stroke-linecap="round"/><circle cx="117" cy="184" r="24" fill="#102332"/><circle cx="117" cy="184" r="12" fill="#b8d8dc"/><circle cx="326" cy="184" r="24" fill="#102332"/><circle cx="326" cy="184" r="12" fill="#b8d8dc"/><path d="M364 163h30" stroke="#f9dc83" stroke-width="7" stroke-linecap="round"/></svg></div></div>
+  <button class="hero-cta" data-action="util"><span class="cta-icon">♻</span><span class="cta-copy"><strong>Рассчитать утильсбор</strong><small>Расчёт запустится в чате с ботом</small></span><span class="arrow">›</span></button>
+  <div class="hero-cta" role="button" tabindex="0" data-screen="customs" style="margin-top:10px"><span class="cta-icon">🚘</span><span class="cta-copy"><strong>Таможенное оформление</strong><small>Новые авто, 3–5 лет, электромобили и гибриды</small></span><span class="arrow">›</span></div>
+  <div class="section-head"><h2>Быстрые действия</h2></div>
+  <div class="actions">
+    <button class="action" data-action="penalties"><span class="action-icon">📅</span><span>Рассчитать пени</span></button>
+    <button class="action" data-action="payment"><span class="action-icon">💳</span><span>Реквизиты для оплаты</span></button>
+    <button class="action" data-action="epts"><span class="action-icon">📄</span><span>Получить ЭПТС по VIN</span></button>
+    <button class="action" data-action="sbkts"><span class="action-icon">🔎</span><span>Запросить скрин СБКТС</span></button>
+    <button class="action" data-action="owner"><span class="action-icon">👤</span><span>Собственник ЭПТС</span></button>
+    <button class="action" data-action="support"><span class="action-icon">☎️</span><span>Техподдержка</span></button>
+    <button class="action" data-action="donate"><span class="action-icon">❤️</span><span>Задонатить</span></button>
   </div>
-
-  <div class="home-brand">
-    <div class="home-logo">
-      <img src="data:image/png;base64,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" alt="Логотип Грани" style="width:44px;height:auto;display:block;">
-    </div>
-    <div class="home-title">БРОКЕР ГРАНИ</div>
-    <div class="home-subtitle">Таможенное оформление автомобилей: ЭПТС, СБКТС, утильсбор и пошлины — под ключ.</div>
-    <div class="home-badges">
-      <span class="home-badge">ЭПТС</span>
-      <span class="home-badge">СБКТС</span>
-      <span class="home-badge">Утильсбор</span>
-    </div>
+  <div class="section-head"><h2>Последние расчёты</h2><button class="text-link" data-screen="history">Все →</button></div>
+  <div class="latest" id="homeLatest"><div class="empty">Загружаю расчёты…</div></div>
+</section>
+<section id="customs" class="view">
+  <div class="page-head"><button class="back" data-screen="home" aria-label="Назад">‹</button><h1>Таможенное оформление</h1></div>
+  <div class="customs-banner"><h2>Таможенное оформление</h2><p>Помогаем с оформлением автомобилей по параллельному импорту</p></div>
+  <div class="categories">
+    <button class="category" data-action="customs_under3"><span class="category-visual">🚙</span><span class="category-copy"><strong>Новые авто до 3 лет</strong><small>Включая пикапы. Единый таможенный платёж 48% от стоимости.</small></span><span class="arrow">›</span></button>
+    <button class="category" data-action="customs_over3"><span class="category-visual">🚘</span><span class="category-copy"><strong>Авто от 3 до 5 лет</strong><small>Расчёт с учётом года выпуска, объёма двигателя и параметров автомобиля.</small></span><span class="arrow">›</span></button>
+    <button class="category" data-action="customs_electric"><span class="category-visual">🔋</span><span class="category-copy"><strong>Электромобили и последовательные гибриды</strong><small>Отдельные правила расчёта таможенных платежей.</small></span><span class="arrow">›</span></button>
   </div>
-
-  <div style="padding:4px 16px 0;">
-    <button class="home-cta" id="openCalcBtn" type="button">
-      <div class="home-cta-icon">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round"><rect x="5" y="3" width="14" height="18" rx="2"></rect><path d="M8 7h8M8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01M8.5 15h.01M12 15h.01M15.5 15h.01M8.5 18.5h.01M12 18.5h.01M15.5 18.5h.01"></path></svg>
-      </div>
-      <div class="home-cta-text">
-        <span class="home-cta-title">Рассчитать утильсбор</span>
-        <span class="home-cta-sub">Ставки 2026 · физлица и юрлица</span>
-      </div>
-      <svg class="home-cta-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"></path></svg>
-    </button>
-  </div>
-
-  <div class="home-grid">
-    <button class="home-tile enabled" type="button" id="openCustomsBtn">
-      <div class="home-tile-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2C6BFF" stroke-width="1.8" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"></path></svg></div>
-      <span class="home-tile-label">Таможенное оформление</span>
-    </button>
-    <button class="home-tile" type="button" data-soon="1">
-      <div class="home-tile-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2C6BFF" stroke-width="1.8" stroke-linecap="round"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M12 9h.01M15 9h.01M9 13h6v8"></path></svg></div>
-      <span class="home-tile-label">Реквизиты госпошлины</span>
-    </button>
-    <button class="home-tile" type="button" data-soon="1">
-      <div class="home-tile-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2C6BFF" stroke-width="1.8" stroke-linecap="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5M12 11v6M9.5 14.5L12 17l2.5-2.5"></path></svg></div>
-      <span class="home-tile-label">Выписка из ЭПТС</span>
-    </button>
-    <button class="home-tile" type="button" data-soon="1">
-      <div class="home-tile-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2C6BFF" stroke-width="1.8" stroke-linecap="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM19 8v6M22 11h-6"></path></svg></div>
-      <span class="home-tile-label">Собственник в ЭПТС</span>
-    </button>
-    <button class="home-tile wide" type="button" data-soon="1">
-      <div class="home-tile-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2C6BFF" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 15l4.5-4.5L12 15l3-3 6 6"></path><circle cx="15.5" cy="9.5" r="1.2"></circle></svg></div>
-      <span class="home-tile-label">Запросить скрин СБКТС</span>
-      <svg style="margin-left:auto;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9AA0AA" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"></path></svg>
-    </button>
-  </div>
-
-  <div class="home-section-head">
-    <span class="home-section-title">Мои заявки</span>
-    <button class="home-section-link" id="clearApplicationsBtn" type="button" hidden>Очистить</button>
-  </div>
-  <div id="applicationsList"><div class="home-empty">Завершённые расчёты появятся здесь.</div></div>
-
-  <div class="home-footer-pad">
-    <button class="home-new-request" id="newCalcBottomBtn" type="button">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
-      <span>Новая заявка</span>
-    </button>
-  </div>
+  <div class="notice">Расчёт предварительный. Окончательную стоимость определяет таможенный орган.</div>
+  <button class="consult" data-action="support">☎ Получить консультацию</button>
+</section>
+<section id="history" class="view">
+  <div class="page-head"><h1>Расчёты</h1></div>
+  <div class="history-list" id="historyList"><div class="empty">Загружаю историю…</div></div>
+  <div class="status" id="historyStatus"></div>
+</section>
+<section id="profile" class="view">
+  <div class="page-head"><h1>Профиль</h1></div>
+  <div class="profile-card" id="profileCard"><div class="empty">Загружаю профиль…</div></div>
+</section>
 </div>
-
+<nav class="nav"><div class="nav-inner">
+<button class="active" data-screen="home"><b>⌂</b><span>Главная</span></button>
+<button data-screen="history"><b>▤</b><span>Расчёты</span></button>
+<button data-screen="profile"><b>♙</b><span>Профиль</span></button>
+</div></nav>
+<div class="detail-sheet" id="detailSheet" role="dialog" aria-modal="true"><div class="detail-panel"><div class="detail-top"><h2 id="detailTitle">Расчёт</h2><button class="close-detail" id="closeDetail">×</button></div><div class="result-text" id="detailText"></div><div class="detail-actions"><button class="small-btn" id="detailClose">Закрыть</button><button class="small-btn primary" id="detailSend">В чат</button></div></div></div>
 <script>
-/* ============== TELEGRAM WEBAPP + НАВИГАЦИЯ ==============
-   Этот файл отвечает ТОЛЬКО за интерфейс главного экрана и переходы между вкладками.
-   Логика расчёта утильсбора живёт отдельно, в /tabs/utilsbor/ — правки здесь её не касаются.
-   Чтобы добавить новую вкладку в будущем: создать папку /tabs/имя-вкладки/ со своим
-   index.html, и в одной из плиток ниже заменить data-soon="1" на
-   onclick="window.location.href='tabs/имя-вкладки/index.html'" — остальной код трогать не нужно. */
-const tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
-if(tg){
-  tg.ready();
-  tg.expand();
-  try{ tg.setHeaderColor('#F4F5F7'); }catch(e){}
-  try{ tg.setBackgroundColor('#F4F5F7'); }catch(e){}
-  tg.BackButton.hide();
-}
-
-document.getElementById('openCalcBtn').addEventListener('click', function(){
-  if(tg){ try{ tg.HapticFeedback.impactOccurred('light'); }catch(e){} }
-  window.location.href = 'tabs/utilsbor/index.html';
-});
-document.getElementById('newCalcBottomBtn').addEventListener('click', function(){
-  if(tg){ try{ tg.HapticFeedback.impactOccurred('light'); }catch(e){} }
-  window.location.href = 'tabs/utilsbor/index.html';
-});
-document.getElementById('openCustomsBtn').addEventListener('click', function(){
-  if(tg){ try{ tg.HapticFeedback.impactOccurred('light'); }catch(e){} }
-  window.location.href = 'tabs/customs/index.html';
-});
-
-function escapeHtml(value){
-  const element = document.createElement('div');
-  element.textContent = value == null ? '' : String(value);
-  return element.innerHTML;
-}
-
-function money(value){
-  return Number(value).toLocaleString('ru-RU', {maximumFractionDigits:2}) + ' ₽';
-}
-
-function renderApplications(items){
-  const list = document.getElementById('applicationsList');
-  const clear = document.getElementById('clearApplicationsBtn');
-  clear.hidden = !items.length;
-  if(!items.length){
-    list.innerHTML = '<div class="home-empty">Завершённые расчёты появятся здесь.</div>';
-    return;
-  }
-  list.innerHTML = items.map(item => {
-    const isCustoms = item.calculationType === 'customs';
-    const vehicle = [item.brand, item.model].filter(Boolean).join(' ') || 'Автомобиль';
-    const details = [];
-    if(item.year) details.push(item.year + ' год');
-    if(item.category) details.push(item.category);
-    const tech = [];
-    if(item.kw) tech.push(Number(item.kw).toLocaleString('ru-RU') + ' кВт');
-    if(item.ccm) tech.push(Number(item.ccm).toLocaleString('ru-RU') + ' см³');
-    const person = item.surname ? ' · ' + escapeHtml(item.surname) : '';
-    const amount = item.amount ? money(item.amount) : escapeHtml(item.amountLabel || '—');
-    const date = new Date(item.createdAt).toLocaleDateString('ru-RU', {day:'2-digit',month:'2-digit',year:'numeric'});
-    return `<div class="home-request-card saved">
-      <div class="home-request-top"><span class="home-request-id">${isCustoms ? 'Таможенный расчёт' : 'Расчёт утильсбора'}</span><span class="home-request-status">${escapeHtml(item.source || 'Расчёт')}</span></div>
-      <div class="home-request-meta">
-        <span class="home-request-line"><b>${escapeHtml(vehicle)}</b>${person}</span>
-        ${details.length ? `<span class="home-request-line">${escapeHtml(details.join(' · '))}</span>` : ''}
-        ${item.vin ? `<span class="home-request-vin">VIN ${escapeHtml(item.vin)}</span>` : ''}
-        ${tech.length ? `<span class="home-request-line">${escapeHtml(tech.join(' · '))}</span>` : ''}
-        ${isCustoms && item.customsDuty ? `<span class="home-request-line">Таможенные платежи: ${money(item.customsDuty)}</span>` : ''}
-        ${isCustoms && item.customsFee ? `<span class="home-request-line">Таможенный сбор: ${money(item.customsFee)}</span>` : ''}
-        ${isCustoms && item.utilAmount ? `<span class="home-request-line">Утильсбор: ${money(item.utilAmount)}</span>` : ''}
-      </div>
-      <div class="home-request-bottom"><span class="home-request-updated">${date}</span><span class="home-request-more">${amount}</span></div>
-    </div>`;
-  }).join('');
-}
-
-async function loadApplications(){
-  try{ renderApplications(await GraniApplications.list()); }
-  catch(_){ document.getElementById('applicationsList').innerHTML = '<div class="home-empty home-requests-error">Не удалось загрузить заявки. Откройте мини-приложение заново.</div>'; }
-}
-
-document.getElementById('clearApplicationsBtn').addEventListener('click', async function(){
-  const confirmed = tg && tg.showConfirm
-    ? await new Promise(resolve => tg.showConfirm('Очистить все сохранённые расчёты?', resolve))
-    : confirm('Очистить все сохранённые расчёты?');
-  if(!confirmed) return;
-  try{ renderApplications(await GraniApplications.clear()); }
-  catch(_){ if(tg && tg.showAlert) tg.showAlert('Не удалось очистить заявки. Попробуйте ещё раз.'); }
-});
-
-loadApplications();
-
-// заглушки остальных плиток — раздел пока не реализован
-document.querySelectorAll('[data-soon]').forEach(el => {
-  el.addEventListener('click', function(){
-    const msg = 'Этот раздел скоро появится. Пока доступен расчёт утильсбора.';
-    if(tg && tg.showAlert){ tg.showAlert(msg); } else { alert(msg); }
-  });
-});
+const tg=window.Telegram?.WebApp||null;
+if(tg){tg.ready();tg.expand();try{tg.setHeaderColor('#f2f7f9');tg.setBackgroundColor('#f2f7f9');tg.disableVerticalSwipes?.();}catch(_){} }
+const state={calculations:[],profile:null,currentCalculation:null};
+const $=(id)=>document.getElementById(id);
+function escapeHtml(value){const d=document.createElement('div');d.textContent=value==null?'':String(value);return d.innerHTML}
+function dateTime(iso){const d=new Date(iso);return Number.isNaN(d.getTime())?'':d.toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}
+function dateOnly(iso){const d=new Date(iso);return Number.isNaN(d.getTime())?'':d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric'})}
+function money(value){return Number(value).toLocaleString('ru-RU',{maximumFractionDigits:2})+' ₽'}
+function calcTitle(item){return [item.brand,item.model].filter(Boolean).join(' ')||item.source||'Расчёт'}
+function renderCalcCard(item,compact=false){const vin=item.vin?`<div class="history-vin">VIN: ${escapeHtml(item.vin.slice(0,3)+'••••••••••'+item.vin.slice(-4))}</div>`:'';const total=item.amount?money(item.amount):escapeHtml(item.amountLabel||'');if(compact)return `<button class="calc-card" data-open="${escapeHtml(item.id)}"><div class="calc-title">${escapeHtml(calcTitle(item))}${item.year?' · '+escapeHtml(item.year):''}</div><div class="calc-meta"><span>${escapeHtml(item.calculationType==='customs'?'Таможенное оформление':item.calculationType==='declaration'?'Утильсбор по декларации':item.calculationType==='penalties'?'Расчёт пеней':'Утилизационный сбор')}</span><b class="calc-total">${total||'Открыть →'}</b></div></button>`;return `<article class="history-item"><div class="history-top"><div><div class="history-name">${escapeHtml(calcTitle(item))}${item.year?' · '+escapeHtml(item.year):''}</div>${vin}</div><span class="badge">${escapeHtml(item.calculationType==='customs'?'Таможня':item.calculationType==='declaration'?'Декларация':item.calculationType==='penalties'?'Пени':'Утильсбор')}</span></div><div class="history-foot"><span class="history-time">${dateTime(item.createdAt)}</span><span class="history-amount">${total||'—'}</span></div><div class="history-buttons"><button class="small-btn primary" data-open="${escapeHtml(item.id)}">Открыть</button><button class="small-btn" data-send="${escapeHtml(item.id)}">В чат</button></div></article>`}
+function renderHistory(){const latest=$('homeLatest'),list=$('historyList');latest.innerHTML=state.calculations.length?state.calculations.slice(0,3).map(x=>renderCalcCard(x,true)).join(''):'<div class="empty">Завершённые расчёты появятся здесь.</div>';list.innerHTML=state.calculations.length?state.calculations.map(x=>renderCalcCard(x)).join(''):'<div class="empty">Завершённые расчёты появятся здесь.</div>'}
+function safeResultMarkup(source){const parsed=new DOMParser().parseFromString(`<body>${String(source||'')}</body>`,'text/html');const allowed=new Set(['B','STRONG','I','EM','U','S','CODE','PRE','BR']);function copy(node){if(node.nodeType===Node.TEXT_NODE)return document.createTextNode(node.textContent);if(node.nodeType!==Node.ELEMENT_NODE)return document.createDocumentFragment();if(node.tagName==='A'){const link=document.createElement('a');try{const url=new URL(node.getAttribute('href')||'');if(url.protocol==='https:'||url.protocol==='http:'){link.href=url.href;link.rel='noopener noreferrer';}}catch(_){}for(const child of node.childNodes)link.append(copy(child));return link}if(!allowed.has(node.tagName)){const fragment=document.createDocumentFragment();for(const child of node.childNodes)fragment.append(copy(child));return fragment}const el=document.createElement(node.tagName.toLowerCase());for(const child of node.childNodes)el.append(copy(child));return el}const frag=document.createDocumentFragment();for(const node of parsed.body.childNodes)frag.append(copy(node));return frag}
+function openCalculation(id){const item=state.calculations.find(x=>x.id===id);if(!item)return;state.currentCalculation=item;$('detailTitle').textContent=calcTitle(item);$('detailText').replaceChildren(safeResultMarkup(item.resultText||'Текст этого расчёта ещё не сохранён. Откройте его в истории чата с ботом.'));$('detailSheet').classList.add('open')}
+function show(screen){document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id===screen));document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.screen===screen));if(screen==='profile')loadProfile();if(screen==='history')loadHistory()}
+async function doAction(action,element){if(element)element.classList.add('loading');try{await window.GraniAPI.launchAction(action);if(tg)tg.close();else alert('Откройте Mini App в Telegram, чтобы перейти в чат с ботом.')}catch(e){if(tg?.showAlert)tg.showAlert(e.message||'Не удалось открыть раздел.');else alert(e.message||'Не удалось открыть раздел.')}finally{element?.classList.remove('loading')}}
+async function sendToChat(id,button){try{button?.classList.add('loading');await window.GraniAPI.sendCalculation(id);if(tg)tg.close();else alert('Расчёт отправлен в чат с ботом.')}catch(e){if(tg?.showAlert)tg.showAlert(e.message||'Не удалось отправить расчёт.');else alert(e.message||'Не удалось отправить расчёт.')}finally{button?.classList.remove('loading')}}
+function relativeLast(value){if(!value)return'—';const d=new Date(value),today=new Date();if(Number.isNaN(d.getTime()))return'—';if(d.toDateString()===today.toDateString())return'сегодня';return d.toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:d.getFullYear()===today.getFullYear()?undefined:'numeric'})}
+async function loadHistory(){try{state.calculations=await window.GraniAPI.listCalculations();renderHistory()}catch(e){$('historyList').innerHTML='<div class="empty">Не удалось загрузить расчёты. Проверьте подключение и откройте приложение ещё раз.</div>';$('historyStatus').textContent=e.message||''}}
+async function loadProfile(){try{const p=await window.GraniAPI.getProfile();state.profile=p;const user=tg?.initDataUnsafe?.user||{};const name=[p.firstName||user.first_name,p.lastName||user.last_name].filter(Boolean).join(' ')||'Пользователь Telegram';const username=p.username||user.username;const avatar=p.photoUrl||user.photo_url;const ageDays=p.daysUsing??'—';$('profileCard').innerHTML=`${avatar?`<img class="avatar" src="${escapeHtml(avatar)}" alt="Аватар">`:`<div class="avatar">${escapeHtml(name.slice(0,1).toUpperCase())}</div>`}<div class="profile-name">${escapeHtml(name)}</div><div class="profile-user">${username?'@'+escapeHtml(username):'Telegram'}</div><div class="stats"><div class="stat"><strong>${escapeHtml(ageDays)}</strong><span>дней с нами</span></div><div class="stat"><strong>${Number(p.calculationsTotal)||0}</strong><span>расчётов всего</span></div><div class="stat"><strong>${Number(p.calculations30d)||0}</strong><span>за последние 30 дней</span></div></div><div class="profile-last">Первое использование: ${escapeHtml(dateOnly(p.firstSeenAt)||'с этого дня')}<br>Последний расчёт: ${escapeHtml(relativeLast(p.lastCalculationAt))}</div>`}catch(e){$('profileCard').innerHTML='<div class="empty">Не удалось загрузить профиль. Откройте Mini App из чата с ботом.</div>'}}
+document.addEventListener('click',event=>{const target=event.target.closest('[data-screen],[data-action],[data-open],[data-send]');if(!target)return;if(target.dataset.screen){show(target.dataset.screen);return}if(target.dataset.action){doAction(target.dataset.action,target);return}if(target.dataset.open){openCalculation(target.dataset.open);return}if(target.dataset.send){sendToChat(target.dataset.send,target)}});
+document.addEventListener('keydown',event=>{if((event.key==='Enter'||event.key===' ')&&event.target.matches('[role="button"][data-screen]')){event.preventDefault();show(event.target.dataset.screen)}});
+$('closeDetail').addEventListener('click',()=>$('detailSheet').classList.remove('open'));$('detailClose').addEventListener('click',()=>$('detailSheet').classList.remove('open'));$('detailSheet').addEventListener('click',e=>{if(e.target===$('detailSheet'))$('detailSheet').classList.remove('open')});$('detailSend').addEventListener('click',()=>state.currentCalculation&&sendToChat(state.currentCalculation.id,$('detailSend')));
+loadHistory().catch(()=>{});
 </script>
-
 </body>
 </html>

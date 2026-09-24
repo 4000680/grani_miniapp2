@@ -52,7 +52,8 @@ import {
   listCampaigns,
   processCampaignBatch,
   recordCompletedCalculation,
-  recordDocumentType
+  recordDocumentType,
+  miniAppProfile
 } from './analytics.js';
 import { formatUtilYearReference } from './util-rate-reference.js';
 export { ApplicationsStore } from './applications-store.js';
@@ -739,6 +740,7 @@ function applicationFromVehicle(vehicle, util) {
   const amounts = util.map(item => item.personal !== item.commercial ? item.personal : item.commercial);
   return {
     source: vehicle.type === 'sbkts' ? 'СБКТС' : vehicle.type === 'catalog' ? 'Шаблон СЭП' : 'ЭПТС',
+    calculationType: 'util',
     vin: vehicle.vin,
     surname: vehicle.surname,
     brand: vehicle.brand,
@@ -883,14 +885,18 @@ async function cleanupCustomsMessages(env, userId, chatId, exceptMessageId = nul
   await clearCustomsState(env, userId);
 }
 
-async function saveApplication(env, userId, application) {
+async function saveApplication(env, userId, application, resultText = '', parseMode = null) {
+  const completed = {
+    ...application,
+    ...(resultText ? { resultText, parseMode } : {})
+  };
   if (env.ANALYTICS_DB && userId) {
-    try { await recordCompletedCalculation(env.ANALYTICS_DB, userId, application); }
+    try { await recordCompletedCalculation(env.ANALYTICS_DB, userId, completed); }
     catch (error) { console.error('Analytics calculation tracking failed', error); }
   }
   const stub = applicationsStub(env, userId);
   if (!stub) return;
-  try { await stub.add(application); } catch (error) { console.error('Applications storage:', error); }
+  try { await stub.add(completed); } catch (error) { console.error('Applications storage:', error); }
 }
 
 function bytesToHex(bytes) {
@@ -945,12 +951,128 @@ async function handleApplicationsApi(request, env) {
   const stub = applicationsStub(env, user.id);
   if (!stub) return new Response(JSON.stringify({ ok: false, error: 'Storage unavailable' }), { status: 503, headers });
   if (request.method === 'GET') return new Response(JSON.stringify({ ok: true, items: await stub.list() }), { headers });
-  if (request.method === 'POST') {
-    const body = await request.json();
-    return new Response(JSON.stringify({ ok: true, items: await stub.add(body) }), { headers });
-  }
   if (request.method === 'DELETE') return new Response(JSON.stringify({ ok: true, items: await stub.clear() }), { headers });
   return new Response(JSON.stringify({ ok: false, error: 'Method not allowed' }), { status: 405, headers });
+}
+
+async function handleMiniAppProfile(request, env) {
+  const headers = apiHeaders(env);
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
+  if (request.method !== 'GET') return new Response(JSON.stringify({ ok: false, error: 'Method not allowed' }), { status: 405, headers });
+  const user = await authenticateMiniApp(request, env);
+  if (!user) return new Response(JSON.stringify({ ok: false, error: 'Unauthorized' }), { status: 401, headers });
+  const stub = applicationsStub(env, user.id);
+  if (!stub) return new Response(JSON.stringify({ ok: false, error: 'Storage unavailable' }), { status: 503, headers });
+  const stored = await stub.touchProfile(user);
+  const analytics = await miniAppProfile(env.ANALYTICS_DB, user);
+  const profile = analytics ? {
+    ...stored,
+    ...analytics,
+    calculationsTotal: Math.max(Number(analytics.calculationsTotal) || 0, Number(stored.calculationCount) || 0),
+    calculations30d: Math.max(Number(analytics.calculations30d) || 0, (stored.calculationDates || []).filter(value => Date.parse(value) >= Date.now() - 30 * 86400000).length),
+    lastCalculationAt: analytics.lastCalculationAt || stored.lastCalculationAt || null
+  } : {
+    ...stored,
+    daysUsing: Math.max(1, Math.floor((Date.now() - Date.parse(stored.firstSeenAt)) / 86400000) + 1),
+    calculationsTotal: Number(stored.calculationCount) || 0,
+    calculations30d: (stored.calculationDates || []).filter(value => Date.parse(value) >= Date.now() - 30 * 86400000).length
+  };
+  return new Response(JSON.stringify({ ok: true, profile }), { headers });
+}
+
+async function sendInfoMessage(env, chatId, section) {
+  const info = INFO[section];
+  if (!info) throw new Error('Раздел пока недоступен.');
+  const text = typeof info.text === 'function' ? info.text(env) : info.text;
+  return telegram(env, 'sendMessage', {
+    chat_id: chatId, text: `${info.title}\n\n${text}`, parse_mode: 'HTML',
+    disable_web_page_preview: true, reply_markup: infoKeyboard(section, env)
+  });
+}
+
+async function sendUtilStartMessage(env, chatId) {
+  const sent = await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: UTIL_START_TEXT,
+    reply_markup: { inline_keyboard: [[
+      { text: '← Назад', callback_data: 'menu' },
+      { text: '🏠 Главное меню', callback_data: 'menu' }
+    ]] }
+  });
+  await trackTemporaryMessage(env, chatId, sent.message_id);
+  return sent;
+}
+
+async function runMiniAppAction(env, user, bodyAction) {
+  const chatId = Number(user.id);
+  const actions = {
+    util: async () => sendUtilStartMessage(env, chatId),
+    declaration: async () => sendDeclarationStart(env, chatId, chatId),
+    customs: async () => sendCustomsIntro(env, chatId),
+    customs_under3: async () => sendCustomsCatalogPrompt(env, chatId, null, 'under3'),
+    payment: async () => sendInfoMessage(env, chatId, 'payment'),
+    epts: async () => sendInfoMessage(env, chatId, 'epts'),
+    sbkts: async () => sendInfoMessage(env, chatId, 'sbkts'),
+    owner: async () => sendInfoMessage(env, chatId, 'owner'),
+    support: async () => sendInfoMessage(env, chatId, 'contact'),
+    donate: async () => sendInfoMessage(env, chatId, 'donate')
+  };
+  if (bodyAction === 'penalties') {
+    const state = await getCustomsState(env, chatId);
+    const vehicle = state?.utilYearContext?.vehicle;
+    if (!vehicle) return sendUtilStartMessage(env, chatId);
+    const util = calculateUtil(vehicle);
+    return sendIssueDatePrompt(env, chatId, peniCases(util));
+  }
+  if (bodyAction === 'customs_over3' || bodyAction === 'customs_electric') {
+    const callbackData = bodyAction === 'customs_over3' ? 'customs:over3' : 'customs:electric';
+    const sent = await telegram(env, 'sendMessage', { chat_id: chatId, text: 'Открываю раздел…' });
+    const query = {
+      id: `miniapp-${crypto.randomUUID()}`,
+      data: callbackData,
+      from: user,
+      message: { ...sent, chat: { id: chatId, type: 'private' } }
+    };
+    return handleCustomsCallback(env, query);
+  }
+  const action = actions[bodyAction];
+  if (!action) throw new Error('Неизвестное действие Mini App.');
+  return action();
+}
+
+async function handleMiniAppAction(request, env) {
+  const headers = apiHeaders(env);
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
+  if (request.method !== 'POST') return new Response(JSON.stringify({ ok: false, error: 'Method not allowed' }), { status: 405, headers });
+  const user = await authenticateMiniApp(request, env);
+  if (!user) return new Response(JSON.stringify({ ok: false, error: 'Unauthorized' }), { status: 401, headers });
+  try {
+    const { action } = await request.json();
+    const stub = applicationsStub(env, user.id);
+    if (stub) await stub.touchProfile(user);
+    if (env.ANALYTICS_DB) await miniAppProfile(env.ANALYTICS_DB, user);
+    await runMiniAppAction(env, user, action);
+    return new Response(JSON.stringify({ ok: true }), { headers });
+  } catch (error) {
+    return new Response(JSON.stringify({ ok: false, error: error.message || 'Не удалось открыть раздел.' }), { status: 400, headers });
+  }
+}
+
+async function handleMiniAppCalculationSend(request, env, calculationId) {
+  const headers = apiHeaders(env);
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
+  if (request.method !== 'POST') return new Response(JSON.stringify({ ok: false, error: 'Method not allowed' }), { status: 405, headers });
+  const user = await authenticateMiniApp(request, env);
+  if (!user) return new Response(JSON.stringify({ ok: false, error: 'Unauthorized' }), { status: 401, headers });
+  const stub = applicationsStub(env, user.id);
+  const item = stub ? await stub.getCalculation(calculationId) : null;
+  if (!item) return new Response(JSON.stringify({ ok: false, error: 'Расчёт не найден.' }), { status: 404, headers });
+  if (!item.resultText) return new Response(JSON.stringify({ ok: false, error: 'Для этого расчёта ещё не сохранён полный текст.' }), { status: 409, headers });
+  await telegram(env, 'sendMessage', {
+    chat_id: user.id, text: item.resultText,
+    ...(item.parseMode === 'HTML' ? { parse_mode: 'HTML' } : {})
+  });
+  return new Response(JSON.stringify({ ok: true }), { headers });
 }
 
 function calculationResultKeyboard(allow2027 = false) {
@@ -1052,12 +1174,14 @@ async function handleDateReply(env, message) {
   }
   await cleanupTemporaryMessages(env, message.from?.id || message.chat.id, message.chat.id);
   const deadline = addWorkingDays(date, 5);
-  await telegram(env, 'sendMessage', {
-    chat_id: message.chat.id,
-    text: [`<b>Крайний срок уплаты: ${formatDate(deadline)}</b>`, formatPeniCompact(cases, deadline, todayUtc())].join('\n'),
-    parse_mode: 'HTML',
-    reply_markup: calculationResultKeyboard()
-  });
+  const resultText = [`<b>Крайний срок уплаты: ${formatDate(deadline)}</b>`, formatPeniCompact(cases, deadline, todayUtc())].join('\n');
+  await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: resultText, parse_mode: 'HTML', reply_markup: calculationResultKeyboard() });
+  const vehicle = state?.utilYearContext?.vehicle || {};
+  await saveApplication(env, message.from?.id || message.chat.id, {
+    source: 'Расчёт пеней', calculationType: 'penalties', brand: vehicle.brand || '', model: vehicle.model || '',
+    year: vehicle.year || null, vin: vehicle.vin || '', category: vehicle.category || '',
+    amount: cases.reduce((sum, item) => sum + (Number(item.sum) || 0), 0), amountLabel: 'Пени'
+  }, resultText, 'HTML');
   if (state?.utilYearContext) {
     await setCustomsState(env, message.from?.id || message.chat.id, {
       mode: 'util', stage: 'result', utilYearContext: state.utilYearContext
@@ -1888,17 +2012,12 @@ async function handleCustomsReply(env, message) {
     const customsFee = calculateCustomsProcessingFee(value);
     const util = calculateUtil(vehicle);
     await cleanupCustomsMessages(env, userId, message.chat.id);
-    await telegram(env, 'sendMessage', {
-      chat_id: message.chat.id,
-      text: under3CustomsResultText(candidate, vehicle, customs, customsFee, util, rate, valueDetails),
-      parse_mode: 'HTML',
-      reply_markup: under3CustomsResultKeyboard(candidate.rowIndex, requestedWeight, ccm, currency.code)
-    });
+    const resultText = under3CustomsResultText(candidate, vehicle, customs, customsFee, util, rate, valueDetails);
+    await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: resultText, parse_mode: 'HTML',
+      reply_markup: under3CustomsResultKeyboard(candidate.rowIndex, requestedWeight, ccm, currency.code) });
     await saveApplication(env, userId, customsApplicationFromVehicle(vehicle, util, {
-      customsValue: value,
-      customsPayments: customs.duty,
-      customsFee
-    }));
+      customsValue: value, customsPayments: customs.duty, customsFee
+    }), resultText, 'HTML');
     await clearCustomsState(env, userId);
     return true;
   }
@@ -2026,17 +2145,12 @@ async function handleCustomsReply(env, message) {
     }
     lines.push(CUSTOMS_EXPENSES_NOTE);
     await cleanupCustomsMessages(env, userId, message.chat.id);
-    await telegram(env, 'sendMessage', {
-      chat_id: message.chat.id,
-      text: lines.join('\n'),
-      parse_mode: 'HTML',
-      reply_markup: electricCustomsResultKeyboard(candidate.rowIndex, requestedWeight || candidate.mass)
-    });
+    const resultText = lines.join('\n');
+    await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: resultText, parse_mode: 'HTML',
+      reply_markup: electricCustomsResultKeyboard(candidate.rowIndex, requestedWeight || candidate.mass) });
     await saveApplication(env, userId, customsApplicationFromVehicle(vehicle, util, {
-      customsValue: value,
-      customsPayments: customs.customsTotal,
-      customsFee
-    }));
+      customsValue: value, customsPayments: customs.customsTotal, customsFee
+    }), resultText, 'HTML');
     await clearCustomsState(env, userId);
     return true;
   }
@@ -2132,9 +2246,7 @@ async function sendPickupCalculationResult(env, message, userId, state, engineCc
     const result = calculatePickup({ customsValueRub: value, fuel, ageGroup, engineCc: ccm, maxMassKg: mass, euroRate: rate });
     const customsFee = calculateCustomsProcessingFee(value);
     await cleanupCustomsMessages(env, userId, message.chat.id);
-    await telegram(env, 'sendMessage', {
-      chat_id: message.chat.id,
-      text: [
+    const resultText = [
         '✅ <b>Предварительный расчёт пикапа</b>',
         '',
         ...(state.pickupBrand ? [
@@ -2155,10 +2267,9 @@ async function sendPickupCalculationResult(env, message, userId, state, engineCc
         `<b>Итого: ${formatMoney(result.total + customsFee)}</b>`,
         '',
         '<i>Услуги таможенного представителя не включены. Окончательная сумма зависит от классификации автомобиля и таможенной стоимости.</i>'
-      ].join('\n'),
-      parse_mode: 'HTML',
-      reply_markup: pickupCustomsResultKeyboard(state.pickupRowIndex, mass, ageGroup, fuel, ccm, currency.code)
-    });
+    ].join('\n');
+    await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: resultText, parse_mode: 'HTML',
+      reply_markup: pickupCustomsResultKeyboard(state.pickupRowIndex, mass, ageGroup, fuel, ccm, currency.code) });
     await saveApplication(env, userId, {
       source: 'Таможенный расчёт', calculationType: 'customs',
       brand: state.pickupBrand || 'Пикап', model: state.pickupModel || (fuel === 'petrol' ? 'бензин' : 'дизель'),
@@ -2166,7 +2277,7 @@ async function sendPickupCalculationResult(env, message, userId, state, engineCc
       customsDuty: result.customsTotal, customsFee, utilAmount: result.util,
       amount: result.total + customsFee,
       amountLabel: ageGroup
-    });
+    }, resultText, 'HTML');
     await clearCustomsState(env, userId);
   } catch (error) {
     await sendCustomsNotice(env, message.chat.id, escapeHtml(error.message || error));
@@ -3000,18 +3111,11 @@ async function handleCatalogCallback(env, query) {
     currencyRate: sourceParsed.customsCurrencyRate || null,
     euroRate: Number(sourceParsed.customsEuroRate) || null
   } : null;
-  await saveApplication(
-    env,
-    query.from?.id,
-    customs ? customsApplicationFromVehicle(vehicle, util, customs) : applicationFromVehicle(vehicle, util)
-  );
-  await telegram(env, 'editMessageText', {
-    chat_id: message.chat.id,
-    message_id: message.message_id,
-    text: formatCatalogResult(candidate, vehicle, util, customs),
-    parse_mode: 'HTML',
-    reply_markup: customs ? customsResultKeyboard() : calculationResultKeyboard()
-  });
+  const resultText = formatCatalogResult(candidate, vehicle, util, customs);
+  await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id,
+    text: resultText, parse_mode: 'HTML', reply_markup: customs ? customsResultKeyboard() : calculationResultKeyboard() });
+  await saveApplication(env, query.from?.id,
+    customs ? customsApplicationFromVehicle(vehicle, util, customs) : applicationFromVehicle(vehicle, util), resultText, 'HTML');
   await releaseTemporaryMessage(env, query.from?.id || message.chat.id, message.message_id);
   if (customs) await clearCustomsState(env, query.from?.id || message.chat.id);
 }
@@ -3075,14 +3179,9 @@ async function handleDocument(env, message) {
     }
     const cases = peniCases(util);
     const result = formatDocumentResult(vehicle, util, deadline);
-    await saveApplication(env, message.from?.id, applicationFromVehicle(vehicle, util));
-    await telegram(env, 'editMessageText', {
-      chat_id: message.chat.id,
-      message_id: status.message_id,
-      text: result,
-      parse_mode: 'HTML',
-      reply_markup: calculationResultKeyboard(todayUtc().getUTCFullYear() < 2027)
-    });
+    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: status.message_id,
+      text: result, parse_mode: 'HTML', reply_markup: calculationResultKeyboard(todayUtc().getUTCFullYear() < 2027) });
+    await saveApplication(env, message.from?.id, applicationFromVehicle(vehicle, util), result, 'HTML');
     await sendDocumentIdentity(env, message.chat.id, vehicle, message.message_id).catch(() => null);
     await releaseTemporaryMessage(env, userId, status.message_id);
     if (!vehicle.issueDate) await sendIssueDatePrompt(env, message.chat.id, cases);
@@ -3178,7 +3277,6 @@ async function handleGroupCalculation(env, query) {
       try { await recordDocumentType(env.ANALYTICS_DB, query.from?.id, vehicle.type === 'sbkts' ? 'sbkts' : 'epts'); }
       catch (error) { console.error('Analytics document tracking failed', error); }
     }
-    await saveApplication(env, query.from?.id, applicationFromVehicle(vehicle, util));
     await telegram(env, 'editMessageText', {
       chat_id: botMessage.chat.id,
       message_id: botMessage.message_id,
@@ -3471,12 +3569,13 @@ async function handleDeclarationReply(env, message) {
       const complete = { ...state, paidVat: amount, paidVatRub: rub, currencyRate };
       const payment = calculateDeclarationPayment(complete);
       complete.calculationYear = payment.calculationYear;
+      const resultText = declarationResultText(complete, payment);
+      await setCustomsState(env, userId, { ...complete, stage: 'result' });
+      await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: resultText, parse_mode: 'HTML', reply_markup: declarationResultKeyboard(payment.calculationYear < 2027) });
       await saveApplication(env, userId, {
         ...applicationFromVehicle(complete.vehicle, payment.util.map(item => ({ age: item.age, personal: item.amount, commercial: item.amount }))),
         source: 'Расчёт по декларации', calculationType: 'declaration'
-      });
-      await setCustomsState(env, userId, { ...complete, stage: 'result' });
-      await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: declarationResultText(complete, payment), parse_mode: 'HTML', reply_markup: declarationResultKeyboard(payment.calculationYear < 2027) });
+      }, resultText, 'HTML');
       return true;
     } catch (error) {
       await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: `Не удалось выполнить расчёт: ${escapeHtml(error.message || error)}.`, parse_mode: 'HTML', reply_markup: declarationKeyboard([], 'declaration:back:country') });
@@ -3497,6 +3596,7 @@ async function handleDeclarationCallback(env, query) {
     await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
       text: formatUtilYearReference(payment.util, 2027, true),
+      parse_mode: 'HTML',
       reply_markup: declarationYearReferenceKeyboard()
     });
     return;
@@ -3624,6 +3724,7 @@ async function handleCalculationCallback(env, query) {
     await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
       text: formatUtilYearReference(util, 2027),
+      parse_mode: 'HTML',
       reply_markup: calculationResultKeyboard()
     });
     return;
@@ -3675,14 +3776,12 @@ async function handleCalculationCallback(env, query) {
       return;
     }
     const cases = peniCases(util);
-    await saveApplication(env, query.from?.id, applicationFromVehicle(vehicle, util));
-    await telegram(env, 'editMessageText', {
-      chat_id: message.chat.id,
-      message_id: message.message_id,
-      text: formatDocumentResult(vehicle, util, deadline),
+    const resultText = formatDocumentResult(vehicle, util, deadline);
+    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: resultText,
       parse_mode: 'HTML',
       reply_markup: calculationResultKeyboard(todayUtc().getUTCFullYear() < 2027)
     });
+    await saveApplication(env, query.from?.id, applicationFromVehicle(vehicle, util), resultText, 'HTML');
     await clearCustomsState(env, userId);
     if (!vehicle.issueDate) await sendIssueDatePrompt(env, message.chat.id, cases);
     await saveUtilYearContext(env, userId, vehicle, deadline);
@@ -3928,6 +4027,15 @@ async function handleUpdate(env, update) {
     try { await trackUpdate(env.ANALYTICS_DB, update); }
     catch (error) { console.error('Analytics tracking failed', error); }
   }
+  const profileMessage = update.message || update.callback_query?.message;
+  const profileUser = update.message?.from || update.callback_query?.from;
+  if (profileMessage?.chat?.type === 'private' && profileUser?.id) {
+    const profileStore = applicationsStub(env, profileUser.id);
+    if (profileStore) {
+      try { await profileStore.touchProfile(profileUser); }
+      catch (error) { console.error('Profile tracking failed', error); }
+    }
+  }
   if (update.message?.document) {
     if (isGroupChat(update.message.chat)) await offerGroupCalculation(env, update.message);
     else await handleDocument(env, update.message);
@@ -4024,6 +4132,10 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === '/api/applications') return handleApplicationsApi(request, env);
+      if (url.pathname === '/api/profile') return handleMiniAppProfile(request, env);
+      if (url.pathname === '/api/actions') return handleMiniAppAction(request, env);
+      const calculationSend = url.pathname.match(/^\/api\/calculations\/([^/]+)\/send$/);
+      if (calculationSend) return handleMiniAppCalculationSend(request, env, decodeURIComponent(calculationSend[1]));
       if (request.method === 'GET' && url.pathname === '/api/rates/eur') {
         return new Response(JSON.stringify({ ok: true, rate: await euroRate(env) }), { headers: apiHeaders(env) });
       }

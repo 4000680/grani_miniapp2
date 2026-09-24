@@ -132,7 +132,9 @@ export async function listCampaigns(db) {
 export async function recordCompletedCalculation(db, userId, application) {
   if (!db || !userId) return;
   const source = String(application?.source || '').toLowerCase();
-  const section = application?.calculationType === 'customs' || source.includes('тамож')
+  const section = application?.calculationType === 'penalties' || source.includes('пени')
+    ? 'penalties'
+    : application?.calculationType === 'customs' || source.includes('тамож')
     ? 'customs'
     : application?.calculationType === 'declaration' || source.includes('деклара')
       ? 'declaration'
@@ -140,6 +142,36 @@ export async function recordCompletedCalculation(db, userId, application) {
   await db.prepare(`INSERT INTO analytics_events(user_id,created_at,event_type,section,action,metadata_json)
     VALUES(?,?,'calculation',?,'complete',?)`)
     .bind(String(userId), ISO_NOW(), section, JSON.stringify({ category: application?.category || null })).run();
+}
+
+export async function miniAppProfile(db, user) {
+  if (!db || !user?.id) return null;
+  const now = ISO_NOW();
+  await db.prepare(`INSERT INTO analytics_users
+    (user_id, username, first_name, last_name, language_code, first_seen_at, last_seen_at, chat_available)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+    ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, first_name=excluded.first_name,
+    last_name=excluded.last_name, language_code=excluded.language_code, last_seen_at=excluded.last_seen_at, chat_available=1`)
+    .bind(String(user.id), user.username || null, user.first_name || null, user.last_name || null,
+      user.language_code || null, now, now).run();
+  const row = await db.prepare(`SELECT u.user_id, u.username, u.first_name, u.last_name, u.first_seen_at, u.last_seen_at,
+      (SELECT COUNT(*) FROM analytics_events e WHERE e.user_id=u.user_id AND e.event_type='calculation') calculations_total,
+      (SELECT COUNT(*) FROM analytics_events e WHERE e.user_id=u.user_id AND e.event_type='calculation'
+        AND e.created_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')) calculations_30d,
+      (SELECT MAX(created_at) FROM analytics_events e WHERE e.user_id=u.user_id AND e.event_type='calculation') last_calculation_at
+    FROM analytics_users u WHERE u.user_id=?`).bind(String(user.id)).first();
+  const firstTime = Date.parse(row?.first_seen_at || now);
+  return {
+    userId: String(user.id), username: row?.username || user.username || null,
+    firstName: row?.first_name || user.first_name || null,
+    lastName: row?.last_name || user.last_name || null,
+    firstSeenAt: row?.first_seen_at || now, lastSeenAt: row?.last_seen_at || now,
+    daysUsing: Math.max(1, Math.floor((Date.now() - firstTime) / 86400000) + 1),
+    calculationsTotal: Number(row?.calculations_total) || 0,
+    calculations30d: Number(row?.calculations_30d) || 0,
+    lastCalculationAt: row?.last_calculation_at || null,
+    photoUrl: user.photo_url || null
+  };
 }
 
 export async function recordDocumentType(db, userId, kind) {

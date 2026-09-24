@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 
-const MAX_APPLICATIONS = 10;
+const MAX_APPLICATIONS = 20;
 
 function cleanText(value, max = 120) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -25,7 +25,9 @@ export function normalizeApplication(input) {
     customsFee: Number(input.customsFee) || null,
     utilAmount: Number(input.utilAmount) || null,
     amount: Number(input.amount) || null,
-    amountLabel: cleanText(input.amountLabel, 80)
+    amountLabel: cleanText(input.amountLabel, 80),
+    resultText: String(input.resultText || '').slice(0, 16384),
+    parseMode: input.parseMode === 'HTML' ? 'HTML' : null
   };
   return item;
 }
@@ -40,7 +42,47 @@ export class ApplicationsStore extends DurableObject {
     const items = await this.list();
     const next = [item, ...items.filter(existing => existing.id !== item.id)].slice(0, MAX_APPLICATIONS);
     await this.ctx.storage.put('items', next);
+    const now = new Date().toISOString();
+    const profile = await this.getProfile();
+    const dateLimit = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const recentDates = (profile.calculationDates || []).filter(value => Date.parse(value) >= dateLimit);
+    recentDates.push(item.createdAt);
+    await this.ctx.storage.put('profile', {
+      ...profile,
+      calculationCount: (Number(profile.calculationCount) || items.length) + 1,
+      calculationDates: recentDates,
+      lastCalculationAt: item.createdAt,
+      lastSeenAt: now
+    });
     return next;
+  }
+
+  async touchProfile(user = {}) {
+    const now = new Date().toISOString();
+    const profile = await this.getProfile();
+    const next = {
+      ...profile,
+      userId: String(user.id || profile.userId || ''),
+      username: cleanText(user.username || profile.username, 64),
+      firstName: cleanText(user.first_name || profile.firstName, 100),
+      lastName: cleanText(user.last_name || profile.lastName, 100),
+      languageCode: cleanText(user.language_code || profile.languageCode, 12),
+      photoUrl: cleanText(user.photo_url || profile.photoUrl, 512),
+      firstSeenAt: profile.firstSeenAt || now,
+      lastSeenAt: now,
+      calculationCount: Number(profile.calculationCount) || (await this.list()).length,
+      calculationDates: Array.isArray(profile.calculationDates) ? profile.calculationDates : []
+    };
+    await this.ctx.storage.put('profile', next);
+    return next;
+  }
+
+  async getProfile() {
+    return (await this.ctx.storage.get('profile')) || {};
+  }
+
+  async getCalculation(id) {
+    return (await this.list()).find(item => item.id === String(id)) || null;
   }
 
   async clear() {
