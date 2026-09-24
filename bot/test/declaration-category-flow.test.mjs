@@ -52,10 +52,19 @@ test('документ N3 после уточнения продолжается
   assert.match(source, /const debts = payment\.util\.map\(item => \(\{ label: ageLabel\(item\.age\), sum: item\.total \}\)\)/);
 });
 
-test('в декларационном потоке после документа нет кнопки пересчёта на 2027 год', () => {
-  const start = source.indexOf("if (declarationState?.mode === 'declaration')");
-  const branch = source.slice(start, source.indexOf('const cases = peniCases(util);', start));
-  assert.doesNotMatch(branch, /2027|calc:year/);
+test('в финале расчёта по декларации можно пересчитать утиль по ставкам 2027 года', () => {
+  assert.match(source, /callback_data: 'declaration:result:year:2027'/);
+  assert.match(source, /if \(query\.data === 'declaration:result:year:2027' && state\?\.mode === 'declaration' && state\.stage === 'result'\)/);
+  assert.match(source, /calculateDeclarationPayment\(complete\)/);
+  assert.match(source, /declarationResultKeyboard\(payment\.calculationYear < 2027\)/);
+  assert.match(source, /ставки \$\{payment\.calculationYear\} года/);
+});
+
+test('перерасчёт утиля из результата СБКТС берёт данные из постоянного контекста', () => {
+  assert.match(source, /await saveUtilYearContext\(env, userId, vehicle, deadline\);/);
+  assert.match(source, /const yearContext = customsState\?\.utilYearContext \|\| flow\?\.utilYearContext/);
+  assert.match(source, /const util = calculateUtil\(vehicle, todayUtc\(\), 2027\)/);
+  assert.match(source, /if \(state\?\.utilYearContext\)[\s\S]*?mode: 'util', stage: 'result', utilYearContext: state\.utilYearContext/);
 });
 
 test('возврат с уточнения возраста возвращает к предыдущему выбору типа грузовика', () => {
