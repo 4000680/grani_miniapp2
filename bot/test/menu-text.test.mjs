@@ -39,3 +39,10 @@ test('нижняя кнопка Telegram открывает команды, а �
   assert.match(source, /\{ command: 'menu', description: 'Главное меню' \}/);
   assert.doesNotMatch(source, /setChatMenuButton[\s\S]{0,200}web_app/);
 });
+
+
+test('в штатной кнопке Telegram остаётся только главное меню', () => {
+  assert.match(source, /setMyCommands', \{\s*commands: \[\s*\{ command: 'menu', description: 'Главное меню' \}\s*\]\s*\}/);
+  assert.doesNotMatch(source, /command: 'start', description: 'Открыть главное меню'/);
+  assert.doesNotMatch(source, /command: 'help', description: 'Помощь'/);
+});
