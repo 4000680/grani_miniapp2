@@ -68,7 +68,7 @@ test('chain navigation clears only bot working cards and keeps final results', (
   assert.match(customsCleanup, /deleteBotMessage/);
   assert.match(discardFlow, /deleteBotMessage/);
   assert.match(catalogBackFlow, /discardWorkingCard/);
-  assert.match(workerSource, /else if \(query\.data === 'menu' \|\| query\.data === 'menu:util'\) await sendMenu\(env, query\.message\.chat\.id\)/);
+  assert.match(workerSource, /else if \(query\.data === 'menu' \|\| query\.data === 'menu:util:back' \|\| query\.data === 'menu:util:home'\) await editMenu\(env, query\.message\)/);
 });
 
 test('controlled document errors keep retry, back and main-menu navigation', () => {
