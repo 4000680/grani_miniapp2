@@ -707,16 +707,8 @@ async function sendDocumentIdentity(env, chatId, vehicle, replyToMessageId = nul
   });
 }
 
-async function sendDeclarationVin(env, chatId, vehicle, workingMessage = null) {
+async function sendDeclarationVin(env, chatId, vehicle) {
   const text = `<b>VIN:</b> <code>${escapeHtml(vehicle.vin || 'не найден')}</code>`;
-  if (workingMessage?.from?.is_bot) {
-    return telegram(env, 'editMessageText', {
-      chat_id: chatId,
-      message_id: workingMessage.message_id,
-      text,
-      parse_mode: 'HTML'
-    });
-  }
   return telegram(env, 'sendMessage', { chat_id: chatId, text, parse_mode: 'HTML' });
 }
 
@@ -3287,11 +3279,13 @@ function declarationResultKeyboard() {
 }
 
 function declarationVehicleLines(vehicle) {
+  const maxMass = Number(vehicle.maxMass);
   return [
     `<b>Автомобиль:</b> ${escapeHtml([vehicle.brand, vehicle.model].filter(Boolean).join(' ') || '—')}`,
     `<b>Год выпуска:</b> ${vehicle.year || '—'}`,
     `<b>Категория:</b> ${escapeHtml(vehicle.categoryLabel || vehicle.category || '—')}`,
-    `<b>Мощность:</b> ${vehicle.totalKw ? formatPower(vehicle.totalKw) : '—'}`
+    `<b>Мощность:</b> ${vehicle.totalKw ? formatPower(vehicle.totalKw) : '—'}`,
+    `<b>Технически допустимая максимальная масса:</b> ${Number.isFinite(maxMass) && maxMass > 0 ? `${maxMass.toLocaleString('ru-RU')} кг` : '—'}`
   ];
 }
 
@@ -3397,7 +3391,10 @@ async function continueDeclarationAfterDocument(env, chatId, userId, state, vehi
     util,
     deadline: deadline?.toISOString?.() || deadline || null
   };
-  await sendDeclarationVin(env, chatId, vehicle, workingMessage);
+  // Убираем техническое сообщение обработки, чтобы VIN был отдельным
+  // сообщением сразу после загруженного пользователем документа.
+  if (workingMessage?.from?.is_bot) await discardWorkingCard(env, workingMessage, userId);
+  await sendDeclarationVin(env, chatId, vehicle);
   await promptDeclarationFtsName(env, chatId, userId, declaration);
 }
 
