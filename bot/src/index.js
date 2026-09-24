@@ -585,6 +585,29 @@ function formatPeniCompact(cases, deadline, target) {
   return lines.join('\n');
 }
 
+function documentAgePrompt(vehicle, mode) {
+  return [
+    '📅 <b>Уточните возраст автомобиля</b>',
+    '',
+    `<b>Год выпуска:</b> ${vehicle.year}`,
+    mode === 'declaration'
+      ? 'Год выпуска пограничный для выбора ставки. Для расчёта по декларации укажите, исполнилось ли автомобилю 3 полных года на момент оформления.'
+      : 'Год выпуска пограничный для выбора ставки. Укажите, исполнилось ли автомобилю 3 полных года на момент оформления.'
+  ].join('\n');
+}
+
+function documentAgeKeyboard(mode) {
+  const back = mode === 'declaration' ? 'declaration:back:start' : 'calc:back:document';
+  const menu = mode === 'declaration' ? 'declaration:result:menu' : 'calc:menu';
+  return {
+    inline_keyboard: [
+      [{ text: 'Ещё нет 3 полных лет', callback_data: 'calc:age:new' }],
+      [{ text: 'Уже исполнилось 3 года', callback_data: 'calc:age:old' }],
+      [{ text: '← Назад', callback_data: back }, { text: '🏠 Главное меню', callback_data: menu }]
+    ]
+  };
+}
+
 function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(), calculationYear = todayUtc().getUTCFullYear()) {
   const title = vehicle.type === 'sbkts' ? 'СБКТС распознан' : 'Выписка ЭПТС распознана';
   const isCargo = ['N1', 'N1G', 'N2', 'N3'].includes(vehicle.category);
@@ -625,7 +648,7 @@ function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(
   for (const item of util) {
     if (item.cargo || item.pickup) {
       lines.push(`<b>${ageLabel(item.age)}</b>`);
-      lines.push(`<b>Утилизационный сбор: ${formatMoney(item.commercial)}</b>`);
+      lines.push(`<b>Коммерческий утилизационный сбор: ${formatMoney(item.commercial)}</b>`);
       lines.push(`Ставка: ${escapeHtml(item.utilRate?.vehicleTypeLabel || 'грузовой автомобиль')}; коэффициент ${item.utilCoefficient}; год ставок ${item.utilRate?.calculationYear || new Date().getUTCFullYear()}.`);
       continue;
     }
@@ -3000,8 +3023,31 @@ async function handleDocument(env, message) {
       catch (error) { console.error('Analytics document tracking failed', error); }
     }
     if (declarationState?.mode === 'declaration') {
-      await sendDeclarationVin(env, message.chat.id, vehicle, status);
-      await promptDeclarationFtsName(env, message.chat.id, userId, { ...declarationState, vehicle, util, deadline: deadline?.toISOString?.() || null });
+      if (util.length > 1) {
+        await setCustomsState(env, userId, {
+          ...declarationState, mode: 'declaration', stage: 'document-age', vehicle,
+          deadline: deadline?.toISOString?.() || null
+        });
+        await telegram(env, 'editMessageText', {
+          chat_id: message.chat.id, message_id: status.message_id,
+          text: documentAgePrompt(vehicle, 'declaration'), parse_mode: 'HTML',
+          reply_markup: documentAgeKeyboard('declaration')
+        });
+        return;
+      }
+      await continueDeclarationAfterDocument(env, message.chat.id, userId, declarationState, vehicle, util, deadline, status);
+      return;
+    }
+    if (util.length > 1) {
+      await setCustomsState(env, userId, {
+        mode: 'util', stage: 'document-age', vehicle,
+        deadline: deadline?.toISOString?.() || null
+      });
+      await telegram(env, 'editMessageText', {
+        chat_id: message.chat.id, message_id: status.message_id,
+        text: documentAgePrompt(vehicle, 'util'), parse_mode: 'HTML',
+        reply_markup: documentAgeKeyboard('util')
+      });
       return;
     }
     const cases = peniCases(util);
@@ -3023,7 +3069,8 @@ async function handleDocument(env, message) {
     const controlled = controlledDocumentError(error);
     if (controlled.code === 'CARGO_TYPE_REQUIRED' && controlled.details?.vehicle && controlled.details?.candidates?.length) {
       const vehicle = controlled.details.vehicle;
-      await setCustomsState(env, userId, { stage: 'cargo-type', vehicle });
+      const mode = declarationState?.mode === 'declaration' ? 'declaration' : 'util';
+      await setCustomsState(env, userId, { ...(mode === 'declaration' ? declarationState : {}), mode, stage: 'cargo-type', vehicle });
       await telegram(env, 'editMessageText', {
         chat_id: message.chat.id,
         message_id: status.message_id,
@@ -3040,8 +3087,8 @@ async function handleDocument(env, message) {
           inline_keyboard: [
             ...controlled.details.candidates.map(item => ([{ text: item.label, callback_data: `calc:cargo:${item.id}` }])),
             [
-              { text: '← Назад', callback_data: 'calc:back:document' },
-              { text: '🏠 Главное меню', callback_data: 'calc:menu' }
+              { text: '← Назад', callback_data: mode === 'declaration' ? 'declaration:back:start' : 'calc:back:document' },
+              { text: '🏠 Главное меню', callback_data: mode === 'declaration' ? 'declaration:result:menu' : 'calc:menu' }
             ]
           ]
         }
@@ -3320,10 +3367,14 @@ async function promptDeclarationCategory(env, chatId, userId, state, workingMess
 async function promptDeclarationFtsName(env, chatId, userId, state, workingMessage = null) {
   const next = { ...state, mode: 'declaration', stage: 'fts-name' };
   await setCustomsState(env, userId, next);
+  const baseUtilLines = (next.util || []).map(item =>
+    `<b>Коммерческий утилизационный сбор (${ageLabel(item.age)}):</b> ${formatMoney(item.commercial)}`
+  );
   const text = [
     '✅ <b>Автомобиль найден для расчёта</b>',
     '',
     ...declarationVehicleLines(next.vehicle),
+    ...baseUtilLines,
     '',
     'Проверьте VIN на сайте <a href="https://customs.gov.ru/">ФТС</a> и пришлите сюда <b>точное наименование</b> автомобиля, как оно указано на сайте ФТС.',
     '<i>Для таможенного органа наименование должно совпадать один в один.</i>'
@@ -3335,6 +3386,19 @@ async function promptDeclarationFtsName(env, chatId, userId, state, workingMessa
     const sent = await telegram(env, 'sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', reply_markup: declarationKeyboard([], next.backFromFts || 'declaration:back:start') });
     await trackTemporaryMessage(env, userId, sent.message_id);
   }
+}
+
+async function continueDeclarationAfterDocument(env, chatId, userId, state, vehicle, util, deadline, workingMessage = null) {
+  const declaration = {
+    ...state,
+    mode: 'declaration',
+    stage: 'fts-name',
+    vehicle,
+    util,
+    deadline: deadline?.toISOString?.() || deadline || null
+  };
+  await sendDeclarationVin(env, chatId, vehicle, workingMessage);
+  await promptDeclarationFtsName(env, chatId, userId, declaration);
 }
 
 async function handleDeclarationReply(env, message) {
@@ -3500,6 +3564,33 @@ async function handleCalculationCallback(env, query) {
     });
     return;
   }
+  const ageChoice = query.data.match(/^calc:age:(new|old)$/);
+  if (ageChoice) {
+    const state = await getCustomsState(env, userId);
+    if (state?.stage !== 'document-age' || !state.vehicle) return;
+    const vehicle = { ...state.vehicle, ageGroup: ageChoice[1] };
+    const util = calculateUtil(vehicle);
+    if (state.mode === 'declaration') {
+      const deadline = state.deadline ? new Date(state.deadline) : null;
+      await continueDeclarationAfterDocument(env, message.chat.id, userId, state, vehicle, util, deadline, message);
+      return;
+    }
+    const deadline = state.deadline ? new Date(state.deadline) : null;
+    const cases = peniCases(util);
+    await saveApplication(env, query.from?.id, applicationFromVehicle(vehicle, util));
+    const flow = await getMessageFlowState(env, userId);
+    await setMessageFlowState(env, userId, { ...flow, utilYearContext: { vehicle, deadline: deadline?.toISOString?.() || null } });
+    await telegram(env, 'editMessageText', {
+      chat_id: message.chat.id,
+      message_id: message.message_id,
+      text: formatDocumentResult(vehicle, util, deadline),
+      parse_mode: 'HTML',
+      reply_markup: calculationResultKeyboard(todayUtc().getUTCFullYear() < 2027)
+    });
+    await clearCustomsState(env, userId);
+    if (!vehicle.issueDate) await sendIssueDatePrompt(env, message.chat.id, cases);
+    return;
+  }
   const cargoType = query.data.match(/^calc:cargo:(cargo|tractor|tractor-international|dump-truck|van)$/);
   if (cargoType) {
     const state = await getCustomsState(env, userId);
@@ -3507,6 +3598,28 @@ async function handleCalculationCallback(env, query) {
     const vehicle = { ...state.vehicle, cargoType: cargoType[1] };
     const util = calculateUtil(vehicle);
     const deadline = vehicle.issueDate ? addWorkingDays(vehicle.issueDate, 5) : null;
+    if (state.mode === 'declaration') {
+      if (util.length > 1) {
+        await setCustomsState(env, userId, { ...state, stage: 'document-age', vehicle, deadline: deadline?.toISOString?.() || null });
+        await telegram(env, 'editMessageText', {
+          chat_id: message.chat.id, message_id: message.message_id,
+          text: documentAgePrompt(vehicle, 'declaration'), parse_mode: 'HTML',
+          reply_markup: documentAgeKeyboard('declaration')
+        });
+        return;
+      }
+      await continueDeclarationAfterDocument(env, message.chat.id, userId, state, vehicle, util, deadline, message);
+      return;
+    }
+    if (util.length > 1) {
+      await setCustomsState(env, userId, { ...state, mode: 'util', stage: 'document-age', vehicle, deadline: deadline?.toISOString?.() || null });
+      await telegram(env, 'editMessageText', {
+        chat_id: message.chat.id, message_id: message.message_id,
+        text: documentAgePrompt(vehicle, 'util'), parse_mode: 'HTML',
+        reply_markup: documentAgeKeyboard('util')
+      });
+      return;
+    }
     const cases = peniCases(util);
     await saveApplication(env, query.from?.id, applicationFromVehicle(vehicle, util));
     const flow = await getMessageFlowState(env, userId);
