@@ -20,18 +20,18 @@ test('поиск по шаблону СЭП запрашивает группу 
   assert.match(source, /category: 'N1', categoryLabel: 'N1 \/ N2'/);
 });
 
-test('декларация показывает открытый VIN отдельно и ведёт на сайт ФТС', () => {
+test('декларация показывает открытый VIN отдельно после карточки и без подписи', () => {
   assert.match(source, /async function sendDeclarationVin/);
   const vinStart = source.indexOf('async function sendDeclarationVin');
   const vinEnd = source.indexOf('function peniCases', vinStart);
   const vinFunction = source.slice(vinStart, vinEnd);
-  assert.ok(vinFunction.includes("return telegram(env, 'sendMessage'"));
+  assert.ok(vinFunction.includes('const text = vehicle.vin ||'));
+  assert.ok(vinFunction.includes("return telegram(env, 'sendMessage', { chat_id: chatId, text })"));
   assert.equal(vinFunction.includes('editMessageText'), false);
   const continueStart = source.indexOf('async function continueDeclarationAfterDocument');
   const continueEnd = source.indexOf('async function handleDeclarationReply', continueStart);
   const continueFunction = source.slice(continueStart, continueEnd);
-  assert.ok(continueFunction.indexOf('await discardWorkingCard') < continueFunction.indexOf('await sendDeclarationVin'));
-  assert.ok(continueFunction.indexOf('await sendDeclarationVin') < continueFunction.indexOf('await promptDeclarationFtsName'));
+  assert.ok(continueFunction.indexOf('await promptDeclarationFtsName') < continueFunction.indexOf('await sendDeclarationVin'));
   assert.ok(source.includes('<b>Технически допустимая максимальная масса:</b>'));
   assert.match(source, /<a href="https:\/\/customs\.gov\.ru\/">ФТС<\/a>/);
   assert.match(source, /Для таможенного органа наименование должно совпадать один в один/);
