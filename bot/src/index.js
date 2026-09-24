@@ -3460,11 +3460,14 @@ async function setupBot(request, env) {
   await telegram(env, 'setMyCommands', {
     commands: [
       { command: 'start', description: 'Открыть главное меню' },
-      { command: 'menu', description: 'Показать кнопки' },
+      { command: 'menu', description: 'Главное меню' },
       { command: 'help', description: 'Помощь' }
     ]
   });
-  return Response.json({ ok: true, webhook, webhook_url: webhookUrl });
+  await telegram(env, 'setChatMenuButton', {
+    menu_button: { type: 'commands' }
+  });
+  return Response.json({ ok: true, webhook, webhook_url: webhookUrl, menu_button: 'commands' });
 }
 
 export default {
@@ -3477,7 +3480,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'menu-v22' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'menu-button-v23' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
