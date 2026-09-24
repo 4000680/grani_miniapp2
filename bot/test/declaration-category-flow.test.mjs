@@ -65,6 +65,7 @@ test('перерасчёт утиля из результата СБКТС бе�
   assert.match(source, /await saveUtilYearContext\(env, userId, vehicle, deadline\);/);
   assert.match(source, /const yearContext = customsState\?\.utilYearContext \|\| flow\?\.utilYearContext/);
   assert.match(source, /const util = calculateUtil\(vehicle, todayUtc\(\), 2027\)/);
+  assert.match(source, /formatUtilYearReference\(util, 2027\)/);
   assert.match(source, /if \(state\?\.utilYearContext\)[\s\S]*?mode: 'util', stage: 'result', utilYearContext: state\.utilYearContext/);
 });
 
