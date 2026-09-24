@@ -62,6 +62,12 @@ const MENU_TEXT = [
   'Функционал бота постоянно пополняется 🎮'
 ].join('\n');
 
+const UTIL_MENU_TEXT = [
+  '📟 Для расчёта утильсбора отправьте PDF-файл СБКТС или выписку ЭПТС.',
+  '',
+  '🎛️ Для поиска по шаблону СЭП напишите марку, модель и год выпуска.'
+].join('\n');
+
 const OVER3_CUSTOMS_FEE_BRACKETS = [
   { id: '450-1200', label: '450 тыс. – 1,2 млн ₽', fee: 4924 },
   { id: '1200-2700', label: '1,2 – 2,7 млн ₽', fee: 13541 },
@@ -78,6 +84,10 @@ const INFO = {
   },
   laboratories: {
     title: '🧪 <b>Список лабораторий</b>',
+    text: 'Раздел готовится к добавлению.'
+  },
+  declaration: {
+    title: '🧾 <b>Расчёт утильсбора по декларации</b>',
     text: 'Раздел готовится к добавлению.'
   },
   payment: {
@@ -153,6 +163,7 @@ function menuKeyboard(env) {
     inline_keyboard: [
       [{ text: '🚗 Таможенное оформление', callback_data: 'customs:start' }],
       [{ text: '🛞 Рассчитать утильсбор', callback_data: 'menu:util' }],
+      [{ text: '🧾 Расчёт утильсбора по декларации', callback_data: 'info:declaration' }],
       [{ text: '🧪 Список лабораторий', callback_data: 'info:laboratories' }],
       [{ text: '💳 Реквизиты для оплаты утильсбора', callback_data: 'info:payment' }],
       [{ text: '📄 Получить ЭПТС по VIN', callback_data: 'info:epts' }],
@@ -3118,6 +3129,27 @@ async function editMenu(env, message) {
   return edited;
 }
 
+function utilMenuKeyboard() {
+  return {
+    inline_keyboard: [[
+      { text: '← Назад', callback_data: 'menu:util:back' },
+      { text: '🏠 Главное меню', callback_data: 'menu:util:home' }
+    ]]
+  };
+}
+
+async function showUtilMenu(env, message) {
+  const edited = await telegram(env, 'editMessageText', {
+    chat_id: message.chat.id,
+    message_id: message.message_id,
+    text: UTIL_MENU_TEXT,
+    parse_mode: 'HTML',
+    reply_markup: utilMenuKeyboard()
+  });
+  await trackTemporaryMessage(env, message.chat.id, message.message_id);
+  return edited;
+}
+
 async function showInfo(env, message, section) {
   const info = INFO[section];
   if (!info) return;
@@ -3230,7 +3262,8 @@ async function handleUpdate(env, update) {
   if (query.data?.startsWith('catalog:')) await handleCatalogCallback(env, query);
   else if (query.data?.startsWith('customs:')) await handleCustomsCallback(env, query);
   else if (query.data?.startsWith('calc:')) await handleCalculationCallback(env, query);
-  else if (query.data === 'menu' || query.data === 'menu:util') await sendMenu(env, query.message.chat.id);
+  else if (query.data === 'menu' || query.data === 'menu:util:back' || query.data === 'menu:util:home') await editMenu(env, query.message);
+  else if (query.data === 'menu:util') await showUtilMenu(env, query.message);
   else if (query.data?.startsWith('info:')) await showInfo(env, query.message, query.data.slice(5));
 }
 
