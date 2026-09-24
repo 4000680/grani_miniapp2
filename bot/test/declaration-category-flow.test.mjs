@@ -55,9 +55,10 @@ test('документ N3 после уточнения продолжается
 test('в финале расчёта по декларации можно пересчитать утиль по ставкам 2027 года', () => {
   assert.match(source, /callback_data: 'declaration:result:year:2027'/);
   assert.match(source, /if \(query\.data === 'declaration:result:year:2027' && state\?\.mode === 'declaration' && state\.stage === 'result'\)/);
-  assert.match(source, /calculateDeclarationPayment\(complete\)/);
-  assert.match(source, /declarationResultKeyboard\(payment\.calculationYear < 2027\)/);
-  assert.match(source, /ставки \$\{payment\.calculationYear\} года/);
+  assert.match(source, /formatUtilYearReference\(payment\.util, 2027, true\)/);
+  assert.match(source, /declarationYearReferenceKeyboard\(\)/);
+  assert.match(source, /callback_data: 'declaration:result:year:back'/);
+  assert.match(source, /if \(query\.data === 'declaration:result:year:back' && state\?\.mode === 'declaration' && state\.stage === 'result'\)/);
 });
 
 test('перерасчёт утиля из результата СБКТС берёт данные из постоянного контекста', () => {
