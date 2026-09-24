@@ -74,6 +74,12 @@ const DECLARATION_START_TEXT = [
   'Либо напишите марку, модель и год выпуска автомобиля — я найду его в шаблоне СЭП для дальнейшего расчёта по декларации.'
 ].join('\n');
 
+const UTIL_START_TEXT = [
+  '📟 Для расчёта утильсбора отправьте PDF-файл СБКТС или выписку ЭПТС.',
+  '',
+  '🎛️ Для поиска по шаблону СЭП напишите марку, модель и год выпуска.'
+].join('\n');
+
 const OVER3_CUSTOMS_FEE_BRACKETS = [
   { id: '450-1200', label: '450 тыс. – 1,2 млн ₽', fee: 4924 },
   { id: '1200-2700', label: '1,2 – 2,7 млн ₽', fee: 13541 },
@@ -165,6 +171,7 @@ function menuKeyboard(env) {
     inline_keyboard: [
       [{ text: '🚗 Таможенное оформление', callback_data: 'customs:start' }],
       [{ text: '🛞 Рассчитать утильсбор', callback_data: 'menu:util' }],
+      [{ text: '🧾 Рассчитать утильсбор по декларации', callback_data: 'menu:declaration' }],
       [{ text: '🧪 Список лабораторий', callback_data: 'info:laboratories' }],
       [{ text: '💳 Реквизиты для оплаты утильсбора', callback_data: 'info:payment' }],
       [{ text: '📄 Получить ЭПТС по VIN', callback_data: 'info:epts' }],
@@ -3160,6 +3167,22 @@ async function showInfo(env, message, section) {
   return edited;
 }
 
+async function showUtilStart(env, message) {
+  const edited = await telegram(env, 'editMessageText', {
+    chat_id: message.chat.id,
+    message_id: message.message_id,
+    text: UTIL_START_TEXT,
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '← Назад', callback_data: 'menu' },
+        { text: '🏠 Главное меню', callback_data: 'menu' }
+      ]]
+    }
+  });
+  await trackTemporaryMessage(env, message.chat.id, message.message_id);
+  return edited;
+}
+
 function declarationKeyboard(rows = [], back = 'declaration:back:start') {
   return {
     inline_keyboard: [
@@ -3443,7 +3466,8 @@ async function handleUpdate(env, update) {
   else if (query.data?.startsWith('declaration:')) await handleDeclarationCallback(env, query);
   else if (query.data?.startsWith('calc:')) await handleCalculationCallback(env, query);
   else if (query.data === 'menu') await editMenu(env, query.message);
-  else if (query.data === 'menu:util') await sendDeclarationStart(env, query.message.chat.id, query.from?.id || query.message.chat.id);
+  else if (query.data === 'menu:util') await showUtilStart(env, query.message);
+  else if (query.data === 'menu:declaration') await sendDeclarationStart(env, query.message.chat.id, query.from?.id || query.message.chat.id);
   else if (query.data?.startsWith('info:')) await showInfo(env, query.message, query.data.slice(5));
 }
 
