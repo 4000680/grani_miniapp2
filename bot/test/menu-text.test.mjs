@@ -28,8 +28,8 @@ test('главное меню разделяет обычный расчёт у�
 
 test('старт расчёта по декларации просит документ или поиск СЭП без кнопок выбора', () => {
   assert.match(source, /const DECLARATION_START_TEXT = \[/);
-  assert.match(source, /Загрузите PDF СБКТС или выписку ЭПТС/);
-  assert.match(source, /найду его в шаблоне СЭП для дальнейшего расчёта по декларации/);
+  assert.match(source, /Загрузите СБКТС или выписку ЭПТС/);
+  assert.match(source, /найду его в шаблоне СЭП\./);
   assert.match(source, /async function sendDeclarationStart/);
 });
 
