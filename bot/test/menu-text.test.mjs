@@ -28,3 +28,10 @@ test('старт расчёта по декларации просит доку�
   assert.match(source, /найду его в шаблоне СЭП для дальнейшего расчёта по декларации/);
   assert.match(source, /async function sendDeclarationStart/);
 });
+
+
+test('нижняя кнопка Telegram открывает команды, а не Mini App', () => {
+  assert.match(source, /'setChatMenuButton', \{\s*menu_button: \{ type: 'commands' \}/);
+  assert.match(source, /\{ command: 'menu', description: 'Главное меню' \}/);
+  assert.doesNotMatch(source, /setChatMenuButton[\s\S]{0,200}web_app/);
+});
