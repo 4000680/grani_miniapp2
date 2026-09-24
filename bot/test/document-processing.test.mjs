@@ -114,6 +114,18 @@ test('calculates pickup util from an SBKTS N1 category and full mass', () => {
   );
 });
 
+test('borderline N3 age requires one confirmed age band instead of returning both fee rates', () => {
+  const vehicle = { category: 'N3', year: 2023, maxMass: 19500, cargoType: 'cargo' };
+  const boundary = calculateUtil(vehicle, new Date('2026-09-24T00:00:00Z'));
+  assert.deepEqual(boundary.map(item => item.age), ['new', 'old']);
+
+  const underThree = calculateUtil({ ...vehicle, ageGroup: 'new' }, new Date('2026-09-24T00:00:00Z'));
+  assert.deepEqual(underThree.map(item => ({ age: item.age, amount: item.commercial })), [{ age: 'new', amount: 1737000 }]);
+
+  const threeOrMore = calculateUtil({ ...vehicle, ageGroup: 'old' }, new Date('2026-09-24T00:00:00Z'));
+  assert.deepEqual(threeOrMore.map(item => ({ age: item.age, amount: item.commercial })), [{ age: 'old', amount: 6069000 }]);
+});
+
 test('parses SБКТС and adds every 30-minute electric power', () => {
   const document = {
     text: [
