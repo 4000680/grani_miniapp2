@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('../src/index.js', import.meta.url), 'utf8');
 
 test('документ передаёт распознанную категорию в расчёт по декларации', () => {
-  assert.match(source, /promptDeclarationFtsName\(env, message\.chat\.id, userId, \{ \.\.\.declarationState, vehicle, util, deadline:/);
+  assert.match(source, /continueDeclarationAfterDocument\(env, message\.chat\.id, userId, declarationState, vehicle, util, deadline, status\)/);
   assert.match(source, /<b>Категория:<\/b> \$\{escapeHtml\(vehicle\.categoryLabel \|\| vehicle\.category \|\| '—'\)\}/);
 });
 
@@ -23,10 +23,27 @@ test('поиск по шаблону СЭП запрашивает группу 
 test('декларация показывает открытый VIN отдельно и ведёт на сайт ФТС', () => {
   assert.match(source, /async function sendDeclarationVin/);
   assert.match(source, /<b>VIN:<\/b> <code>\$\{escapeHtml\(vehicle\.vin \|\| 'не найден'\)\}<\/code>/);
-  assert.match(source, /await sendDeclarationVin\(env, message\.chat\.id, vehicle, status\);/);
-  assert.match(source, /promptDeclarationFtsName\(env, message\.chat\.id, userId, \{ \.\.\.declarationState, vehicle, util, deadline: deadline\?\.toISOString\?\.\(\) \|\| null \}\);/);
+  assert.match(source, /async function continueDeclarationAfterDocument\(env, chatId, userId, state, vehicle, util, deadline, workingMessage = null\)/);
+  assert.match(source, /await sendDeclarationVin\(env, chatId, vehicle, workingMessage\);/);
+  assert.match(source, /await promptDeclarationFtsName\(env, chatId, userId, declaration\);/);
   assert.match(source, /<a href="https:\/\/customs\.gov\.ru\/">ФТС<\/a>/);
   assert.match(source, /Для таможенного органа наименование должно совпадать один в один/);
+});
+
+test('документ N3 после уточнения продолжается в расчёте по декларации, а не в обычном расчёте утильсбора', () => {
+  assert.match(source, /const mode = declarationState\?\.mode === 'declaration' \? 'declaration' : 'util';/);
+  assert.match(source, /continueDeclarationAfterDocument\(env, message\.chat\.id, userId, state, vehicle, util, deadline, message\)/);
+  assert.match(source, /const ageChoice = query\.data\.match\(\/\^calc:age:\(new\|old\)\$\//);
+  assert.match(source, /if \(state\.mode === 'declaration'\) \{[\s\S]*?continueDeclarationAfterDocument\(env, message\.chat\.id, userId, state, vehicle, util, deadline, message\)/);
+  assert.match(source, /<b>Коммерческий утилизационный сбор \(\$\{ageLabel\(item\.age\)\}\):<\/b>/);
+  assert.match(source, /const debts = payment\.util\.map\(item => \(\{ label: ageLabel\(item\.age\), sum: item\.total \}\)\)/);
+});
+
+test('возрастной выбор и уточнение типа грузового авто имеют кнопки назад и главное меню', () => {
+  assert.match(source, /function documentAgeKeyboard\(mode\)/);
+  assert.match(source, /callback_data: back/);
+  assert.match(source, /callback_data: menu/);
+  assert.match(source, /mode === 'declaration' \? 'declaration:back:start' : 'calc:back:document'/);
 });
 
 test('декларация использует утверждённые формулировки старта и платежей', () => {
