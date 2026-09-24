@@ -3435,6 +3435,11 @@ async function handleUpdate(env, update) {
   if (update.message?.text) {
     const command = update.message.text.split(/\s+/)[0].split('@')[0].toLowerCase();
     if (command === '/start') {
+      await telegram(env, 'setMyCommands', {
+        commands: [
+          { command: 'menu', description: 'Главное меню' }
+        ]
+      });
       await telegram(env, 'setChatMenuButton', {
         menu_button: { type: 'commands' }
       });
@@ -3505,7 +3510,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'menu-commands-v26' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'menu-commands-v27' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
