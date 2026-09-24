@@ -34,8 +34,8 @@ test('parses an EPTS layout and uses the TR TS category', () => {
   };
   const vehicle = parseVehicleDocument(document);
   assert.deepEqual(
-    { type: vehicle.type, vin: vehicle.vin, year: vehicle.year, category: vehicle.category, ccm: vehicle.ccm, kw: vehicle.totalKw },
-    { type: 'epts', vin: 'TESTVN00000000001', year: 2021, category: 'M1', ccm: 2925, kw: 243 }
+    { type: vehicle.type, vin: vehicle.vin, year: vehicle.year, manufactureMonth: vehicle.manufactureMonth, category: vehicle.category, ccm: vehicle.ccm, kw: vehicle.totalKw },
+    { type: 'epts', vin: 'TESTVN00000000001', year: 2021, manufactureMonth: 10, category: 'M1', ccm: 2925, kw: 243 }
   );
   assert.deepEqual(calculateUtil(vehicle, new Date('2026-09-10T00:00:00Z')), [
     { age: 'old', commercial: 3873600, personal: 3873600 }
@@ -114,7 +114,7 @@ test('calculates pickup util from an SBKTS N1 category and full mass', () => {
   );
 });
 
-test('borderline N3 age requires one confirmed age band instead of returning both fee rates', () => {
+test('borderline N3 age returns both rate bands when source contains only the year', () => {
   const vehicle = { category: 'N3', year: 2023, maxMass: 19500, cargoType: 'cargo' };
   const boundary = calculateUtil(vehicle, new Date('2026-09-24T00:00:00Z'));
   assert.deepEqual(boundary.map(item => item.age), ['new', 'old']);
@@ -124,6 +124,14 @@ test('borderline N3 age requires one confirmed age band instead of returning bot
 
   const threeOrMore = calculateUtil({ ...vehicle, ageGroup: 'old' }, new Date('2026-09-24T00:00:00Z'));
   assert.deepEqual(threeOrMore.map(item => ({ age: item.age, amount: item.commercial })), [{ age: 'old', amount: 6069000 }]);
+});
+
+test('a known manufacture month resolves a borderline N3 age without asking the user', () => {
+  const vehicle = { category: 'N3', year: 2023, manufactureMonth: 10, maxMass: 19500, cargoType: 'cargo' };
+  const beforeThreeFullYears = calculateUtil(vehicle, new Date('2026-09-24T00:00:00Z'));
+  const atThreeYears = calculateUtil(vehicle, new Date('2026-10-24T00:00:00Z'));
+  assert.deepEqual(beforeThreeFullYears.map(item => item.age), ['new']);
+  assert.deepEqual(atThreeYears.map(item => item.age), ['old']);
 });
 
 test('parses SБКТС and adds every 30-minute electric power', () => {
