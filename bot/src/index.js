@@ -906,19 +906,9 @@ async function handleApplicationsApi(request, env) {
   return new Response(JSON.stringify({ ok: false, error: 'Method not allowed' }), { status: 405, headers });
 }
 
-function parseDateFromPrompt(text, label) {
-  const match = text.match(new RegExp(`${label}:\\s*(\\d{2}\\.\\d{2}\\.\\d{4})`, 'i'));
-  return match ? parseFlexibleDate(match[1]) : null;
-}
-
-function encodePeniCallback(cases, deadline) {
-  return `calc:peni:${deadline.toISOString().slice(0, 10)}:${cases.map(item => item.sum).join(',')}`;
-}
-
-function calculationResultKeyboard(cases = [], deadline = null, allow2027 = false) {
+function calculationResultKeyboard(allow2027 = false) {
   const rows = [];
   if (allow2027) rows.push([{ text: '📅 Рассчитать на 2027 год', callback_data: 'calc:year:2027' }]);
-  if (deadline) rows.push([{ text: '📅 Рассчитать пени на другую дату', callback_data: encodePeniCallback(cases, deadline) }]);
   rows.push([
     { text: '🔄 Новый расчёт', callback_data: 'calc:result:new' },
     { text: '🏠 Главное меню', callback_data: 'calc:result:menu' }
@@ -998,69 +988,25 @@ async function sendIssueDatePrompt(env, chatId, cases, notice = '') {
   return sent;
 }
 
-async function sendPlannedDatePrompt(env, chatId, cases, deadline, notice = '') {
-  await cleanupTemporaryMessages(env, chatId, chatId);
-  const lines = [];
-  if (notice) lines.push(`<b>${escapeHtml(notice)}</b>`, '');
-  lines.push(
-    'Планируете подать документы позже?',
-    'Введите предполагаемую дату ответом на это сообщение — я пересчитаю пени точно на этот день.',
-    '',
-    `Крайний срок: ${formatDate(deadline)}`,
-    encodeCases(cases)
-  );
-  const sent = await telegram(env, 'sendMessage', {
-    chat_id: chatId,
-    text: lines.join('\n'),
-    parse_mode: 'HTML',
-    reply_markup: calculationNavigationKeyboard()
-  });
-  await setCustomsState(env, chatId, {
-    stage: 'peni-planned-date',
-    peniCases: cases,
-    peniDeadline: deadline.toISOString()
-  });
-  await trackTemporaryMessage(env, chatId, sent.message_id);
-  return sent;
-}
-
 async function handleDateReply(env, message) {
   const prompt = message.reply_to_message?.text || '';
   const date = parseFlexibleDate(message.text);
   const state = await getCustomsState(env, message.from?.id || message.chat.id);
   const issueDatePrompt = prompt.includes('Чтобы рассчитать пени') || state?.stage === 'peni-issue-date';
-  const plannedDatePrompt = prompt.includes('Планируете подать документы позже') || state?.stage === 'peni-planned-date';
-  if ((!prompt && !state) || (!issueDatePrompt && !plannedDatePrompt)) return false;
+  if ((!prompt && !state) || !issueDatePrompt) return false;
   const cases = extractCases(prompt).length ? extractCases(prompt) : (state?.peniCases || []);
   if (!date || !cases.length) {
-    if (issueDatePrompt) {
-      await sendIssueDatePrompt(env, message.chat.id, cases, 'Не удалось распознать дату. Попробуйте ещё раз.');
-    }
-    else {
-      const deadline = parseDateFromPrompt(prompt, 'Крайний срок') || parseFlexibleDate(state?.peniDeadline);
-      if (deadline) await sendPlannedDatePrompt(env, message.chat.id, cases, deadline, 'Не удалось распознать дату. Попробуйте ещё раз.');
-    }
+    await sendIssueDatePrompt(env, message.chat.id, cases, 'Не удалось распознать дату. Попробуйте ещё раз.');
     return true;
   }
   await cleanupTemporaryMessages(env, message.from?.id || message.chat.id, message.chat.id);
-  if (issueDatePrompt) {
-    const deadline = addWorkingDays(date, 5);
-    await telegram(env, 'sendMessage', {
-      chat_id: message.chat.id,
-      text: [`<b>Крайний срок уплаты: ${formatDate(deadline)}</b>`, formatPeniCompact(cases, deadline, todayUtc())].join('\n'),
-      parse_mode: 'HTML',
-      reply_markup: calculationResultKeyboard(cases, deadline)
-    });
-  } else {
-    const deadline = parseDateFromPrompt(prompt, 'Крайний срок') || parseFlexibleDate(state?.peniDeadline);
-    if (!deadline) throw new Error('Не удалось восстановить крайний срок из сообщения');
-    await telegram(env, 'sendMessage', {
-      chat_id: message.chat.id,
-      text: [`<b>Крайний срок уплаты: ${formatDate(deadline)}</b>`, formatPeniCompact(cases, deadline, date)].join('\n'),
-      parse_mode: 'HTML',
-      reply_markup: calculationResultKeyboard(cases, deadline)
-    });
-  }
+  const deadline = addWorkingDays(date, 5);
+  await telegram(env, 'sendMessage', {
+    chat_id: message.chat.id,
+    text: [`<b>Крайний срок уплаты: ${formatDate(deadline)}</b>`, formatPeniCompact(cases, deadline, todayUtc())].join('\\n'),
+    parse_mode: 'HTML',
+    reply_markup: calculationResultKeyboard()
+  });
   await clearCustomsState(env, message.from?.id || message.chat.id);
   return true;
 }
@@ -3068,7 +3014,7 @@ async function handleDocument(env, message) {
       message_id: status.message_id,
       text: result,
       parse_mode: 'HTML',
-      reply_markup: calculationResultKeyboard(cases, deadline, todayUtc().getUTCFullYear() < 2027)
+      reply_markup: calculationResultKeyboard(todayUtc().getUTCFullYear() < 2027)
     });
     await sendDocumentIdentity(env, message.chat.id, vehicle, message.message_id).catch(() => null);
     await releaseTemporaryMessage(env, userId, status.message_id);
@@ -3550,7 +3496,7 @@ async function handleCalculationCallback(env, query) {
       chat_id: message.chat.id,
       text: `📅 <b>Расчёт на 2027 год</b>\n\n${formatDocumentResult(vehicle, util, deadline, todayUtc(), 2027)}`,
       parse_mode: 'HTML',
-      reply_markup: calculationResultKeyboard(cases, deadline)
+      reply_markup: calculationResultKeyboard()
     });
     return;
   }
@@ -3570,19 +3516,12 @@ async function handleCalculationCallback(env, query) {
       message_id: message.message_id,
       text: formatDocumentResult(vehicle, util, deadline),
       parse_mode: 'HTML',
-      reply_markup: calculationResultKeyboard(cases, deadline, todayUtc().getUTCFullYear() < 2027)
+      reply_markup: calculationResultKeyboard(todayUtc().getUTCFullYear() < 2027)
     });
     await clearCustomsState(env, userId);
     if (!vehicle.issueDate) await sendIssueDatePrompt(env, message.chat.id, cases);
     return;
   }
-  const match = query.data.match(/^calc:peni:(\d{4}-\d{2}-\d{2}):([\d,]+)$/);
-  if (!match) return;
-  const deadline = parseFlexibleDate(match[1]);
-  const sums = match[2].split(',').map(Number).filter(Boolean);
-  const labels = sums.length > 1 ? ['до 3 лет', 'старше 3 лет'] : [''];
-  const cases = sums.map((sum, index) => ({ label: labels[index] || '', sum }));
-  await sendPlannedDatePrompt(env, message.chat.id, cases, deadline);
 }
 
 function analyticsHomeKeyboard() {
