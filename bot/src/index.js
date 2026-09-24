@@ -708,8 +708,8 @@ async function sendDocumentIdentity(env, chatId, vehicle, replyToMessageId = nul
 }
 
 async function sendDeclarationVin(env, chatId, vehicle) {
-  const text = `<b>VIN:</b> <code>${escapeHtml(vehicle.vin || 'не найден')}</code>`;
-  return telegram(env, 'sendMessage', { chat_id: chatId, text, parse_mode: 'HTML' });
+  const text = vehicle.vin || 'VIN не найден';
+  return telegram(env, 'sendMessage', { chat_id: chatId, text });
 }
 
 function peniCases(util) {
@@ -3392,10 +3392,10 @@ async function continueDeclarationAfterDocument(env, chatId, userId, state, vehi
     deadline: deadline?.toISOString?.() || deadline || null
   };
   // Убираем техническое сообщение обработки, чтобы VIN был отдельным
-  // сообщением сразу после загруженного пользователем документа.
+  // последним сообщением после карточки с данными автомобиля.
   if (workingMessage?.from?.is_bot) await discardWorkingCard(env, workingMessage, userId);
-  await sendDeclarationVin(env, chatId, vehicle);
   await promptDeclarationFtsName(env, chatId, userId, declaration);
+  await sendDeclarationVin(env, chatId, vehicle);
 }
 
 async function handleDeclarationReply(env, message) {
