@@ -40,7 +40,15 @@ export function findDeclarationPrice(name) {
 }
 
 export function commercialDeclarationUtil(vehicle) {
-  return calculateUtil(vehicle).map(item => ({ age: item.age, amount: item.commercial }));
+  const utilVehicle = String(vehicle?.category || '').toUpperCase() === 'M1G'
+    ? { ...vehicle, category: 'M1' }
+    : vehicle;
+  return calculateUtil(utilVehicle).map(item => ({ age: item.age, amount: item.commercial }));
+}
+
+function declarationExciseApplies(category) {
+  const normalizedCategory = String(category || '').trim().toUpperCase();
+  return normalizedCategory === 'M1' || normalizedCategory === 'M1G';
 }
 
 export function calculateDeclarationPayment({ priceRub, vehicle, paidDutyRub = 0, paidVatRub = 0 }) {
@@ -50,7 +58,9 @@ export function calculateDeclarationPayment({ priceRub, vehicle, paidDutyRub = 0
   if (!Number.isFinite(powerKw) || powerKw <= 0) throw new Error('Не указана мощность автомобиля');
   const duty = Math.round(price * 0.15);
   const hp = powerKw / 0.75;
-  const excise = Math.round(hp * electricExciseRate(powerKw));
+  const excise = declarationExciseApplies(vehicle?.category)
+    ? Math.round(hp * electricExciseRate(powerKw))
+    : 0;
   const vat = Math.round((price + duty + excise) * 0.22);
   const util = commercialDeclarationUtil(vehicle).map(item => ({
     ...item,
