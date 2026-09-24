@@ -19,3 +19,29 @@ test('расчёт по декларации использует только �
   assert.equal(result.util[0].amount, 800_800);
   assert.equal(result.util[0].total, 1_211_210);
 });
+
+test('акциз по декларации начисляется для категорий M1 и M1G', () => {
+  const input = { priceRub: 1_000_000, paidDutyRub: 0, paidVatRub: 0 };
+  const m1 = calculateDeclarationPayment({
+    ...input,
+    vehicle: { category: 'M1', year: 2025, totalKw: 100, ccm: 2000, hybridType: 'combustion' }
+  });
+  const m1g = calculateDeclarationPayment({
+    ...input,
+    vehicle: { category: 'm1g', year: 2025, totalKw: 100, ccm: 2000, hybridType: 'combustion' }
+  });
+  assert.equal(m1.excise, 8_533);
+  assert.equal(m1g.excise, m1.excise);
+  assert.equal(m1.vat, 254_877);
+});
+
+test('акциз по декларации не начисляется для категорий N1, N1G и N2', () => {
+  for (const category of ['N1', 'N1G', 'N2']) {
+    const result = calculateDeclarationPayment({
+      priceRub: 1_000_000,
+      vehicle: { category, year: 2025, totalKw: 100, ccm: 2000, maxMass: 3000, hybridType: 'combustion' }
+    });
+    assert.equal(result.excise, 0, category);
+    assert.equal(result.vat, 253_000, category);
+  }
+});
