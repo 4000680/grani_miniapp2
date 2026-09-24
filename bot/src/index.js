@@ -54,6 +54,7 @@ import {
   recordCompletedCalculation,
   recordDocumentType
 } from './analytics.js';
+import { formatUtilYearReference } from './util-rate-reference.js';
 export { ApplicationsStore } from './applications-store.js';
 
 const { hybridTypeLabel } = globalThis.GraniVehiclePower;
@@ -3296,6 +3297,18 @@ function declarationResultKeyboard(allow2027 = true) {
   };
 }
 
+function declarationYearReferenceKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '← Назад к итогам расчёта', callback_data: 'declaration:result:year:back' }],
+      [
+        { text: '🔄 Новый расчёт', callback_data: 'declaration:result:new' },
+        { text: '🏠 Главное меню', callback_data: 'declaration:result:menu' }
+      ]
+    ]
+  };
+}
+
 function declarationVehicleLines(vehicle) {
   const maxMass = Number(vehicle.maxMass);
   return [
@@ -3476,14 +3489,23 @@ async function handleDeclarationCallback(env, query) {
   if (query.data === 'declaration:result:menu') return sendMenu(env, message.chat.id);
   if (query.data === 'declaration:result:new') return sendDeclarationStart(env, message.chat.id, userId);
   if (query.data === 'declaration:result:year:2027' && state?.mode === 'declaration' && state.stage === 'result') {
-    const complete = { ...state, calculationYear: 2027 };
+    const payment = calculateDeclarationPayment({ ...state, calculationYear: 2027 });
+    await telegram(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: formatUtilYearReference(payment.util, 2027, true),
+      reply_markup: declarationYearReferenceKeyboard()
+    });
+    return;
+  }
+  if (query.data === 'declaration:result:year:back' && state?.mode === 'declaration' && state.stage === 'result') {
+    const calculationYear = state.calculationYear || todayUtc().getUTCFullYear();
+    const complete = { ...state, calculationYear };
     const payment = calculateDeclarationPayment(complete);
-    await setCustomsState(env, userId, complete);
     await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
       text: declarationResultText(complete, payment),
       parse_mode: 'HTML',
-      reply_markup: declarationResultKeyboard(false)
+      reply_markup: declarationResultKeyboard(payment.calculationYear < 2027)
     });
     return;
   }
@@ -3594,13 +3616,10 @@ async function handleCalculationCallback(env, query) {
     const yearContext = customsState?.utilYearContext || flow?.utilYearContext;
     const vehicle = yearContext?.vehicle;
     if (!vehicle) return;
-    const deadline = yearContext.deadline ? new Date(yearContext.deadline) : null;
     const util = calculateUtil(vehicle, todayUtc(), 2027);
-    const cases = peniCases(util);
     await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
-      text: `📅 <b>Расчёт на 2027 год</b>\n\n${formatDocumentResult(vehicle, util, deadline, todayUtc(), 2027)}`,
-      parse_mode: 'HTML',
+      text: formatUtilYearReference(util, 2027),
       reply_markup: calculationResultKeyboard()
     });
     return;
