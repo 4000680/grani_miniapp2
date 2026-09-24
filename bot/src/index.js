@@ -782,6 +782,14 @@ async function setCustomsState(env, userId, state) {
   if (stub) await stub.setCustomsState(state);
 }
 
+async function saveUtilYearContext(env, userId, vehicle, deadline) {
+  const current = await getCustomsState(env, userId);
+  await setCustomsState(env, userId, {
+    ...(current || { mode: 'util', stage: 'result' }),
+    utilYearContext: { vehicle, deadline: deadline?.toISOString?.() || deadline || null }
+  });
+}
+
 async function clearCustomsState(env, userId) {
   const stub = applicationsStub(env, userId);
   if (stub) await stub.clearCustomsState();
@@ -1000,6 +1008,7 @@ function documentErrorText(error) {
 }
 
 async function sendIssueDatePrompt(env, chatId, cases, notice = '') {
+  const priorCustomsState = await getCustomsState(env, chatId);
   await cleanupTemporaryMessages(env, chatId, chatId);
   const lines = [];
   if (notice) lines.push(`<b>${escapeHtml(notice)}</b>`, '');
@@ -1017,7 +1026,10 @@ async function sendIssueDatePrompt(env, chatId, cases, notice = '') {
     parse_mode: 'HTML',
     reply_markup: calculationNavigationKeyboard()
   });
-  await setCustomsState(env, chatId, { stage: 'peni-issue-date', peniCases: cases });
+  await setCustomsState(env, chatId, {
+    ...(priorCustomsState?.utilYearContext ? { mode: 'util', utilYearContext: priorCustomsState.utilYearContext } : {}),
+    stage: 'peni-issue-date', peniCases: cases
+  });
   await trackTemporaryMessage(env, chatId, sent.message_id);
   return sent;
 }
@@ -1041,7 +1053,13 @@ async function handleDateReply(env, message) {
     parse_mode: 'HTML',
     reply_markup: calculationResultKeyboard()
   });
-  await clearCustomsState(env, message.from?.id || message.chat.id);
+  if (state?.utilYearContext) {
+    await setCustomsState(env, message.from?.id || message.chat.id, {
+      mode: 'util', stage: 'result', utilYearContext: state.utilYearContext
+    });
+  } else {
+    await clearCustomsState(env, message.from?.id || message.chat.id);
+  }
   return true;
 }
 
@@ -3053,8 +3071,6 @@ async function handleDocument(env, message) {
     const cases = peniCases(util);
     const result = formatDocumentResult(vehicle, util, deadline);
     await saveApplication(env, message.from?.id, applicationFromVehicle(vehicle, util));
-    const flow = await getMessageFlowState(env, userId);
-    await setMessageFlowState(env, userId, { ...flow, utilYearContext: { vehicle, deadline: deadline?.toISOString?.() || null } });
     await telegram(env, 'editMessageText', {
       chat_id: message.chat.id,
       message_id: status.message_id,
@@ -3065,6 +3081,7 @@ async function handleDocument(env, message) {
     await sendDocumentIdentity(env, message.chat.id, vehicle, message.message_id).catch(() => null);
     await releaseTemporaryMessage(env, userId, status.message_id);
     if (!vehicle.issueDate) await sendIssueDatePrompt(env, message.chat.id, cases);
+    await saveUtilYearContext(env, userId, vehicle, deadline);
   } catch (error) {
     const controlled = controlledDocumentError(error);
     if (controlled.code === 'CARGO_TYPE_REQUIRED' && controlled.details?.vehicle && controlled.details?.candidates?.length) {
@@ -3266,9 +3283,10 @@ function declarationCategoryKeyboard(back = 'declaration:back:start') {
   ], back);
 }
 
-function declarationResultKeyboard() {
+function declarationResultKeyboard(allow2027 = true) {
   return {
     inline_keyboard: [
+      ...(allow2027 ? [[{ text: '📅 Рассчитать на 2027 год', callback_data: 'declaration:result:year:2027' }]] : []),
       [{ text: '← Назад', callback_data: 'declaration:back:paid-vat' }],
       [
         { text: '🔄 Новый расчёт', callback_data: 'declaration:result:new' },
@@ -3292,7 +3310,7 @@ function declarationVehicleLines(vehicle) {
 function declarationResultText(state, payment) {
   const country = DECLARATION_COUNTRIES[state.country];
   const lines = [
-    '✅ <b>Расчёт утильсбора по декларации</b>',
+    `✅ <b>Расчёт утильсбора по декларации · ставки ${payment.calculationYear} года</b>`,
     '',
     ...declarationVehicleLines(state.vehicle),
     `<b>Наименование ФТС:</b> ${escapeHtml(state.ftsName)}`,
@@ -3316,7 +3334,7 @@ function declarationResultText(state, payment) {
     lines.push(`<b>${ageLabel(item.age)}</b>`);
     lines.push(`Доплата таможенной пошлины: ${formatMoney(item.dutyDifference)}`);
     lines.push(`Доплата НДС: ${formatMoney(item.vatDifference)}`);
-    lines.push(`<b>Коммерческий утилизационный сбор: ${formatMoney(item.amount)}</b>`);
+    lines.push(`<b>Коммерческий утилизационный сбор${item.coefficient == null ? '' : ` (коэффициент ${item.coefficient})`}: ${formatMoney(item.amount)}</b>`);
     lines.push(`<b>Итого к оплате: ${formatMoney(item.total)}</b>`);
   }
   if (state.deadline) {
@@ -3435,12 +3453,13 @@ async function handleDeclarationReply(env, message) {
       }
       const complete = { ...state, paidVat: amount, paidVatRub: rub, currencyRate };
       const payment = calculateDeclarationPayment(complete);
+      complete.calculationYear = payment.calculationYear;
       await saveApplication(env, userId, {
         ...applicationFromVehicle(complete.vehicle, payment.util.map(item => ({ age: item.age, personal: item.amount, commercial: item.amount }))),
         source: 'Расчёт по декларации', calculationType: 'declaration'
       });
       await setCustomsState(env, userId, { ...complete, stage: 'result' });
-      await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: declarationResultText(complete, payment), parse_mode: 'HTML', reply_markup: declarationResultKeyboard() });
+      await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: declarationResultText(complete, payment), parse_mode: 'HTML', reply_markup: declarationResultKeyboard(payment.calculationYear < 2027) });
       return true;
     } catch (error) {
       await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: `Не удалось выполнить расчёт: ${escapeHtml(error.message || error)}.`, parse_mode: 'HTML', reply_markup: declarationKeyboard([], 'declaration:back:country') });
@@ -3456,6 +3475,18 @@ async function handleDeclarationCallback(env, query) {
   const state = await getCustomsState(env, userId);
   if (query.data === 'declaration:result:menu') return sendMenu(env, message.chat.id);
   if (query.data === 'declaration:result:new') return sendDeclarationStart(env, message.chat.id, userId);
+  if (query.data === 'declaration:result:year:2027' && state?.mode === 'declaration' && state.stage === 'result') {
+    const complete = { ...state, calculationYear: 2027 };
+    const payment = calculateDeclarationPayment(complete);
+    await setCustomsState(env, userId, complete);
+    await telegram(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: declarationResultText(complete, payment),
+      parse_mode: 'HTML',
+      reply_markup: declarationResultKeyboard(false)
+    });
+    return;
+  }
   if (state?.mode !== 'declaration') return;
   if (query.data === 'declaration:back:paid-vat' && state.stage === 'result') {
     await setCustomsState(env, userId, { ...state, stage: 'paid-vat' });
@@ -3559,9 +3590,11 @@ async function handleCalculationCallback(env, query) {
   }
   if (query.data === 'calc:year:2027') {
     const flow = await getMessageFlowState(env, userId);
-    const vehicle = flow?.utilYearContext?.vehicle;
+    const customsState = await getCustomsState(env, userId);
+    const yearContext = customsState?.utilYearContext || flow?.utilYearContext;
+    const vehicle = yearContext?.vehicle;
     if (!vehicle) return;
-    const deadline = flow.utilYearContext.deadline ? new Date(flow.utilYearContext.deadline) : null;
+    const deadline = yearContext.deadline ? new Date(yearContext.deadline) : null;
     const util = calculateUtil(vehicle, todayUtc(), 2027);
     const cases = peniCases(util);
     await telegram(env, 'sendMessage', {
@@ -3620,8 +3653,6 @@ async function handleCalculationCallback(env, query) {
     }
     const cases = peniCases(util);
     await saveApplication(env, query.from?.id, applicationFromVehicle(vehicle, util));
-    const flow = await getMessageFlowState(env, userId);
-    await setMessageFlowState(env, userId, { ...flow, utilYearContext: { vehicle, deadline: deadline?.toISOString?.() || null } });
     await telegram(env, 'editMessageText', {
       chat_id: message.chat.id,
       message_id: message.message_id,
@@ -3631,6 +3662,7 @@ async function handleCalculationCallback(env, query) {
     });
     await clearCustomsState(env, userId);
     if (!vehicle.issueDate) await sendIssueDatePrompt(env, message.chat.id, cases);
+    await saveUtilYearContext(env, userId, vehicle, deadline);
     return;
   }
 }
