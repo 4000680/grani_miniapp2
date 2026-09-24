@@ -187,12 +187,16 @@ function menuKeyboard(env) {
     inline_keyboard: [
       [{ text: '🚗 Таможенное оформление', callback_data: 'customs:start' }],
       [{ text: '🛞 Рассчитать утильсбор', callback_data: 'menu:util' }],
-      [{ text: '🧾 Рассчитать утильсбор по декларации', callback_data: 'menu:declaration' }],
-      [{ text: '🧪 Список лабораторий', callback_data: 'info:laboratories' }],
-      [{ text: '💳 Реквизиты для оплаты утильсбора', callback_data: 'info:payment' }],
-      [{ text: '📄 Получить ЭПТС по VIN', callback_data: 'info:epts' }],
-      [{ text: '🔎 Запросить скрин СБКТС', callback_data: 'info:sbkts' }],
-      [{ text: '👤 Внести собственника в ЭПТС', callback_data: 'info:owner' }],
+      [{ text: '🧾 Утильсбор по декларации', callback_data: 'menu:declaration' }],
+      [
+        { text: '🧪 Лаборатории', callback_data: 'info:laboratories' },
+        { text: '💳 Реквизиты', callback_data: 'info:payment' }
+      ],
+      [
+        { text: '📄 Получить ЭПТС', callback_data: 'info:epts' },
+        { text: '🔎 Скрин СБКТС', callback_data: 'info:sbkts' }
+      ],
+      [{ text: '👤 Собственник ЭПТС', callback_data: 'info:owner' }],
       [
         { text: '☎️ Техподдержка', callback_data: 'info:contact' },
         { text: '❤️ Задонатить', callback_data: 'info:donate' }
