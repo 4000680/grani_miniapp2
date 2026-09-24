@@ -39,6 +39,21 @@ import {
   findDeclarationPrice
 } from './declaration-flow.js';
 import { isPermanentResultText } from './message-policy.js';
+import {
+  trackUpdate,
+  analyticsOverview,
+  listAnalyticsUsers,
+  getAnalyticsUser,
+  getAnalyticsHistory,
+  saveAdminSession,
+  getAdminSession,
+  clearAdminSession,
+  createCampaign,
+  listCampaigns,
+  processCampaignBatch,
+  recordCompletedCalculation,
+  recordDocumentType
+} from './analytics.js';
 export { ApplicationsStore } from './applications-store.js';
 
 const { hybridTypeLabel } = globalThis.GraniVehiclePower;
@@ -215,7 +230,12 @@ async function telegram(env, method, data) {
     body: JSON.stringify(data)
   });
   const result = await response.json();
-  if (!result.ok) throw new Error(`${method}: ${result.description || 'Telegram API error'}`);
+  if (!result.ok) {
+    const error = new Error(`${method}: ${result.description || 'Telegram API error'}`);
+    error.telegramCode = result.error_code;
+    error.telegramParameters = result.parameters || null;
+    throw error;
+  }
   return result.result;
 }
 
@@ -817,6 +837,10 @@ async function cleanupCustomsMessages(env, userId, chatId, exceptMessageId = nul
 }
 
 async function saveApplication(env, userId, application) {
+  if (env.ANALYTICS_DB && userId) {
+    try { await recordCompletedCalculation(env.ANALYTICS_DB, userId, application); }
+    catch (error) { console.error('Analytics calculation tracking failed', error); }
+  }
   const stub = applicationsStub(env, userId);
   if (!stub) return;
   try { await stub.add(application); } catch (error) { console.error('Applications storage:', error); }
@@ -3025,6 +3049,10 @@ async function handleDocument(env, message) {
     const response = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`);
     if (!response.ok) throw new Error('Telegram не отдал файл для скачивания');
     const { vehicle, util, deadline } = await processVehicleDocument(new Uint8Array(await response.arrayBuffer()));
+    if (env.ANALYTICS_DB) {
+      try { await recordDocumentType(env.ANALYTICS_DB, message.from?.id, vehicle.type === 'sbkts' ? 'sbkts' : 'epts'); }
+      catch (error) { console.error('Analytics document tracking failed', error); }
+    }
     if (declarationState?.mode === 'declaration') {
       await sendDeclarationVin(env, message.chat.id, vehicle, status);
       await promptDeclarationFtsName(env, message.chat.id, userId, { ...declarationState, vehicle, util, deadline: deadline?.toISOString?.() || null });
@@ -3142,6 +3170,10 @@ async function handleGroupCalculation(env, query) {
     const response = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`);
     if (!response.ok) throw new Error('Telegram не отдал файл для скачивания');
     const { vehicle, util, deadline } = await processVehicleDocument(new Uint8Array(await response.arrayBuffer()));
+    if (env.ANALYTICS_DB) {
+      try { await recordDocumentType(env.ANALYTICS_DB, query.from?.id, vehicle.type === 'sbkts' ? 'sbkts' : 'epts'); }
+      catch (error) { console.error('Analytics document tracking failed', error); }
+    }
     await saveApplication(env, query.from?.id, applicationFromVehicle(vehicle, util));
     await telegram(env, 'editMessageText', {
       chat_id: botMessage.chat.id,
@@ -3396,7 +3428,10 @@ async function handleDeclarationReply(env, message) {
       }
       const complete = { ...state, paidVat: amount, paidVatRub: rub, currencyRate };
       const payment = calculateDeclarationPayment(complete);
-      await saveApplication(env, userId, applicationFromVehicle(complete.vehicle, payment.util.map(item => ({ age: item.age, personal: item.amount, commercial: item.amount }))));
+      await saveApplication(env, userId, {
+        ...applicationFromVehicle(complete.vehicle, payment.util.map(item => ({ age: item.age, personal: item.amount, commercial: item.amount }))),
+        source: 'Расчёт по декларации', calculationType: 'declaration'
+      });
       await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: declarationResultText(complete, payment), parse_mode: 'HTML', reply_markup: declarationResultKeyboard() });
       await clearCustomsState(env, userId);
       return true;
@@ -3550,7 +3585,244 @@ async function handleCalculationCallback(env, query) {
   await sendPlannedDatePrompt(env, message.chat.id, cases, deadline);
 }
 
+function analyticsHomeKeyboard() {
+  return { inline_keyboard: [
+    [{ text: '📊 Статистика', callback_data: 'analytics:stats' }, { text: '👥 Пользователи', callback_data: 'analytics:users' }],
+    [{ text: '🧩 Сегменты', callback_data: 'analytics:segments' }, { text: '🧮 Расчёты', callback_data: 'analytics:calculations' }],
+    [{ text: '📣 Рассылка', callback_data: 'analytics:broadcast' }]
+  ] };
+}
+
+function analyticsBackKeyboard(target = 'home') {
+  return { inline_keyboard: [[{ text: '‹ В аналитику', callback_data: `analytics:${target}` }]] };
+}
+
+function analyticsSegmentsKeyboard() {
+  const segments = [
+    ['all', 'Все'], ['new', 'Новые · 7 дней'], ['today', 'Активные сегодня'], ['active7', 'Активные · 7 дней'],
+    ['inactive3', 'Не заходили · 3 дня'], ['inactive7', 'Не заходили · 7 дней'],
+    ['inactive14', 'Не заходили · 14 дней'], ['inactive30', 'Не заходили · 30 дней'],
+    ['calcs1', 'От 1 расчёта'], ['calcs5', 'От 5 расчётов'], ['calcs10', 'От 10 расчётов'], ['calcs20', 'От 20 расчётов'],
+    ['util', 'Утильсбор'], ['customs', 'Таможня'], ['sbkts', 'Загружали СБКТС'], ['epts', 'Загружали ЭПТС'],
+    ['request_epts', 'Запрашивали ЭПТС'], ['request_sbkts', 'Запрашивали СБКТС']
+  ];
+  return { inline_keyboard: [...segments.map(([key, label]) => [{ text: label, callback_data: `analytics:segment:${key}:0` }]), [{ text: '‹ В аналитику', callback_data: 'analytics:home' }]] };
+}
+
+function analyticsLabel(key) {
+  return ({
+    util: 'Утильсбор', customs: 'Таможенные платежи', declaration: 'Расчёт по декларации',
+    sep_catalog: 'Шаблон СЭП', sbkts: 'СБКТС', epts: 'ЭПТС', support: 'Техподдержка',
+    info: 'Информация', menu: 'Главное меню', bot: 'Бот', penalties: 'Пени'
+  })[key] || key;
+}
+
+function analyticsSegmentLabel(segment) {
+  return ({
+    all: 'Все', new: 'Новые · 7 дней', today: 'Активные сегодня', active7: 'Активные · 7 дней',
+    inactive3: 'Не заходили · 3 дня', inactive7: 'Не заходили · 7 дней', inactive14: 'Не заходили · 14 дней', inactive30: 'Не заходили · 30 дней',
+    calcs1: 'От 1 расчёта', calcs5: 'От 5 расчётов', calcs10: 'От 10 расчётов', calcs20: 'От 20 расчётов',
+    util: 'Утильсбор', customs: 'Таможня', sbkts: 'Загружали СБКТС', epts: 'Загружали ЭПТС', request_epts: 'Запрашивали ЭПТС', request_sbkts: 'Запрашивали СБКТС'
+  })[segment] || segment;
+}
+
+async function openAnalytics(env, chatId) {
+  const adminId = String(env.ADMIN_ID || env.ADMIN_TELEGRAM_ID || '');
+  if (!adminId || String(chatId) !== adminId) {
+    await telegram(env, 'sendMessage', { chat_id: chatId, text: '⛔️ Нет доступа.' });
+    return;
+  }
+  if (!env.ANALYTICS_DB) {
+    await telegram(env, 'sendMessage', { chat_id: chatId, text: 'Аналитика пока не подключена: для неё нужна база Cloudflare D1.' });
+    return;
+  }
+  await telegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: '📈 <b>Аналитика «Брокер Грани»</b>\n\nВыберите нужный раздел.',
+    parse_mode: 'HTML',
+    reply_markup: analyticsHomeKeyboard()
+  });
+}
+
+function analyticsStatsText(stats) {
+  const features = stats.byFeature.map(item => `• ${escapeHtml(analyticsLabel(item.section))}: ${item.count}`).join('\n') || '• Пока нет данных';
+  return [
+    '📊 <b>Статистика</b>',
+    `Пользователей всего: <b>${stats.total || 0}</b>`,
+    `Новые: сегодня ${stats.new_today || 0} · 7 дней ${stats.new_7d || 0} · 30 дней ${stats.new_30d || 0}`,
+    `Активные: сегодня ${stats.active_today || 0} · 7 дней ${stats.active_7d || 0} · 30 дней ${stats.active_30d || 0}`,
+    `Расчёты: сегодня ${stats.calculations_today || 0} · 7 дней ${stats.calculations_7d || 0} · 30 дней ${stats.calculations_30d || 0}`,
+    `Всего расчётов: <b>${stats.calculations_total || 0}</b>`,
+    `Среднее на активного за 30 дней: <b>${stats.avg_calculations_per_active ?? '—'}</b>`,
+    '', '<b>По функциям:</b>', features
+  ].join('\n');
+}
+
+async function showAnalyticsUsers(env, message, segment = 'all', offset = 0) {
+  const result = await listAnalyticsUsers(env.ANALYTICS_DB, { segment, offset });
+  const users = result.results || [];
+  const title = `👥 <b>Пользователи · ${escapeHtml(analyticsSegmentLabel(segment))}</b>`;
+  const rows = users.map(user => [{
+    text: `${user.first_name || user.username || user.user_id} · ${user.calculations} расч.`,
+    callback_data: `analytics:user:${user.user_id}`
+  }]);
+  const nav = [];
+  if (offset > 0) nav.push({ text: '← Ранее', callback_data: `analytics:segment:${segment}:${Math.max(0, offset - 10)}` });
+  if (users.length === 10) nav.push({ text: 'Далее →', callback_data: `analytics:segment:${segment}:${offset + 10}` });
+  if (nav.length) rows.push(nav);
+  rows.push([{ text: '🔎 Поиск', callback_data: 'analytics:search' }, { text: '‹ Сегменты', callback_data: 'analytics:segments' }]);
+  const text = users.length
+    ? `${title}\nПоказаны ${offset + 1}–${offset + users.length}. Нажмите на пользователя для карточки.`
+    : `${title}\nПользователей в этом сегменте пока нет.`;
+  await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text, parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } });
+}
+
+async function showAnalyticsUser(env, message, userId) {
+  const user = await getAnalyticsUser(env.ANALYTICS_DB, userId);
+  if (!user) {
+    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: 'Пользователь не найден.', reply_markup: analyticsBackKeyboard('users') });
+    return;
+  }
+  const username = user.username ? `@${escapeHtml(user.username)}` : 'не указан';
+  const name = [user.first_name, user.last_name].filter(Boolean).map(escapeHtml).join(' ') || 'не указано';
+  const profile = user.username ? `\n<a href="https://t.me/${encodeURIComponent(user.username)}">Открыть профиль Telegram</a>` : '';
+  const text = `👤 <b>Карточка пользователя</b>\n\nИмя: ${name}\nUsername: ${username}\nID: <code>${escapeHtml(user.user_id)}</code>\nПервый запуск: ${escapeHtml(user.first_seen_at)}\nПоследняя активность: ${escapeHtml(user.last_seen_at)}\nАктивных дней: ${user.active_days}\nДействий: ${user.actions}\nРасчётов: ${user.calculations}\nСогласие на рассылку: ${user.marketing_consent ? 'да' : 'нет'}${profile}`;
+  await telegram(env, 'editMessageText', {
+    chat_id: message.chat.id, message_id: message.message_id, text, parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: [
+      [{ text: '📜 История', callback_data: `analytics:history:${user.user_id}:0` }],
+      [{ text: '‹ К списку', callback_data: 'analytics:users' }]
+    ] }, disable_web_page_preview: true
+  });
+}
+
+async function showAnalyticsHistory(env, message, userId, offset = 0) {
+  const result = await getAnalyticsHistory(env.ANALYTICS_DB, userId, offset);
+  const events = result.results || [];
+  const rows = events.map(item => `• ${escapeHtml(item.created_at)} — ${escapeHtml(analyticsLabel(item.section))}: ${escapeHtml(item.action)}`);
+  const nav = [];
+  if (offset > 0) nav.push({ text: '← Ранее', callback_data: `analytics:history:${userId}:${Math.max(0, offset - 10)}` });
+  if (events.length === 10) nav.push({ text: 'Далее →', callback_data: `analytics:history:${userId}:${offset + 10}` });
+  const keyboard = nav.length ? [nav] : [];
+  keyboard.push([{ text: '‹ К карточке', callback_data: `analytics:user:${userId}` }]);
+  await telegram(env, 'editMessageText', {
+    chat_id: message.chat.id, message_id: message.message_id,
+    text: `📜 <b>Последние действия пользователя</b>\n\n${rows.join('\n') || 'История пока пуста.'}`,
+    parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+async function handleAnalyticsCallback(env, query) {
+  const adminId = String(env.ADMIN_ID || env.ADMIN_TELEGRAM_ID || '');
+  if (!adminId || String(query.from?.id) !== adminId) {
+    return true;
+  }
+  if (!env.ANALYTICS_DB) return true;
+  const data = query.data;
+  const message = query.message;
+  if (data === 'analytics:home') {
+    await clearAdminSession(env.ANALYTICS_DB, adminId);
+    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: '📈 <b>Аналитика «Брокер Грани»</b>\n\nВыберите нужный раздел.', parse_mode: 'HTML', reply_markup: analyticsHomeKeyboard() });
+  } else if (data === 'analytics:stats' || data === 'analytics:calculations') {
+    const stats = await analyticsOverview(env.ANALYTICS_DB);
+    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: analyticsStatsText(stats), parse_mode: 'HTML', reply_markup: analyticsBackKeyboard() });
+  } else if (data === 'analytics:users') {
+    await showAnalyticsUsers(env, message);
+  } else if (data === 'analytics:search') {
+    await saveAdminSession(env.ANALYTICS_DB, adminId, { step: 'user_search' });
+    await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Введите username, имя или Telegram ID для поиска. Для отмены — /cancel.' });
+  } else if (data === 'analytics:segments') {
+    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: '🧩 <b>Выберите сегмент</b>', parse_mode: 'HTML', reply_markup: analyticsSegmentsKeyboard() });
+  } else if (data.startsWith('analytics:segment:')) {
+    const [, , segment, offset] = data.split(':');
+    await showAnalyticsUsers(env, message, segment, Math.max(0, Number(offset) || 0));
+  } else if (data.startsWith('analytics:user:')) {
+    await showAnalyticsUser(env, message, data.split(':')[2]);
+  } else if (data.startsWith('analytics:history:')) {
+    const [, , userId, offset] = data.split(':');
+    await showAnalyticsHistory(env, message, userId, Math.max(0, Number(offset) || 0));
+  } else if (data === 'analytics:broadcast') {
+    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id,
+      text: '📣 <b>Рассылка</b>\n\nВыберите аудиторию. Массовая рассылка доступна только пользователям, которые сами подписались командой /subscribe. Тест придёт только вам.',
+      parse_mode: 'HTML', reply_markup: { inline_keyboard: [
+        [{ text: 'Подписавшиеся пользователи', callback_data: 'analytics:broadcast:all_consented' }],
+        [{ text: 'Тест только мне', callback_data: 'analytics:broadcast:admin_test' }],
+        [{ text: '📃 История рассылок', callback_data: 'analytics:broadcast_history' }],
+        [{ text: '‹ В аналитику', callback_data: 'analytics:home' }]
+      ] }
+    });
+  } else if (data === 'analytics:broadcast_history') {
+    const campaigns = await listCampaigns(env.ANALYTICS_DB);
+    const rows = (campaigns.results || []).map(item => {
+      const audience = item.audience === 'admin_test' ? 'тест' : 'подписчики';
+      return `• ${escapeHtml(item.created_at)} · ${audience}: ${item.sent_count}/${item.recipient_count}, ошибок ${item.error_count} (${escapeHtml(item.status)})`;
+    });
+    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id,
+      text: `📃 <b>История рассылок</b>\n\n${rows.join('\n') || 'Рассылок пока не было.'}`,
+      parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '‹ К рассылкам', callback_data: 'analytics:broadcast' }]] }
+    });
+  } else if (data === 'analytics:broadcast:confirm') {
+    const session = await getAdminSession(env.ANALYTICS_DB, adminId);
+    if (session?.step !== 'broadcast_confirm') return true;
+    const campaign = await createCampaign(env.ANALYTICS_DB, adminId, session.audience, session.text);
+    await clearAdminSession(env.ANALYTICS_DB, adminId);
+    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id,
+      text: `✅ Рассылка поставлена в очередь.\nПолучателей: ${campaign.count}.\n\nОтправка будет идти частями, автоматически бот ничего не рассылает.`,
+      reply_markup: analyticsBackKeyboard('home')
+    });
+  } else if (data.startsWith('analytics:broadcast:')) {
+    const audience = data.split(':')[2];
+    if (!['all_consented', 'admin_test'].includes(audience)) return true;
+    await saveAdminSession(env.ANALYTICS_DB, adminId, { step: 'broadcast_text', audience });
+    await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Напишите текст сообщения для рассылки. Для отмены отправьте /cancel.' });
+  }
+  return true;
+}
+
+async function handleAnalyticsAdminText(env, message) {
+  const adminId = String(env.ADMIN_ID || env.ADMIN_TELEGRAM_ID || '');
+  if (!env.ANALYTICS_DB || !adminId || String(message.from?.id) !== adminId || message.chat.type !== 'private') return false;
+  const text = String(message.text || '').trim();
+  if (text.toLowerCase() === '/cancel') {
+    await clearAdminSession(env.ANALYTICS_DB, adminId);
+    await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Рассылка отменена.' });
+    return true;
+  }
+  const session = await getAdminSession(env.ANALYTICS_DB, adminId);
+  if (session?.step === 'user_search') {
+    await clearAdminSession(env.ANALYTICS_DB, adminId);
+    const found = await listAnalyticsUsers(env.ANALYTICS_DB, { query: text });
+    const users = found.results || [];
+    const rows = users.map(user => [{ text: `${user.first_name || user.username || user.user_id} · ${user.user_id}`, callback_data: `analytics:user:${user.user_id}` }]);
+    rows.push([{ text: '‹ В аналитику', callback_data: 'analytics:home' }]);
+    await telegram(env, 'sendMessage', { chat_id: message.chat.id,
+      text: users.length ? `Найдено до 10 совпадений (${users.length} показано):` : 'Совпадений не найдено.',
+      reply_markup: { inline_keyboard: rows }
+    });
+    return true;
+  }
+  if (session?.step !== 'broadcast_text') return false;
+  if (!text || text.length > 3000 || text.startsWith('/')) {
+    await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Отправьте обычный текст до 3000 символов. Для отмены — /cancel.' });
+    return true;
+  }
+  const recipients = session.audience === 'admin_test' ? 1 : await env.ANALYTICS_DB.prepare('SELECT COUNT(*) count FROM analytics_users WHERE marketing_consent=1 AND chat_available=1').first().then(row => row?.count || 0);
+  await saveAdminSession(env.ANALYTICS_DB, adminId, { ...session, step: 'broadcast_confirm', text });
+  await telegram(env, 'sendMessage', { chat_id: message.chat.id,
+    text: `Предпросмотр:\n\n${text}\n\nПолучателей: ${recipients}. Подтвердить отправку?`,
+    reply_markup: { inline_keyboard: [
+      [{ text: '✅ Подтвердить', callback_data: 'analytics:broadcast:confirm' }],
+      [{ text: 'Отмена', callback_data: 'analytics:home' }]
+    ] }
+  });
+  return true;
+}
+
 async function handleUpdate(env, update) {
+  if (env.ANALYTICS_DB) {
+    try { await trackUpdate(env.ANALYTICS_DB, update); }
+    catch (error) { console.error('Analytics tracking failed', error); }
+  }
   if (update.message?.document) {
     if (isGroupChat(update.message.chat)) await offerGroupCalculation(env, update.message);
     else await handleDocument(env, update.message);
@@ -3558,6 +3830,17 @@ async function handleUpdate(env, update) {
   }
   if (update.message?.text) {
     const command = update.message.text.split(/\s+/)[0].split('@')[0].toLowerCase();
+    if (command === '/admin') {
+      await openAnalytics(env, update.message.chat.id);
+      return;
+    }
+    if (command === '/subscribe' || command === '/unsubscribe') {
+      await telegram(env, 'sendMessage', { chat_id: update.message.chat.id, text: command === '/subscribe'
+        ? '✅ Вы подписались на сообщения о новостях и услугах. Отказаться можно командой /unsubscribe.'
+        : 'Вы отписались от рассылок. Бот продолжит отвечать на ваши запросы.' });
+      return;
+    }
+    if (await handleAnalyticsAdminText(env, update.message)) return;
     if (command === '/start') {
       await telegram(env, 'setMyCommands', {
         commands: [
@@ -3590,7 +3873,8 @@ async function handleUpdate(env, update) {
   }
   await telegram(env, 'answerCallbackQuery', { callback_query_id: query.id });
   if (!query.message) return;
-  if (query.data?.startsWith('catalog:')) await handleCatalogCallback(env, query);
+  if (query.data?.startsWith('analytics:')) await handleAnalyticsCallback(env, query);
+  else if (query.data?.startsWith('catalog:')) await handleCatalogCallback(env, query);
   else if (query.data?.startsWith('customs:')) await handleCustomsCallback(env, query);
   else if (query.data?.startsWith('declaration:')) await handleDeclarationCallback(env, query);
   else if (query.data?.startsWith('calc:')) await handleCalculationCallback(env, query);
@@ -3625,6 +3909,12 @@ async function setupBot(request, env) {
 }
 
 export default {
+  async scheduled(controller, env, ctx) {
+    if (!env.ANALYTICS_DB) return;
+    ctx.waitUntil(processCampaignBatch(env.ANALYTICS_DB, (chatId, text) =>
+      telegram(env, 'sendMessage', { chat_id: chatId, text })
+    ).catch(error => console.error('Analytics campaign batch failed', error)));
+  },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     try {

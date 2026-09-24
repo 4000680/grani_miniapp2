@@ -17,6 +17,9 @@
       "storage": "sqlite"
     }
   },
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
   "vars": {
     "MINI_APP_URL": "https://4000680.github.io/grani_miniapp2/",
     "CONTACT_URL": "https://t.me/grani_broker",
