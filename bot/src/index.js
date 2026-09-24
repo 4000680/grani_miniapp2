@@ -1003,7 +1003,7 @@ async function handleDateReply(env, message) {
   const deadline = addWorkingDays(date, 5);
   await telegram(env, 'sendMessage', {
     chat_id: message.chat.id,
-    text: [`<b>Крайний срок уплаты: ${formatDate(deadline)}</b>`, formatPeniCompact(cases, deadline, todayUtc())].join('\\n'),
+    text: [`<b>Крайний срок уплаты: ${formatDate(deadline)}</b>`, formatPeniCompact(cases, deadline, todayUtc())].join('\n'),
     parse_mode: 'HTML',
     reply_markup: calculationResultKeyboard()
   });
