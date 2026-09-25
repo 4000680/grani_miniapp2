@@ -66,3 +66,12 @@ test('ordinary catalog utility selection defaults to M1 before calculating, whil
   const calculationBranch = handler.slice(handler.indexOf('const calculation = query.data.match'));
   assert.ok(calculationBranch.indexOf("if (sourceParsed?.customsMode === 'electric')") < calculationBranch.indexOf('const util = calculateUtil(vehicle)'));
 });
+
+test('catalog utility result offers 2027 rates and can return to the volume choice', () => {
+  assert.match(workerSource, /function catalogCalculationResultKeyboard\(candidate, weight\)/);
+  assert.match(workerSource, /callback_data: 'calc:year:2027'/);
+  assert.match(workerSource, /callback_data: `catalog:result:back:\$\{candidate\.rowIndex\}:\$\{weight \|\| candidate\.mass \|\| 0\}`/);
+  assert.match(workerSource, /const resultBack = query\.data\.match\(\/\^catalog:result:back:/);
+  assert.match(workerSource, /await saveUtilYearContext\(env, query\.from\?\.id \|\| message\.chat\.id, vehicle, null\)/);
+  assert.match(workerSource, /customs \? customsResultKeyboard\(\) : catalogCalculationResultKeyboard\(candidate, requestedWeight\)/);
+});

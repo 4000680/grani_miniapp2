@@ -2533,6 +2533,21 @@ function catalogEngineKeyboard(rowIndex, weight, backCallback, sourceParsed = nu
   };
 }
 
+function catalogCalculationResultKeyboard(candidate, weight) {
+  return {
+    inline_keyboard: [
+      ...(todayUtc().getUTCFullYear() < 2027
+        ? [[{ text: '📅 Рассчитать на 2027 год', callback_data: 'calc:year:2027' }]]
+        : []),
+      [{ text: '← Назад к выбору объёма', callback_data: `catalog:result:back:${candidate.rowIndex}:${weight || candidate.mass || 0}` }],
+      [
+        { text: '🔄 Новый расчёт', callback_data: 'calc:result:new' },
+        { text: '🏠 Главное меню', callback_data: 'calc:result:menu' }
+      ]
+    ]
+  };
+}
+
 function catalogEnginePrompt(candidate, weight, sourceParsed) {
   const instruction = sourceParsed?.customsMode === 'passenger' && sourceParsed.customsCcm
     ? 'Объём двигателя уже указан. Продолжите расчёт утильсбора.'
@@ -2959,6 +2974,22 @@ async function handleCatalogCallback(env, query) {
   const state = await getCustomsState(env, query.from?.id || message.chat.id);
   const sourceParsed = withCustomsState(catalogQueryFromNavigationMessage(message), state);
   if (query.data === 'catalog:noop') return;
+  const resultBack = query.data.match(/^catalog:result:back:(\d+):(\d+(?:\.\d+)?)$/);
+  if (resultBack) {
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const candidate = getCatalogCandidate(catalog, Number(resultBack[1]));
+    if (!candidate) throw new Error('Автомобиль больше не найден в шаблоне СЭП');
+    const weight = Number(resultBack[2]) || candidate.mass || null;
+    const source = parseCatalogQuery(candidate.brand + ' ' + candidate.model + ' ' + candidate.year);
+    const sent = await telegram(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: catalogEnginePrompt(candidate, weight, source),
+      parse_mode: 'HTML',
+      reply_markup: catalogEngineKeyboard(candidate.rowIndex, weight, `catalog:back:variants:${candidate.rowIndex}`, source)
+    });
+    await trackTemporaryMessage(env, query.from?.id || message.chat.id, sent.message_id);
+    return;
+  }
   if (query.data === 'catalog:back:search') {
     if (sourceParsed?.customsMode) {
       const userId = query.from?.id || message.chat.id;
@@ -3131,7 +3162,8 @@ async function handleCatalogCallback(env, query) {
   } : null;
   const resultText = formatCatalogResult(candidate, vehicle, util, customs);
   await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id,
-    text: resultText, parse_mode: 'HTML', reply_markup: customs ? customsResultKeyboard() : calculationResultKeyboard() });
+    text: resultText, parse_mode: 'HTML', reply_markup: customs ? customsResultKeyboard() : catalogCalculationResultKeyboard(candidate, requestedWeight) });
+  if (!customs) await saveUtilYearContext(env, query.from?.id || message.chat.id, vehicle, null);
   await saveApplication(env, query.from?.id,
     customs ? customsApplicationFromVehicle(vehicle, util, customs) : applicationFromVehicle(vehicle, util), resultText, 'HTML');
   await releaseTemporaryMessage(env, query.from?.id || message.chat.id, message.message_id);
