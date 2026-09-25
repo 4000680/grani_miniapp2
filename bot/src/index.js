@@ -186,6 +186,7 @@ function escapeHtml(value) {
 function menuKeyboard(env) {
   return {
     inline_keyboard: [
+      [{ text: '📲 Открыть приложение', web_app: { url: env.MINI_APP_URL } }],
       [{ text: '🚗 Таможенное оформление', callback_data: 'customs:start' }],
       [{ text: '🛞 Рассчитать утильсбор', callback_data: 'menu:util' }],
       [{ text: '🧾 Утильсбор по декларации', callback_data: 'menu:declaration' }],

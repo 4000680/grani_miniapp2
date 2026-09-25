@@ -12,7 +12,7 @@ test('первый запуск показывает полное приветс
 });
 
 
-test('главное меню разделяет обычный расчёт утильсбора и расчёт по декларации', () => {
+test('главное меню разделяет расчёты и отдельно открывает Mini App', () => {
   assert.match(source, /text: '🛞 Рассчитать утильсбор', callback_data: 'menu:util'/);
   assert.match(source, /text: '🧾 Утильсбор по декларации', callback_data: 'menu:declaration'/);
   assert.match(source, /text: '🧪 Лаборатории', callback_data: 'info:laboratories'/);
@@ -24,7 +24,7 @@ test('главное меню разделяет обычный расчёт у�
   assert.match(source, /\[\s*\{ text: '📄 Получить ЭПТС',[\s\S]*?\{ text: '🔎 Скрин СБКТС'/);
   assert.doesNotMatch(source, /text: '📅 Рассчитать пени'/);
   assert.doesNotMatch(source, /text: '📟 Рассчитать по СБКТС или ЭПТС'/);
-  assert.doesNotMatch(source, /web_app:\s*\{/);
+  assert.match(source, /function menuKeyboard\(env\)[\s\S]*?web_app: \{ url: env\.MINI_APP_URL \}/);
   assert.match(source, /query\.data === 'menu:util'\) await showUtilStart\(env, query\.message\)/);
   assert.match(source, /query\.data === 'menu:declaration'\) await sendDeclarationStart\(env, query\.message\.chat\.id, query\.from\?\.id \|\| query\.message\.chat\.id\)/);
   assert.match(source, /const UTIL_START_TEXT = \[/);
