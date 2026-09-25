@@ -803,6 +803,17 @@ async function clearCustomsState(env, userId) {
   if (stub) await stub.clearCustomsState();
 }
 
+async function resetCustomsFlowForMainMenu(env, userId) {
+  const state = await getCustomsState(env, userId);
+  if (state?.utilYearContext) {
+    await setCustomsState(env, userId, {
+      mode: 'util', stage: 'result', utilYearContext: state.utilYearContext
+    });
+  } else {
+    await clearCustomsState(env, userId);
+  }
+}
+
 async function getMessageFlowState(env, userId) {
   const stub = applicationsStub(env, userId);
   return stub ? stub.getMessageFlowState() : null;
@@ -992,6 +1003,7 @@ async function sendInfoMessage(env, chatId, section) {
 }
 
 async function sendUtilStartMessage(env, chatId) {
+  await resetCustomsFlowForMainMenu(env, chatId);
   const sent = await telegram(env, 'sendMessage', {
     chat_id: chatId,
     text: UTIL_START_TEXT,
@@ -3085,7 +3097,11 @@ async function handleCatalogCallback(env, query) {
     hybridType: electric ? 'электромобиль / последовательный гибрид' : 'ДВС / параллельный гибрид'
   };
   if (state?.mode === 'declaration') {
-    await promptDeclarationCategory(env, message.chat.id, query.from?.id || message.chat.id, { ...state, vehicle, categoryBack: backCallback }, message);
+    await promptDeclarationCategory(env, message.chat.id, query.from?.id || message.chat.id, {
+      ...state,
+      vehicle,
+      categoryBack: `catalog:back:variants:${candidate.rowIndex}`
+    }, message);
     return;
   }
   const util = calculateUtil(vehicle);
@@ -3304,6 +3320,7 @@ async function handleGroupCalculation(env, query) {
 }
 
 async function sendMenu(env, chatId, text = MENU_TEXT) {
+  await resetCustomsFlowForMainMenu(env, chatId);
   await cleanupCustomsMessages(env, chatId, chatId);
   await cleanupTemporaryMessages(env, chatId, chatId);
   const sent = await telegram(env, 'sendMessage', {
@@ -3317,6 +3334,7 @@ async function sendMenu(env, chatId, text = MENU_TEXT) {
 }
 
 async function editMenu(env, message) {
+  await resetCustomsFlowForMainMenu(env, message.chat.id);
   await cleanupCustomsMessages(env, message.chat.id, message.chat.id, message.message_id);
   await cleanupTemporaryMessages(env, message.chat.id, message.chat.id, message.message_id);
   const edited = await telegram(env, 'editMessageText', {
@@ -3347,6 +3365,7 @@ async function showInfo(env, message, section) {
 }
 
 async function showUtilStart(env, message) {
+  await resetCustomsFlowForMainMenu(env, message.chat.id);
   const edited = await telegram(env, 'editMessageText', {
     chat_id: message.chat.id,
     message_id: message.message_id,

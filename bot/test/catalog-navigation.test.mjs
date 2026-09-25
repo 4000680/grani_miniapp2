@@ -38,3 +38,21 @@ test('uses the approved customs transition label and hides the electric hint for
   assert.doesNotMatch(workerSource, /Продолжить к утильсбору/);
   assert.match(workerSource, /!\(sourceParsed\?\.customsMode === 'passenger' && sourceParsed\.customsCcm\)/);
 });
+
+test('resets abandoned declaration mode when returning to the default utility menu', () => {
+  assert.match(workerSource, /async function resetCustomsFlowForMainMenu\(env, userId\)/);
+  for (const functionName of ['sendMenu', 'editMenu', 'showUtilStart']) {
+    const start = workerSource.indexOf(`async function ${functionName}(`);
+    const end = workerSource.indexOf('\n}', start);
+    assert.notEqual(start, -1, `${functionName} exists`);
+    assert.match(workerSource.slice(start, end), /resetCustomsFlowForMainMenu/);
+  }
+});
+
+test('declaration catalog selection has a valid back callback instead of an out-of-scope variable', () => {
+  const start = workerSource.indexOf('async function handleCatalogCallback(');
+  const end = workerSource.indexOf('\nasync function handleDocument(', start);
+  const handler = workerSource.slice(start, end);
+  assert.match(handler, /categoryBack: `catalog:back:variants:\$\{candidate\.rowIndex\}`/);
+  assert.doesNotMatch(handler, /categoryBack:\s*backCallback/);
+});
