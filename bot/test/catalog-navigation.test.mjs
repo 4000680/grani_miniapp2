@@ -56,3 +56,13 @@ test('declaration catalog selection has a valid back callback instead of an out-
   assert.match(handler, /categoryBack: `catalog:back:variants:\$\{candidate\.rowIndex\}`/);
   assert.doesNotMatch(handler, /categoryBack:\s*backCallback/);
 });
+
+test('ordinary catalog utility selection defaults to M1 before calculating, while special customs routes stay separate', () => {
+  const start = workerSource.indexOf('async function handleCatalogCallback(');
+  const end = workerSource.indexOf('\nasync function handleDocument(', start);
+  const handler = workerSource.slice(start, end);
+  assert.match(handler, /const declarationFlow = state\?\.mode === 'declaration'/);
+  assert.match(handler, /category: declarationFlow \? null : 'M1'/);
+  const calculationBranch = handler.slice(handler.indexOf('const calculation = query.data.match'));
+  assert.ok(calculationBranch.indexOf("if (sourceParsed?.customsMode === 'electric')") < calculationBranch.indexOf('const util = calculateUtil(vehicle)'));
+});

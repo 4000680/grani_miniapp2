@@ -11,7 +11,7 @@ test('документ передаёт распознанную категор�
 
 test('поиск по шаблону СЭП запрашивает группу категории до расчёта декларации', () => {
   const declarationCatalogPart = source.slice(source.indexOf("const calculation = query.data.match"), source.indexOf("if (sourceParsed?.customsMode === 'electric')"));
-  assert.match(declarationCatalogPart, /category: null/);
+  assert.match(declarationCatalogPart, /category: declarationFlow \? null : 'M1'/);
   assert.match(declarationCatalogPart, /categoryBack: `catalog:back:variants:\$\{candidate\.rowIndex\}`/);
   assert.doesNotMatch(declarationCatalogPart, /const util = calculateUtil\(vehicle\);[\s\S]*?promptDeclarationCategory/);
   assert.match(source, /text: 'M1 \/ M1G', callback_data: 'declaration:category:passenger'/);

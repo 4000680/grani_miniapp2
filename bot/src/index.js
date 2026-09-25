@@ -3077,6 +3077,7 @@ async function handleCatalogCallback(env, query) {
   if (!candidate) throw new Error('Автомобиль больше не найден в шаблоне СЭП');
 
   const electric = calculation[2] === 'e';
+  const declarationFlow = state?.mode === 'declaration';
   const ccm = electric ? null : Number(calculation[2]);
   const requestedWeight = Number(calculation[3]) || candidate.mass || null;
   const totalKw = calculationPower(candidate, electric);
@@ -3087,7 +3088,7 @@ async function handleCatalogCallback(env, query) {
     vin: null,
     surname: null,
     year: candidate.year,
-    category: null,
+    category: declarationFlow ? null : 'M1',
     ccm,
     combustionKw: candidate.combustionKw,
     electricKw: candidate.electricKw ? [candidate.electricKw] : [],
@@ -3096,7 +3097,7 @@ async function handleCatalogCallback(env, query) {
     issueDate: null,
     hybridType: electric ? 'электромобиль / последовательный гибрид' : 'ДВС / параллельный гибрид'
   };
-  if (state?.mode === 'declaration') {
+  if (declarationFlow) {
     await promptDeclarationCategory(env, message.chat.id, query.from?.id || message.chat.id, {
       ...state,
       vehicle,
@@ -3104,7 +3105,6 @@ async function handleCatalogCallback(env, query) {
     }, message);
     return;
   }
-  const util = calculateUtil(vehicle);
   if (sourceParsed?.customsMode === 'electric') {
     await showElectricCustomsCurrencyPrompt(
       env,
@@ -3116,6 +3116,7 @@ async function handleCatalogCallback(env, query) {
     );
     return;
   }
+  const util = calculateUtil(vehicle);
   const customs = sourceParsed?.customsDuty ? {
     customsValue: Number(sourceParsed.customsValue) || null,
     customsPayments: Number(sourceParsed.customsDuty),
