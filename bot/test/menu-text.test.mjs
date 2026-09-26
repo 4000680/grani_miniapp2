@@ -15,12 +15,12 @@ test('первый запуск показывает полное приветс
 test('главное меню разделяет расчёты и отдельно открывает Mini App', () => {
   assert.match(source, /text: '🛞 Рассчитать утильсбор', callback_data: 'menu:util'/);
   assert.match(source, /text: '🧾 Утильсбор по декларации', callback_data: 'menu:declaration'/);
-  assert.match(source, /text: '🧪 Лаборатории', callback_data: 'info:laboratories'/);
+  assert.match(source, /text: '🧪 Испытательные лаборатории', callback_data: 'org:home'/);
   assert.match(source, /text: '💳 Реквизиты', callback_data: 'info:payment'/);
   assert.match(source, /text: '📄 Получить ЭПТС', callback_data: 'info:epts'/);
   assert.match(source, /text: '🔎 Скрин СБКТС', callback_data: 'info:sbkts'/);
   assert.match(source, /text: '👤 Собственник ЭПТС', callback_data: 'info:owner'/);
-  assert.match(source, /\[\s*\{ text: '🧪 Лаборатории',[\s\S]*?\{ text: '💳 Реквизиты'/);
+  assert.match(source, /\[\{ text: '🧪 Испытательные лаборатории', callback_data: 'org:home' \}\]/);
   assert.match(source, /\[\s*\{ text: '📄 Получить ЭПТС',[\s\S]*?\{ text: '🔎 Скрин СБКТС'/);
   assert.doesNotMatch(source, /text: '📅 Рассчитать пени'/);
   assert.doesNotMatch(source, /text: '📟 Рассчитать по СБКТС или ЭПТС'/);

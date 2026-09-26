@@ -56,6 +56,14 @@ import {
   miniAppProfile
 } from './analytics.js';
 import { formatUtilYearReference } from './util-rate-reference.js';
+import organizationsCatalog from './organizations-catalog.json' with { type: 'json' };
+import {
+  ORGANIZATION_CATEGORIES,
+  categoryOrganizations,
+  organizationCard,
+  paginateOrganizations,
+  searchOrganizations
+} from './organization-catalog.js';
 export { ApplicationsStore } from './applications-store.js';
 
 const { hybridTypeLabel } = globalThis.GraniVehiclePower;
@@ -190,10 +198,8 @@ function menuKeyboard(env) {
       [{ text: '🚗 Таможенное оформление', callback_data: 'customs:start' }],
       [{ text: '🛞 Рассчитать утильсбор', callback_data: 'menu:util' }],
       [{ text: '🧾 Утильсбор по декларации', callback_data: 'menu:declaration' }],
-      [
-        { text: '🧪 Лаборатории', callback_data: 'info:laboratories' },
-        { text: '💳 Реквизиты', callback_data: 'info:payment' }
-      ],
+      [{ text: '🧪 Испытательные лаборатории', callback_data: 'org:home' }],
+      [{ text: '💳 Реквизиты', callback_data: 'info:payment' }],
       [
         { text: '📄 Получить ЭПТС', callback_data: 'info:epts' },
         { text: '🔎 Скрин СБКТС', callback_data: 'info:sbkts' }
@@ -827,6 +833,21 @@ async function setMessageFlowState(env, userId, state) {
 async function clearMessageFlowState(env, userId) {
   const stub = applicationsStub(env, userId);
   if (stub) await stub.clearMessageFlowState();
+}
+
+async function getOrganizationCatalogState(env, userId) {
+  const stub = applicationsStub(env, userId);
+  return stub ? stub.getOrganizationCatalogState() : null;
+}
+
+async function setOrganizationCatalogState(env, userId, state) {
+  const stub = applicationsStub(env, userId);
+  if (stub) await stub.setOrganizationCatalogState(state);
+}
+
+async function clearOrganizationCatalogState(env, userId) {
+  const stub = applicationsStub(env, userId);
+  if (stub) await stub.clearOrganizationCatalogState();
 }
 
 function mergeTemporaryMessageIds(current, ...messageIds) {
@@ -3353,6 +3374,7 @@ async function handleGroupCalculation(env, query) {
 }
 
 async function sendMenu(env, chatId, text = MENU_TEXT) {
+  await clearOrganizationCatalogState(env, chatId);
   await resetCustomsFlowForMainMenu(env, chatId);
   await cleanupCustomsMessages(env, chatId, chatId);
   await cleanupTemporaryMessages(env, chatId, chatId);
@@ -3367,6 +3389,7 @@ async function sendMenu(env, chatId, text = MENU_TEXT) {
 }
 
 async function editMenu(env, message) {
+  await clearOrganizationCatalogState(env, message.chat.id);
   await resetCustomsFlowForMainMenu(env, message.chat.id);
   await cleanupCustomsMessages(env, message.chat.id, message.chat.id, message.message_id);
   await cleanupTemporaryMessages(env, message.chat.id, message.chat.id, message.message_id);
@@ -3379,6 +3402,164 @@ async function editMenu(env, message) {
   });
   await trackTemporaryMessage(env, message.chat.id, message.message_id);
   return edited;
+}
+
+function organizationKeyboard(rows = [], back = 'org:home') {
+  return { inline_keyboard: [...rows, [
+    { text: '← Назад', callback_data: back },
+    { text: '🏠 Главное меню', callback_data: 'menu' }
+  ]] };
+}
+
+function truncateOrganizationName(value, max = 58) {
+  const text = String(value || 'Организация').replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+async function editOrganizationScreen(env, message, text, keyboard) {
+  const edited = await telegram(env, 'editMessageText', {
+    chat_id: message.chat.id, message_id: message.message_id, text,
+    parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: keyboard
+  });
+  await trackTemporaryMessage(env, message.chat.id, message.message_id);
+  return edited;
+}
+
+async function showOrganizationHome(env, message) {
+  await clearOrganizationCatalogState(env, message.chat.id);
+  return editOrganizationScreen(env, message,
+    '🧪 <b>Каталог организаций</b>\n\nВыберите электронный паспорт. В карточках указаны адрес и контакты. Списки можно просматривать целиком или искать по городу и региону.',
+    organizationKeyboard([
+      [{ text: '🚗 ЭПТС (транспортные средства)', callback_data: 'org:section:epts' }],
+      [{ text: '🚜 ЭПСМ (самоходные машины)', callback_data: 'org:section:epsm' }]
+    ], 'menu'));
+}
+
+async function showOrganizationSection(env, message, section) {
+  if (!['epts', 'epsm'].includes(section)) return showOrganizationHome(env, message);
+  const rows = Object.entries(ORGANIZATION_CATEGORIES)
+    .filter(([, category]) => category.section === section)
+    .map(([key, category]) => [{
+      text: `${category.title} (${categoryOrganizations(organizationsCatalog, key).length})`,
+      callback_data: `org:category:${key}`
+    }]);
+  const title = section === 'epsm' ? 'ЭПСМ (самоходные машины)' : 'ЭПТС (транспортные средства)';
+  return editOrganizationScreen(env, message, `🧪 <b>${title}</b>\n\nВыберите нужную услугу.`, organizationKeyboard(rows, 'org:home'));
+}
+
+async function showOrganizationCategory(env, message, key) {
+  const category = ORGANIZATION_CATEGORIES[key];
+  if (!category) return showOrganizationHome(env, message);
+  const count = categoryOrganizations(organizationsCatalog, key).length;
+  return editOrganizationScreen(env, message,
+    `🧪 <b>${category.title}</b>\n\nВ каталоге: <b>${count}</b> организаций.\nМожно найти по городу или региону либо открыть полный список.`,
+    organizationKeyboard([
+      [{ text: '🔎 Найти по городу или региону', callback_data: `org:search:${key}` }],
+      [{ text: '📋 Показать полный список', callback_data: `org:list:${key}:0` }]
+    ], `org:section:${category.section}`));
+}
+
+async function showOrganizationList(env, message, key, page = 0, source = null, title = null, searchMode = false) {
+  const category = ORGANIZATION_CATEGORIES[key];
+  if (!category) return showOrganizationHome(env, message);
+  const items = source || categoryOrganizations(organizationsCatalog, key);
+  const result = paginateOrganizations(items, page);
+  const rows = result.items.map(item => [{
+    text: truncateOrganizationName(item.name),
+    callback_data: `org:card:${key}:${result.currentPage}:${item.id}${searchMode ? ':search' : ''}`
+  }]);
+  if (result.pageCount > 1) rows.push([
+    { text: '◀️', callback_data: `${searchMode ? 'org:searchlist' : 'org:list'}:${key}:${Math.max(0, result.currentPage - 1)}` },
+    { text: `${result.currentPage + 1}/${result.pageCount}`, callback_data: 'org:noop' },
+    { text: '▶️', callback_data: `${searchMode ? 'org:searchlist' : 'org:list'}:${key}:${Math.min(result.pageCount - 1, result.currentPage + 1)}` }
+  ]);
+  rows.push([{ text: '🔎 Найти по городу или региону', callback_data: `org:search:${key}` }]);
+  const start = result.total ? result.currentPage * 10 + 1 : 0;
+  return editOrganizationScreen(env, message,
+    `🧪 <b>${title || category.title}</b>\n\nОрганизации ${start}–${result.currentPage * 10 + result.items.length} из ${result.total}.`,
+    organizationKeyboard(rows, `org:category:${key}`));
+}
+
+async function promptOrganizationSearch(env, message, key) {
+  const category = ORGANIZATION_CATEGORIES[key];
+  if (!category) return showOrganizationHome(env, message);
+  await setOrganizationCatalogState(env, message.chat.id, { mode: 'city-search', category: key });
+  return editOrganizationScreen(env, message,
+    `🔎 <b>Поиск: ${category.title}</b>\n\nНапишите город или регион. Например: <i>Самара</i>, <i>Московская область</i>, <i>Санкт-Петербург</i>.\n\nПоиск по району, улице, метро и ближайшим точкам добавим после проверки адресов и координат.`,
+    organizationKeyboard([], `org:category:${key}`));
+}
+
+async function handleOrganizationCatalogText(env, message) {
+  const state = await getOrganizationCatalogState(env, message.chat.id);
+  if (state?.mode !== 'city-search' || !ORGANIZATION_CATEGORIES[state.category]) return false;
+  const found = searchOrganizations(categoryOrganizations(organizationsCatalog, state.category), message.text);
+  if (!found.length) {
+    await clearOrganizationCatalogState(env, message.chat.id);
+    await telegram(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: '🔎 <b>Ничего не найдено</b>\n\nПопробуйте указать город или регион короче.',
+      parse_mode: 'HTML',
+      reply_markup: organizationKeyboard([
+        [{ text: '🔎 Новый поиск', callback_data: `org:search:${state.category}` }],
+        [{ text: '📋 Полный список', callback_data: `org:list:${state.category}:0` }]
+      ], `org:category:${state.category}`)
+    });
+    return true;
+  }
+  await setOrganizationCatalogState(env, message.chat.id, {
+    mode: 'search-results', category: state.category,
+    query: String(message.text).trim().slice(0, 80), ids: found.map(item => item.id)
+  });
+  const heading = `Результаты: ${String(message.text).trim().slice(0, 60)}`;
+  const page = paginateOrganizations(found, 0);
+  // The first page is sent as a new message because the search prompt is already in the chat history.
+  const rows = page.items.map(item => [{
+    text: truncateOrganizationName(item.name), callback_data: `org:card:${state.category}:0:${item.id}:search`
+  }]);
+  if (page.pageCount > 1) rows.push([
+    { text: '◀️', callback_data: `org:searchlist:${state.category}:0` },
+    { text: `1/${page.pageCount}`, callback_data: 'org:noop' },
+    { text: '▶️', callback_data: `org:searchlist:${state.category}:1` }
+  ]);
+  rows.push([{ text: '🔎 Новый поиск', callback_data: `org:search:${state.category}` }]);
+  await telegram(env, 'sendMessage', {
+    chat_id: message.chat.id, text: `🔎 <b>${heading}</b>\n\nНайдено организаций: <b>${found.length}</b>.`,
+    parse_mode: 'HTML', reply_markup: organizationKeyboard(rows, `org:category:${state.category}`)
+  });
+  return true;
+}
+
+async function showOrganizationSearchPage(env, message, key, page) {
+  const state = await getOrganizationCatalogState(env, message.chat.id);
+  if (state?.mode !== 'search-results' || state.category !== key) return showOrganizationCategory(env, message, key);
+  const ids = new Set(state.ids || []);
+  const found = categoryOrganizations(organizationsCatalog, key).filter(item => ids.has(item.id));
+  return showOrganizationList(env, message, key, page, found, `Результаты: ${state.query}`, true);
+}
+
+async function showOrganizationCard(env, message, key, page, id, searchMode = false) {
+  const category = ORGANIZATION_CATEGORIES[key];
+  const state = searchMode ? await getOrganizationCatalogState(env, message.chat.id) : null;
+  const item = categoryOrganizations(organizationsCatalog, key).find(candidate =>
+    candidate.id === id && (!searchMode || state?.ids?.includes(id)));
+  if (!category || !item) return showOrganizationCategory(env, message, key);
+  return editOrganizationScreen(env, message, organizationCard(item), organizationKeyboard([
+    [{ text: '📋 К списку', callback_data: searchMode ? `org:searchlist:${key}:${page}` : `org:list:${key}:${page}` }]
+  ], `org:category:${key}`));
+}
+
+async function handleOrganizationCatalogCallback(env, query) {
+  const data = query.data || '';
+  const message = query.message;
+  if (data === 'org:home') return showOrganizationHome(env, message);
+  if (data === 'org:noop') return;
+  const [, action, key, page, id, mode] = data.split(':');
+  if (action === 'section') return showOrganizationSection(env, message, key);
+  if (action === 'category') return showOrganizationCategory(env, message, key);
+  if (action === 'search') return promptOrganizationSearch(env, message, key);
+  if (action === 'list') return showOrganizationList(env, message, key, page);
+  if (action === 'searchlist') return showOrganizationSearchPage(env, message, key, page);
+  if (action === 'card') return showOrganizationCard(env, message, key, page, id, mode === 'search');
 }
 
 async function showInfo(env, message, section) {
@@ -4127,6 +4308,7 @@ async function handleUpdate(env, update) {
     if (await handleCustomsReply(env, update.message)) return;
     if (await handleDeclarationReply(env, update.message)) return;
     if (await handleCatalogWeightReply(env, update.message)) return;
+    if (await handleOrganizationCatalogText(env, update.message)) return;
     if (await handleCatalogText(env, update.message)) return;
     return;
   }
@@ -4140,6 +4322,7 @@ async function handleUpdate(env, update) {
   await telegram(env, 'answerCallbackQuery', { callback_query_id: query.id });
   if (!query.message) return;
   if (query.data?.startsWith('analytics:')) await handleAnalyticsCallback(env, query);
+  else if (query.data?.startsWith('org:')) await handleOrganizationCatalogCallback(env, query);
   else if (query.data?.startsWith('catalog:')) await handleCatalogCallback(env, query);
   else if (query.data?.startsWith('customs:')) await handleCustomsCallback(env, query);
   else if (query.data?.startsWith('declaration:')) await handleDeclarationCallback(env, query);

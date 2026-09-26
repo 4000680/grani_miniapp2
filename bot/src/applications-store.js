@@ -115,4 +115,17 @@ export class ApplicationsStore extends DurableObject {
   async clearMessageFlowState() {
     await this.ctx.storage.delete('message-flow-state');
   }
+
+  async getOrganizationCatalogState() {
+    return (await this.ctx.storage.get('organization-catalog-state')) || null;
+  }
+
+  async setOrganizationCatalogState(state) {
+    await this.ctx.storage.put('organization-catalog-state', state);
+    return state;
+  }
+
+  async clearOrganizationCatalogState() {
+    await this.ctx.storage.delete('organization-catalog-state');
+  }
 }
