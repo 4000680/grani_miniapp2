@@ -3428,7 +3428,7 @@ async function editOrganizationScreen(env, message, text, keyboard) {
 async function showOrganizationHome(env, message) {
   await clearOrganizationCatalogState(env, message.chat.id);
   return editOrganizationScreen(env, message,
-    '🧪 <b>Каталог организаций</b>\n\nВыберите электронный паспорт. В карточках указаны адрес и контакты. Списки можно просматривать целиком или искать по городу и региону.',
+    '🧪 <b>Каталог организаций</b>\n\nВыберите электронный паспорт. В карточках указаны адрес и контакты. В списках можно искать организацию по названию или месту и просматривать все варианты.',
     organizationKeyboard([
       [{ text: '🚗 ЭПТС (транспортные средства)', callback_data: 'org:section:epts' }],
       [{ text: '🚜 ЭПСМ (самоходные машины)', callback_data: 'org:section:epsm' }]
@@ -3454,9 +3454,9 @@ async function showOrganizationCategory(env, message, key) {
   await clearOrganizationCatalogState(env, message.chat.id);
   const count = categoryOrganizations(organizationsCatalog, key).length;
   return editOrganizationScreen(env, message,
-    `🧪 <b>${category.title}</b>\n\nВ каталоге: <b>${count}</b> организаций.\nМожно найти по городу или региону либо открыть полный список.`,
+    `🧪 <b>${category.title}</b>\n\nВ каталоге: <b>${count}</b> организаций.\nНайдите организацию по названию, городу, региону, району или улице либо откройте полный список.`,
     organizationKeyboard([
-      [{ text: '🔎 Найти по городу или региону', callback_data: `org:search:${key}` }],
+      [{ text: '🔎 Поиск по названию или адресу', callback_data: `org:search:${key}` }],
       [{ text: '📋 Показать полный список', callback_data: `org:list:${key}:0` }]
     ], `org:section:${category.section}`));
 }
@@ -3476,7 +3476,7 @@ async function showOrganizationList(env, message, key, page = 0, source = null, 
     { text: `${result.currentPage + 1}/${result.pageCount}`, callback_data: 'org:noop' },
     { text: '▶️', callback_data: `${searchMode ? 'org:searchlist' : 'org:list'}:${key}:${Math.min(result.pageCount - 1, result.currentPage + 1)}` }
   ]);
-  rows.push([{ text: '🔎 Найти по городу или региону', callback_data: `org:search:${key}` }]);
+  rows.push([{ text: '🔎 Поиск по названию или адресу', callback_data: `org:search:${key}` }]);
   const start = result.total ? result.currentPage * 10 + 1 : 0;
   return editOrganizationScreen(env, message,
     `🧪 <b>${title || category.title}</b>\n\nОрганизации ${start}–${result.currentPage * 10 + result.items.length} из ${result.total}.`,
@@ -3488,7 +3488,7 @@ async function promptOrganizationSearch(env, message, key) {
   if (!category) return showOrganizationHome(env, message);
   await setOrganizationCatalogState(env, message.chat.id, { mode: 'city-search', category: key });
   return editOrganizationScreen(env, message,
-    `🔎 <b>Поиск: ${category.title}</b>\n\nНапишите город или регион. Например: <i>Самара</i>, <i>Московская область</i>, <i>Санкт-Петербург</i>.\n\nПоиск по району, улице, метро и ближайшим точкам добавим после проверки адресов и координат.`,
+    `🔎 <b>Поиск: ${category.title}</b>\n\nВведите название организации, город, регион, район или улицу. Например: <i>Авточек</i>, <i>Самара</i>, <i>Московская область</i>, <i>Чертаново</i>. Можно написать обычной фразой, например: «я в районе Чертаново».`,
     organizationKeyboard([], `org:category:${key}`));
 }
 
@@ -3503,7 +3503,7 @@ async function handleOrganizationCatalogText(env, message) {
     });
     await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
-      text: `🔎 <b>По запросу «${escapeHtml(query)}» организации не найдены</b>\n\nНапишите другой город или регион. Вы остались в поиске лабораторий.`,
+      text: `🔎 <b>По запросу «${escapeHtml(query)}» точных совпадений нет</b>\n\nПопробуйте короткое название организации, город, регион, район или улицу. Можно открыть полный список. Вы остались в поиске организаций.`,
       parse_mode: 'HTML',
       reply_markup: organizationKeyboard([
         [{ text: '🔎 Новый поиск', callback_data: `org:search:${state.category}` }],

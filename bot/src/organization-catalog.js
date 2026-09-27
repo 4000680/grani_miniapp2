@@ -30,10 +30,17 @@ function normalize(value) {
   return String(value || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/g, '');
 }
 
+const SEARCH_LABELS = new Set([
+  'нахожусь', 'город', 'города', 'область', 'области', 'район', 'районе',
+  'округ', 'округе', 'улица', 'улице', 'ул', 'проспект', 'проспекте',
+  'метро', 'станция', 'станции', 'рядом', 'ищу', 'найти', 'организация',
+  'название', 'названию', 'названии'
+]);
+
 export function searchOrganizations(items, query) {
   const terms = String(query || '').toLowerCase().replace(/ё/g, 'е')
     .split(/[^a-zа-я0-9]+/)
-    .filter(word => word.length >= 3 && !['нахожусь', 'город', 'область', 'район'].includes(word));
+    .filter(word => word.length >= 3 && !SEARCH_LABELS.has(word));
   if (!terms.length) return [];
   return items.filter(item => {
     const haystack = normalize([item.name, item.address, item.region, item.city].join(' '));

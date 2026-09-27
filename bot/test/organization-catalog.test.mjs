@@ -31,13 +31,17 @@ test('каталог выводится страницами по десять �
   assert.equal(page.items.length, 2);
 });
 
-test('поиск сопоставляет город, регион и адрес без учёта регистра', () => {
+test('поиск сопоставляет город, регион, название и адрес по свободной фразе', () => {
   const items = [
     { name: 'ООО Тест', address: 'г. Самара, ул. Полевая', region: 'Самарская область', city: 'Самара' },
-    { name: 'ООО Север', address: 'г. Москва', region: 'Москва', city: 'Москва' }
+    { name: 'ООО Север', address: 'г. Москва, р-н Печатники', region: 'Москва', city: 'Москва' },
+    { name: 'ООО Авточек', address: 'г. Казань, ул. Центральная', region: 'Татарстан', city: 'Казань' }
   ];
   assert.deepEqual(searchOrganizations(items, 'самарская область'), [items[0]]);
   assert.deepEqual(searchOrganizations(items, 'полевая'), [items[0]]);
+  assert.deepEqual(searchOrganizations(items, 'я нахожусь в районе Печатники'), [items[1]]);
+  assert.deepEqual(searchOrganizations(items, 'метро Печатники'), [items[1]]);
+  assert.deepEqual(searchOrganizations(items, 'название Авточек'), [items[2]]);
 });
 
 test('карточка организации экранирует данные для Telegram HTML', () => {
