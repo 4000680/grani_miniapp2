@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
 import { readFile } from 'node:fs/promises';
+import test from 'node:test';
 import catalog from '../src/organizations-catalog.json' with { type: 'json' };
 import {
   ORGANIZATION_CATEGORIES,
   categoryOrganizations,
+  distanceKm,
   organizationCard,
   paginateOrganizations,
-  searchOrganizations
+  rankOrganizationsByDistance,
+  searchOrganizations,
+  searchOrganizationsByName
 } from '../src/organization-catalog.js';
 
 const botSource = await readFile(new URL('../src/index.js', import.meta.url), 'utf8');
@@ -54,13 +57,36 @@ test('пустой поиск не сбрасывает пользователя
   const searchStart = botSource.indexOf('async function handleOrganizationCatalogText');
   const searchEnd = botSource.indexOf('async function showOrganizationSearchPage', searchStart);
   const searchFlow = botSource.slice(searchStart, searchEnd);
-  const emptyStart = searchFlow.indexOf('if (!found.length)');
-  const emptyEnd = searchFlow.indexOf("mode: 'search-results'", emptyStart);
-  const emptyResult = searchFlow.slice(emptyStart, emptyEnd);
-  assert.match(emptyResult, /setOrganizationCatalogState[\s\S]*mode: 'city-search'/);
-  assert.doesNotMatch(emptyResult, /clearOrganizationCatalogState/);
+  assert.match(searchFlow, /mode: 'org-name-search'/);
+  assert.match(botSource, /'org-name-search' : 'place-search'/);
 
   const updateStart = botSource.indexOf('async function handleUpdate');
   const updateFlow = botSource.slice(updateStart);
   assert.ok(updateFlow.indexOf('handleOrganizationCatalogText') < updateFlow.indexOf('handleCatalogText'));
+});
+
+test('name search matches only organization names, not city/address', () => {
+  const organizations = [
+    { id: 'moscow', name: 'ООО «Авточек Москва»', address: 'Москва, улица 1' },
+    { id: 'samara', name: 'ООО «Тест-Лаб»', address: 'Самара, улица 2' }
+  ];
+  assert.deepEqual(searchOrganizationsByName(organizations, 'Авточек'), [organizations[0]]);
+  assert.deepEqual(searchOrganizationsByName(organizations, 'улица'), []);
+  assert.deepEqual(searchOrganizations(organizations, 'Москва'), [organizations[0]]);
+});
+
+test('distance ranking sorts organizations by their straight-line distance', () => {
+  const organizations = [
+    { id: 'moscow', name: 'Москва' },
+    { id: 'samara', name: 'Самара' }
+  ];
+  const coordinates = { organizations: [
+    { id: 'moscow', lat: 55.75, lon: 37.61, precision: 'address' },
+    { id: 'samara', lat: 53.2, lon: 50.1, precision: 'postcode' }
+  ] };
+  const ranked = rankOrganizationsByDistance(organizations, coordinates, { lat: 55.75, lon: 37.61 });
+  assert.deepEqual(ranked.map(item => item.item.id), ['moscow', 'samara']);
+  assert.equal(ranked[0].distanceKm, 0);
+  assert.equal(ranked[1].precision, 'postcode');
+  assert.ok(distanceKm({ lat: 55.75, lon: 37.61 }, { lat: 53.2, lon: 50.1 }) > 300);
 });

@@ -23,6 +23,7 @@
   "vars": {
     "MINI_APP_URL": "https://4000680.github.io/grani_miniapp2/",
     "CONTACT_URL": "https://t.me/grani_broker",
-    "DONATE_URL": ""
+    "DONATE_URL": "",
+    "GEOCODER_URL": "https://nominatim.openstreetmap.org/search"
   }
 }

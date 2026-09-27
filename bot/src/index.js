@@ -57,12 +57,15 @@ import {
 } from './analytics.js';
 import { formatUtilYearReference } from './util-rate-reference.js';
 import organizationsCatalog from './organizations-catalog.json' with { type: 'json' };
+import organizationsGeo from './organizations-geo.json' with { type: 'json' };
 import {
   ORGANIZATION_CATEGORIES,
   categoryOrganizations,
   organizationCard,
   paginateOrganizations,
-  searchOrganizations
+  searchOrganizations,
+  searchOrganizationsByName,
+  rankOrganizationsByDistance
 } from './organization-catalog.js';
 export { ApplicationsStore } from './applications-store.js';
 
@@ -3456,7 +3459,8 @@ async function showOrganizationCategory(env, message, key) {
   return editOrganizationScreen(env, message,
     `🧪 <b>${category.title}</b>\n\nВ каталоге: <b>${count}</b> организаций.\nНайдите организацию по названию, городу, региону, району или улице либо откройте полный список.`,
     organizationKeyboard([
-      [{ text: '🔎 Поиск по названию или адресу', callback_data: `org:search:${key}` }],
+      [{ text: '🔤 Найти по названию', callback_data: `org:search:${key}:name` }],
+      [{ text: '📍 Найти по городу или адресу', callback_data: `org:search:${key}:place` }],
       [{ text: '📋 Показать полный список', callback_data: `org:list:${key}:0` }]
     ], `org:section:${category.section}`));
 }
@@ -3465,10 +3469,11 @@ async function showOrganizationList(env, message, key, page = 0, source = null, 
   const category = ORGANIZATION_CATEGORIES[key];
   if (!category) return showOrganizationHome(env, message);
   if (!searchMode) await clearOrganizationCatalogState(env, message.chat.id);
+  const searchState = searchMode ? await getOrganizationCatalogState(env, message.chat.id) : null;
   const items = source || categoryOrganizations(organizationsCatalog, key);
   const result = paginateOrganizations(items, page);
   const rows = result.items.map(item => [{
-    text: truncateOrganizationName(item.name),
+    text: truncateOrganizationName(`${searchState?.distances?.[item.id] ? `${searchState.distances[item.id].precision === 'address' ? '' : '~'}${searchState.distances[item.id].distanceKm} км · ` : ''}${item.name}`),
     callback_data: `org:card:${key}:${result.currentPage}:${item.id}${searchMode ? ':search' : ''}`
   }]);
   if (result.pageCount > 1) rows.push([
@@ -3476,71 +3481,143 @@ async function showOrganizationList(env, message, key, page = 0, source = null, 
     { text: `${result.currentPage + 1}/${result.pageCount}`, callback_data: 'org:noop' },
     { text: '▶️', callback_data: `${searchMode ? 'org:searchlist' : 'org:list'}:${key}:${Math.min(result.pageCount - 1, result.currentPage + 1)}` }
   ]);
-  rows.push([{ text: '🔎 Поиск по названию или адресу', callback_data: `org:search:${key}` }]);
+  rows.push([{ text: '🔤 Поиск по названию', callback_data: `org:search:${key}:name` }]);
+  rows.push([{ text: '📍 Поиск по месту', callback_data: `org:search:${key}:place` }]);
   const start = result.total ? result.currentPage * 10 + 1 : 0;
   return editOrganizationScreen(env, message,
     `🧪 <b>${title || category.title}</b>\n\nОрганизации ${start}–${result.currentPage * 10 + result.items.length} из ${result.total}.`,
     organizationKeyboard(rows, `org:category:${key}`));
 }
 
-async function promptOrganizationSearch(env, message, key) {
+async function promptOrganizationSearch(env, message, key, mode = 'place') {
   const category = ORGANIZATION_CATEGORIES[key];
   if (!category) return showOrganizationHome(env, message);
-  await setOrganizationCatalogState(env, message.chat.id, { mode: 'city-search', category: key });
+  const searchMode = mode === 'name' ? 'org-name-search' : 'place-search';
+  await setOrganizationCatalogState(env, message.chat.id, { mode: searchMode, category: key });
   return editOrganizationScreen(env, message,
-    `🔎 <b>Поиск: ${category.title}</b>\n\nВведите название организации, город, регион, район или улицу. Например: <i>Авточек</i>, <i>Самара</i>, <i>Московская область</i>, <i>Чертаново</i>. Можно написать обычной фразой, например: «я в районе Чертаново».`,
+    mode === 'name'
+      ? `🔤 <b>Поиск организации по названию</b>\n\nВведите часть названия, например: <i>Авточек</i>. Поиск проверяет только названия организаций.`
+      : `📍 <b>Поиск по местоположению</b>\n\nВведите город, регион, район, метро или улицу. Например: <i>Москва</i>, <i>Пенза</i>, <i>Чертаново</i>, <i>метро Котельники</i>. Если в указанном месте лабораторий нет, покажу ближайшие и расстояние до них.`,
     organizationKeyboard([], `org:category:${key}`));
+}
+
+function cleanLocationQuery(query) {
+  return String(query || '').replace(/^(?:я\s+)?(?:нахожусь\s+)?(?:в\s+)?(?:районе\s+|городе\s+|области\s+)?/iu, '').trim();
+}
+
+async function geocodeOrganizationPlace(env, userId, query) {
+  const stub = env.APPLICATIONS?.getByName('organization-geocoder');
+  if (!stub) return null;
+  try { return await stub.geocodePlace(query, env.GEOCODER_URL); } catch (error) {
+    console.error('Organization place lookup failed:', error?.message || error);
+    return null;
+  }
+}
+
+async function sendOrganizationSearchResults(env, message, { category, query, title, ranked, items, searchType = 'place', coverageTotal = items.length, hasExactLocation = false }) {
+  const page = paginateOrganizations(items, 0);
+  const byId = new Map(ranked.map(entry => [entry.item.id, entry]));
+  const rows = page.items.map(item => {
+    const result = byId.get(item.id);
+    const distance = result ? `${result.precision === 'address' ? '' : '~'}${Math.round(result.distanceKm)} км · ` : '';
+    return [{ text: truncateOrganizationName(`${distance}${item.name}`), callback_data: `org:card:${category}:0:${item.id}:search` }];
+  });
+  if (page.pageCount > 1) rows.push([
+    { text: '◀️', callback_data: `org:searchlist:${category}:0` },
+    { text: `1/${page.pageCount}`, callback_data: 'org:noop' },
+    { text: '▶️', callback_data: `org:searchlist:${category}:1` }
+  ]);
+  rows.push([{ text: searchType === 'name' ? '🔤 Новый поиск по названию' : '📍 Новый поиск по месту', callback_data: `org:search:${category}:${searchType}` }]);
+  await setOrganizationCatalogState(env, message.chat.id, {
+    mode: 'search-results', searchType, category, query, title,
+    ids: items.map(item => item.id), distances: Object.fromEntries(ranked.map(entry => [entry.item.id, {
+      distanceKm: Math.round(entry.distanceKm), precision: entry.precision
+    }]))
+  });
+  const note = ranked.length ? `\nРасстояние по прямой${ranked.some(item => item.precision !== 'address') ? '; знак ~ означает примерную точку' : ''}.` : '';
+  const geoSummary = searchType !== 'place' ? '' : hasExactLocation
+    ? (ranked.length < coverageTotal ? `\nРасстояния рассчитаны для ${ranked.length} из ${coverageTotal} совпадений; остальные без координат в конце списка.` : '')
+    : `\nБлижайшие рассчитаны среди ${organizationsGeo.organizations.length} из ${coverageTotal} записей с координатами.`;
+  const resultSummary = searchType === 'name'
+    ? `Найдено организаций: <b>${items.length}</b>.`
+    : `Показаны ближайшие организации: <b>${items.length}</b>.`;
+  const attribution = searchType === 'place'
+    ? `\nИсточник координат: <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>.`
+    : '';
+  return telegram(env, 'sendMessage', {
+    chat_id: message.chat.id,
+    text: `🔎 <b>${escapeHtml(title)}</b>\n\n${items.length ? resultSummary : 'Не удалось определить ближайшие организации по адресам каталога.'}${note}${geoSummary}${attribution}`,
+    parse_mode: 'HTML', disable_web_page_preview: true,
+    reply_markup: organizationKeyboard(rows, `org:category:${category}`)
+  });
 }
 
 async function handleOrganizationCatalogText(env, message) {
   const state = await getOrganizationCatalogState(env, message.chat.id);
-  if (!['city-search', 'search-results'].includes(state?.mode) || !ORGANIZATION_CATEGORIES[state.category]) return false;
+  if (!['city-search', 'org-name-search', 'place-search', 'search-results'].includes(state?.mode) || !ORGANIZATION_CATEGORIES[state.category]) return false;
+  const activeMode = state.mode === 'search-results' ? (state.searchType === 'name' ? 'org-name-search' : 'place-search') : state.mode;
   const query = String(message.text || '').trim().slice(0, 80);
-  const found = searchOrganizations(categoryOrganizations(organizationsCatalog, state.category), query);
-  if (!found.length) {
+  const candidates = categoryOrganizations(organizationsCatalog, state.category);
+  if (activeMode === 'org-name-search') {
+    const found = searchOrganizationsByName(candidates, query);
+    if (found.length) {
+      return sendOrganizationSearchResults(env, message, {
+        category: state.category, query, title: `По названию «${query}»`, searchType: 'name',
+        ranked: [], items: found
+      });
+    }
     await setOrganizationCatalogState(env, message.chat.id, {
-      mode: 'city-search', category: state.category, lastQuery: query
+      mode: 'org-name-search', category: state.category, lastQuery: query
     });
     await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
-      text: `🔎 <b>По запросу «${escapeHtml(query)}» точных совпадений нет</b>\n\nПопробуйте короткое название организации, город, регион, район или улицу. Можно открыть полный список. Вы остались в поиске организаций.`,
+      text: `🔤 <b>В названии не найдено «${escapeHtml(query)}»</b>\n\nПроверьте написание или попробуйте другую часть названия. Поиск по названию остаётся активным.`,
       parse_mode: 'HTML',
       reply_markup: organizationKeyboard([
-        [{ text: '🔎 Новый поиск', callback_data: `org:search:${state.category}` }],
+        [{ text: '🔤 Повторить поиск по названию', callback_data: `org:search:${state.category}:name` }],
         [{ text: '📋 Полный список', callback_data: `org:list:${state.category}:0` }]
       ], `org:category:${state.category}`)
     });
     return true;
   }
-  await setOrganizationCatalogState(env, message.chat.id, {
-    mode: 'search-results', category: state.category,
-    query, ids: found.map(item => item.id)
+  const place = cleanLocationQuery(query);
+  const origin = await geocodeOrganizationPlace(env, message.chat.id, place);
+  if (!origin) {
+    await telegram(env, 'sendMessage', {
+      chat_id: message.chat.id,
+      text: `📍 Не удалось распознать место «${escapeHtml(place)}». Напишите город или регион, например «Пенза» или «Самарская область». Поиск по местоположению остаётся активным.`,
+      parse_mode: 'HTML',
+      reply_markup: organizationKeyboard([
+        [{ text: '📍 Повторить поиск по месту', callback_data: `org:search:${state.category}:place` }],
+        [{ text: '📋 Полный список', callback_data: `org:list:${state.category}:0` }]
+      ], `org:category:${state.category}`)
+    });
+    return true;
+  }
+  const exact = searchOrganizations(candidates, place);
+  const ranked = rankOrganizationsByDistance(exact.length ? exact : candidates, organizationsGeo, origin);
+  const nearby = ranked.slice(0, exact.length ? ranked.length : 10);
+  const rankedIds = new Set(nearby.map(entry => entry.item.id));
+  const unlocatedExact = exact.filter(item => !rankedIds.has(item.id));
+  const items = exact.length
+    ? [...nearby.map(entry => entry.item), ...unlocatedExact]
+    : nearby.map(entry => entry.item);
+  const title = exact.length
+    ? `${place}: лаборатории поблизости`
+    : `Ближайшие лаборатории к «${place}»`;
+  return sendOrganizationSearchResults(env, message, {
+    category: state.category, query: place, title, ranked: nearby, items,
+    coverageTotal: exact.length || candidates.length,
+    hasExactLocation: exact.length > 0
   });
-  const heading = `Результаты: ${query.slice(0, 60)}`;
-  const page = paginateOrganizations(found, 0);
-  // The first page is sent as a new message because the search prompt is already in the chat history.
-  const rows = page.items.map(item => [{
-    text: truncateOrganizationName(item.name), callback_data: `org:card:${state.category}:0:${item.id}:search`
-  }]);
-  if (page.pageCount > 1) rows.push([
-    { text: '◀️', callback_data: `org:searchlist:${state.category}:0` },
-    { text: `1/${page.pageCount}`, callback_data: 'org:noop' },
-    { text: '▶️', callback_data: `org:searchlist:${state.category}:1` }
-  ]);
-  rows.push([{ text: '🔎 Новый поиск', callback_data: `org:search:${state.category}` }]);
-  await telegram(env, 'sendMessage', {
-    chat_id: message.chat.id, text: `🔎 <b>${heading}</b>\n\nНайдено организаций: <b>${found.length}</b>.`,
-    parse_mode: 'HTML', reply_markup: organizationKeyboard(rows, `org:category:${state.category}`)
-  });
-  return true;
 }
 
 async function showOrganizationSearchPage(env, message, key, page) {
   const state = await getOrganizationCatalogState(env, message.chat.id);
   if (state?.mode !== 'search-results' || state.category !== key) return showOrganizationCategory(env, message, key);
-  const ids = new Set(state.ids || []);
-  const found = categoryOrganizations(organizationsCatalog, key).filter(item => ids.has(item.id));
-  return showOrganizationList(env, message, key, page, found, `Результаты: ${state.query}`, true);
+  const itemsById = new Map(categoryOrganizations(organizationsCatalog, key).map(item => [item.id, item]));
+  const found = (state.ids || []).map(id => itemsById.get(id)).filter(Boolean);
+  return showOrganizationList(env, message, key, page, found, state.title || `Результаты: ${state.query}`, true);
 }
 
 async function showOrganizationCard(env, message, key, page, id, searchMode = false) {
@@ -3549,7 +3626,9 @@ async function showOrganizationCard(env, message, key, page, id, searchMode = fa
   const item = categoryOrganizations(organizationsCatalog, key).find(candidate =>
     candidate.id === id && (!searchMode || state?.ids?.includes(id)));
   if (!category || !item) return showOrganizationCategory(env, message, key);
-  return editOrganizationScreen(env, message, organizationCard(item), organizationKeyboard([
+  const distance = state?.distances?.[id];
+  const distanceText = distance ? `\n\n<b>Расстояние:</b> ${distance.precision === 'address' ? '' : '~'}${distance.distanceKm} км по прямой` : '';
+  return editOrganizationScreen(env, message, `${organizationCard(item)}${distanceText}`, organizationKeyboard([
     [{ text: '📋 К списку', callback_data: searchMode ? `org:searchlist:${key}:${page}` : `org:list:${key}:${page}` }]
   ], `org:category:${key}`));
 }
@@ -3562,7 +3641,7 @@ async function handleOrganizationCatalogCallback(env, query) {
   const [, action, key, page, id, mode] = data.split(':');
   if (action === 'section') return showOrganizationSection(env, message, key);
   if (action === 'category') return showOrganizationCategory(env, message, key);
-  if (action === 'search') return promptOrganizationSearch(env, message, key);
+  if (action === 'search') return promptOrganizationSearch(env, message, key, page);
   if (action === 'list') return showOrganizationList(env, message, key, page);
   if (action === 'searchlist') return showOrganizationSearchPage(env, message, key, page);
   if (action === 'card') return showOrganizationCard(env, message, key, page, id, mode === 'search');

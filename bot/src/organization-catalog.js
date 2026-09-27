@@ -48,6 +48,34 @@ export function searchOrganizations(items, query) {
   });
 }
 
+export function searchOrganizationsByName(items, query) {
+  const terms = String(query || '').toLowerCase().replace(/ё/g, 'е')
+    .split(/[^a-zа-я0-9]+/).filter(word => word.length >= 2);
+  if (!terms.length) return [];
+  return items.filter(item => {
+    const name = normalize(item.name);
+    return terms.every(term => name.includes(normalize(term)));
+  });
+}
+
+export function distanceKm(a, b) {
+  const radians = value => value * Math.PI / 180;
+  const dLat = radians(b.lat - a.lat);
+  const dLon = radians(b.lon - a.lon);
+  const lat1 = radians(a.lat);
+  const lat2 = radians(b.lat);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 6371.0088 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+export function rankOrganizationsByDistance(items, coordinates, origin) {
+  const points = new Map(coordinates.organizations.map(item => [item.id, item]));
+  return items.map(item => {
+    const point = points.get(item.id);
+    return point ? { item, distanceKm: distanceKm(origin, point), precision: point.precision } : null;
+  }).filter(Boolean).sort((a, b) => a.distanceKm - b.distanceKm);
+}
+
 export function organizationCard(item) {
   const escapeHtml = value => String(value || '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

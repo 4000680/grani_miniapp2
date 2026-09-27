@@ -33,6 +33,40 @@ export function normalizeApplication(input) {
 }
 
 export class ApplicationsStore extends DurableObject {
+  geocodeQueue = Promise.resolve();
+
+  async geocodePlace(query, endpoint = 'https://nominatim.openstreetmap.org/search') {
+    const normalized = cleanText(query, 100).toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
+    if (!normalized) return null;
+    const run = this.geocodeQueue.then(async () => {
+      const cacheKey = `place:${normalized}`;
+      const cached = await this.ctx.storage.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) return cached.result;
+      const nextAt = Number(await this.ctx.storage.get('geocode-next-at')) || 0;
+      const waitMs = Math.max(0, nextAt - Date.now());
+      await this.ctx.storage.put('geocode-next-at', Date.now() + Math.max(waitMs, 0) + 1100);
+      if (waitMs) await new Promise(resolve => setTimeout(resolve, waitMs));
+      const url = new URL(endpoint);
+      url.search = new URLSearchParams({
+        q: `${cleanText(query, 100)}, Россия`, format: 'jsonv2', limit: '1',
+        addressdetails: '1', countrycodes: 'ru', 'accept-language': 'ru'
+      });
+      const response = await fetch(url, {
+        headers: { 'User-Agent': 'BrokerGraniOrganizationCatalog/1.0 (+https://t.me/grani_broker)' }
+      });
+      if (!response.ok) throw new Error(`Geocoder returned HTTP ${response.status}`);
+      const matches = await response.json();
+      const match = Array.isArray(matches) ? matches[0] : null;
+      const result = match && Number.isFinite(Number(match.lat)) && Number.isFinite(Number(match.lon))
+        ? { lat: Number(match.lat), lon: Number(match.lon), displayName: match.display_name || '', addresstype: match.addresstype || '' }
+        : null;
+      await this.ctx.storage.put(cacheKey, { result, expiresAt: Date.now() + (result ? 30 : 1) * 86400000 });
+      return result;
+    });
+    this.geocodeQueue = run.catch(() => null);
+    return run;
+  }
+
   async list() {
     return (await this.ctx.storage.get('items')) || [];
   }
