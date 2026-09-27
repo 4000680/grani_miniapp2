@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFile } from 'node:fs/promises';
 import catalog from '../src/organizations-catalog.json' with { type: 'json' };
 import {
   ORGANIZATION_CATEGORIES,
@@ -8,6 +9,8 @@ import {
   paginateOrganizations,
   searchOrganizations
 } from '../src/organization-catalog.js';
+
+const botSource = await readFile(new URL('../src/index.js', import.meta.url), 'utf8');
 
 test('каталог содержит согласованные списки организаций', () => {
   const expected = {
@@ -41,4 +44,19 @@ test('карточка организации экранирует данные 
   const text = organizationCard({ name: 'ООО <Тест>', address: 'ул. & 1', phoneEmail: '<+7>' });
   assert.match(text, /ООО &lt;Тест&gt;/);
   assert.match(text, /ул\. &amp; 1/);
+});
+
+test('пустой поиск не сбрасывает пользователя в поиск по шаблону СЭП', () => {
+  const searchStart = botSource.indexOf('async function handleOrganizationCatalogText');
+  const searchEnd = botSource.indexOf('async function showOrganizationSearchPage', searchStart);
+  const searchFlow = botSource.slice(searchStart, searchEnd);
+  const emptyStart = searchFlow.indexOf('if (!found.length)');
+  const emptyEnd = searchFlow.indexOf("mode: 'search-results'", emptyStart);
+  const emptyResult = searchFlow.slice(emptyStart, emptyEnd);
+  assert.match(emptyResult, /setOrganizationCatalogState[\s\S]*mode: 'city-search'/);
+  assert.doesNotMatch(emptyResult, /clearOrganizationCatalogState/);
+
+  const updateStart = botSource.indexOf('async function handleUpdate');
+  const updateFlow = botSource.slice(updateStart);
+  assert.ok(updateFlow.indexOf('handleOrganizationCatalogText') < updateFlow.indexOf('handleCatalogText'));
 });

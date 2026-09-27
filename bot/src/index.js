@@ -3437,6 +3437,7 @@ async function showOrganizationHome(env, message) {
 
 async function showOrganizationSection(env, message, section) {
   if (!['epts', 'epsm'].includes(section)) return showOrganizationHome(env, message);
+  await clearOrganizationCatalogState(env, message.chat.id);
   const rows = Object.entries(ORGANIZATION_CATEGORIES)
     .filter(([, category]) => category.section === section)
     .map(([key, category]) => [{
@@ -3450,6 +3451,7 @@ async function showOrganizationSection(env, message, section) {
 async function showOrganizationCategory(env, message, key) {
   const category = ORGANIZATION_CATEGORIES[key];
   if (!category) return showOrganizationHome(env, message);
+  await clearOrganizationCatalogState(env, message.chat.id);
   const count = categoryOrganizations(organizationsCatalog, key).length;
   return editOrganizationScreen(env, message,
     `🧪 <b>${category.title}</b>\n\nВ каталоге: <b>${count}</b> организаций.\nМожно найти по городу или региону либо открыть полный список.`,
@@ -3462,6 +3464,7 @@ async function showOrganizationCategory(env, message, key) {
 async function showOrganizationList(env, message, key, page = 0, source = null, title = null, searchMode = false) {
   const category = ORGANIZATION_CATEGORIES[key];
   if (!category) return showOrganizationHome(env, message);
+  if (!searchMode) await clearOrganizationCatalogState(env, message.chat.id);
   const items = source || categoryOrganizations(organizationsCatalog, key);
   const result = paginateOrganizations(items, page);
   const rows = result.items.map(item => [{
@@ -3491,13 +3494,16 @@ async function promptOrganizationSearch(env, message, key) {
 
 async function handleOrganizationCatalogText(env, message) {
   const state = await getOrganizationCatalogState(env, message.chat.id);
-  if (state?.mode !== 'city-search' || !ORGANIZATION_CATEGORIES[state.category]) return false;
-  const found = searchOrganizations(categoryOrganizations(organizationsCatalog, state.category), message.text);
+  if (!['city-search', 'search-results'].includes(state?.mode) || !ORGANIZATION_CATEGORIES[state.category]) return false;
+  const query = String(message.text || '').trim().slice(0, 80);
+  const found = searchOrganizations(categoryOrganizations(organizationsCatalog, state.category), query);
   if (!found.length) {
-    await clearOrganizationCatalogState(env, message.chat.id);
+    await setOrganizationCatalogState(env, message.chat.id, {
+      mode: 'city-search', category: state.category, lastQuery: query
+    });
     await telegram(env, 'sendMessage', {
       chat_id: message.chat.id,
-      text: '🔎 <b>Ничего не найдено</b>\n\nПопробуйте указать город или регион короче.',
+      text: `🔎 <b>По запросу «${escapeHtml(query)}» организации не найдены</b>\n\nНапишите другой город или регион. Вы остались в поиске лабораторий.`,
       parse_mode: 'HTML',
       reply_markup: organizationKeyboard([
         [{ text: '🔎 Новый поиск', callback_data: `org:search:${state.category}` }],
@@ -3508,9 +3514,9 @@ async function handleOrganizationCatalogText(env, message) {
   }
   await setOrganizationCatalogState(env, message.chat.id, {
     mode: 'search-results', category: state.category,
-    query: String(message.text).trim().slice(0, 80), ids: found.map(item => item.id)
+    query, ids: found.map(item => item.id)
   });
-  const heading = `Результаты: ${String(message.text).trim().slice(0, 60)}`;
+  const heading = `Результаты: ${query.slice(0, 60)}`;
   const page = paginateOrganizations(found, 0);
   // The first page is sent as a new message because the search prompt is already in the chat history.
   const rows = page.items.map(item => [{
