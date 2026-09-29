@@ -56,6 +56,7 @@ import {
   miniAppProfile
 } from './analytics.js';
 import { formatUtilYearReference } from './util-rate-reference.js';
+import { takeAdminSession, sendDirectMessage, receiveCrmReply, listCrmMessages, getCrmMessage } from './crm-messaging.js';
 import organizationsCatalog from './organizations-catalog.json' with { type: 'json' };
 import organizationsGeo from './organizations-geo.json' with { type: 'json' };
 import {
@@ -4213,6 +4214,8 @@ async function showAnalyticsUser(env, message, userId) {
   await telegram(env, 'editMessageText', {
     chat_id: message.chat.id, message_id: message.message_id, text, parse_mode: 'HTML',
     reply_markup: { inline_keyboard: [
+      [{ text: '✉️ Написать', callback_data: `analytics:write:${user.user_id}` }],
+      [{ text: '💬 Переписка', callback_data: `analytics:conversation:${user.user_id}:0` }],
       [{ text: '📜 История', callback_data: `analytics:history:${user.user_id}:0` }],
       [{ text: '‹ К списку', callback_data: 'analytics:users' }]
     ] }, disable_web_page_preview: true
@@ -4235,14 +4238,49 @@ async function showAnalyticsHistory(env, message, userId, offset = 0) {
   });
 }
 
+async function showCrmConversation(env, message, userId, offset = 0) {
+  const user = await getAnalyticsUser(env.ANALYTICS_DB, userId);
+  if (!user) return;
+  const page = Math.max(0, Number(offset) || 0);
+  const result = await listCrmMessages(env.ANALYTICS_DB, userId, page);
+  const messages = result.results || [];
+  const rows = [...messages].reverse().map(item => {
+    const author = item.direction === 'out' ? 'Вы' : (user.first_name || 'Пользователь');
+    const parent = item.parent_text ? `\n↪ ${escapeHtml(item.parent_text.slice(0, 160))}` : '';
+    const date = new Date(item.created_at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', dateStyle: 'short', timeStyle: 'short' });
+    return `<b>${escapeHtml(author)}</b> · ${escapeHtml(date)}${parent}\n${escapeHtml(item.message_text.slice(0, 1200))}${item.message_text.length > 1200 ? '…' : ''}`;
+  });
+  const navigation = [];
+  if (messages.length === 2) navigation.push({ text: '← Ранее', callback_data: `analytics:conversation:${userId}:${page + 2}` });
+  if (page > 0) navigation.push({ text: 'Новее →', callback_data: `analytics:conversation:${userId}:${Math.max(0, page - 2)}` });
+  const keyboard = messages.filter(item => item.direction === 'in').map(item => [
+    { text: '↩️ Ответить на сообщение', callback_data: `analytics:reply:${userId}:${item.id}` }
+  ]);
+  for (const item of messages.filter(item => item.message_text.length > 1200)) {
+    keyboard.push([{ text: `Открыть полностью · №${item.id}`, callback_data: `analytics:message:${userId}:${item.id}` }]);
+  }
+  keyboard.push([{ text: '✉️ Написать', callback_data: `analytics:write:${userId}` }]);
+  if (navigation.length) keyboard.push(navigation);
+  keyboard.push([{ text: '‹ К карточке', callback_data: `analytics:user:${userId}` }]);
+  await telegram(env, 'editMessageText', {
+    chat_id: message.chat.id, message_id: message.message_id,
+    text: `💬 <b>Переписка · ${escapeHtml(user.first_name || user.username || userId)}</b>\n\n${rows.join('\n\n') || 'Сообщений пока нет.'}`,
+    parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
 async function handleAnalyticsCallback(env, query) {
   const adminId = String(env.ADMIN_ID || env.ADMIN_TELEGRAM_ID || '');
-  if (!adminId || String(query.from?.id) !== adminId) {
+  if (!adminId || String(query.from?.id) !== adminId || query.message?.chat?.type !== 'private' || String(query.message.chat.id) !== adminId) {
     return true;
   }
   if (!env.ANALYTICS_DB) return true;
   const data = query.data;
   const message = query.message;
+  if (data === 'analytics:broadcast' || data === 'analytics:users' ||
+      data.startsWith('analytics:user:') || data.startsWith('analytics:conversation:')) {
+    await clearAdminSession(env.ANALYTICS_DB, adminId);
+  }
   if (data === 'analytics:home') {
     await clearAdminSession(env.ANALYTICS_DB, adminId);
     await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: '📈 <b>Аналитика «Брокер Грани»</b>\n\nВыберите нужный раздел.', parse_mode: 'HTML', reply_markup: analyticsHomeKeyboard() });
@@ -4264,6 +4302,46 @@ async function handleAnalyticsCallback(env, query) {
   } else if (data.startsWith('analytics:history:')) {
     const [, , userId, offset] = data.split(':');
     await showAnalyticsHistory(env, message, userId, Math.max(0, Number(offset) || 0));
+  } else if (data.startsWith('analytics:conversation:')) {
+    const [, , userId, offset] = data.split(':');
+    await showCrmConversation(env, message, userId, offset);
+  } else if (data.startsWith('analytics:message:')) {
+    const [, , userId, id] = data.split(':');
+    const item = await getCrmMessage(env.ANALYTICS_DB, userId, Number(id));
+    if (!item) return true;
+    const keyboard = [];
+    if (item.direction === 'in') keyboard.push([{ text: '↩️ Ответить', callback_data: `analytics:reply:${userId}:${item.id}` }]);
+    keyboard.push([{ text: '‹ К переписке', callback_data: `analytics:conversation:${userId}:0` }]);
+    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id,
+      text: item.message_text.slice(0, 4096), reply_markup: { inline_keyboard: keyboard }
+    });
+  } else if (data.startsWith('analytics:write:') || data.startsWith('analytics:reply:')) {
+    const [, action, userId, replyToId] = data.split(':');
+    const user = await getAnalyticsUser(env.ANALYTICS_DB, userId);
+    if (!user) return true;
+    await saveAdminSession(env.ANALYTICS_DB, adminId, { step: 'direct_text', userId, replyToId: action === 'reply' ? Number(replyToId) : null });
+    await telegram(env, 'sendMessage', { chat_id: message.chat.id,
+      text: `Напишите сообщение для ${user.first_name || user.username || userId}. Перед отправкой будет предпросмотр.`,
+      reply_markup: { inline_keyboard: [[{ text: '‹ Назад', callback_data: `analytics:conversation:${userId}:0` }, { text: 'В аналитику', callback_data: 'analytics:home' }]] }
+    });
+  } else if (data.startsWith('analytics:direct:confirm:')) {
+    const nonce = data.split(':')[3];
+    const session = await takeAdminSession(env.ANALYTICS_DB, adminId, 'direct_confirm', nonce);
+    if (!session) return true;
+    try {
+      await sendDirectMessage(env.ANALYTICS_DB, session.userId, session.text, (chatId, text, replyToId) =>
+        telegram(env, 'sendMessage', { chat_id: chatId, text,
+          ...(replyToId ? { reply_parameters: { message_id: replyToId, allow_sending_without_reply: true } } : {})
+        }), session.replyToId);
+      await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id,
+        text: '✅ Сообщение отправлено.', reply_markup: { inline_keyboard: [[{ text: '💬 Переписка', callback_data: `analytics:conversation:${session.userId}:0` }]] }
+      });
+    } catch (error) {
+      console.error('CRM direct delivery failed', error);
+      await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Не удалось отправить сообщение. Попробуйте позже.',
+        reply_markup: { inline_keyboard: [[{ text: '‹ К карточке', callback_data: `analytics:user:${session.userId}` }]] }
+      });
+    }
   } else if (data === 'analytics:broadcast') {
     await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id,
       text: '📣 <b>Рассылка</b>\n\nВыберите аудиторию. Тест придёт только вам.',
@@ -4284,15 +4362,15 @@ async function handleAnalyticsCallback(env, query) {
       text: `📃 <b>История рассылок</b>\n\n${rows.join('\n') || 'Рассылок пока не было.'}`,
       parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '‹ К рассылкам', callback_data: 'analytics:broadcast' }]] }
     });
-  } else if (data === 'analytics:broadcast:confirm') {
-    const session = await getAdminSession(env.ANALYTICS_DB, adminId);
-    if (session?.step !== 'broadcast_confirm') return true;
+  } else if (data.startsWith('analytics:broadcast:confirm:')) {
+    const session = await takeAdminSession(env.ANALYTICS_DB, adminId, 'broadcast_confirm', data.split(':')[3]);
+    if (!session) return true;
     const campaign = await createCampaign(env.ANALYTICS_DB, adminId, session.audience, session.text);
-    await clearAdminSession(env.ANALYTICS_DB, adminId);
     await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id,
-      text: `✅ Рассылка поставлена в очередь.\nПолучателей: ${campaign.count}.\n\nПодтверждённая рассылка будет отправлена частями. Новые рассылки запускаются только вами.`,
+      text: `✅ Рассылка запущена.\nПолучателей: ${campaign.count}.\n\nНачинаю отправку. Результат — в истории рассылок.`,
       reply_markup: analyticsBackKeyboard('home')
     });
+    await processCampaignBatch(env.ANALYTICS_DB, (chatId, text) => telegram(env, 'sendMessage', { chat_id: chatId, text }), console, campaign.id);
   } else if (data.startsWith('analytics:broadcast:')) {
     const audience = data.split(':')[2];
     if (!['all_users', 'admin_test'].includes(audience)) return true;
@@ -4308,7 +4386,7 @@ async function handleAnalyticsAdminText(env, message) {
   const text = String(message.text || '').trim();
   if (text.toLowerCase() === '/cancel') {
     await clearAdminSession(env.ANALYTICS_DB, adminId);
-    await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Рассылка отменена.' });
+    await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Отправка отменена.' });
     return true;
   }
   const session = await getAdminSession(env.ANALYTICS_DB, adminId);
@@ -4324,17 +4402,27 @@ async function handleAnalyticsAdminText(env, message) {
     });
     return true;
   }
-  if (session?.step !== 'broadcast_text') return false;
+  if (session?.step !== 'broadcast_text' && session?.step !== 'direct_text') return false;
   if (!text || text.length > 3000 || text.startsWith('/')) {
     await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Отправьте обычный текст до 3000 символов. Для отмены — /cancel.' });
     return true;
   }
+  const nonce = crypto.randomUUID().slice(0, 8);
+  if (session.step === 'direct_text') {
+    await saveAdminSession(env.ANALYTICS_DB, adminId, { ...session, step: 'direct_confirm', text, nonce });
+    await telegram(env, 'sendMessage', { chat_id: message.chat.id,
+      text: `Предпросмотр сообщения пользователю ${session.userId}:\n\n${text}`,
+      reply_markup: { inline_keyboard: [[{ text: '✅ Отправить', callback_data: `analytics:direct:confirm:${nonce}` }],
+        [{ text: 'Отмена', callback_data: 'analytics:home' }]] }
+    });
+    return true;
+  }
   const recipients = session.audience === 'admin_test' ? 1 : await env.ANALYTICS_DB.prepare(session.audience === 'all_users' ? 'SELECT COUNT(*) count FROM analytics_users WHERE chat_available=1' : 'SELECT COUNT(*) count FROM analytics_users WHERE marketing_consent=1 AND chat_available=1').first().then(row => row?.count || 0);
-  await saveAdminSession(env.ANALYTICS_DB, adminId, { ...session, step: 'broadcast_confirm', text });
+  await saveAdminSession(env.ANALYTICS_DB, adminId, { ...session, step: 'broadcast_confirm', text, nonce });
   await telegram(env, 'sendMessage', { chat_id: message.chat.id,
     text: `Предпросмотр:\n\n${text}\n\nПолучателей: ${recipients}. Подтвердить отправку?`,
     reply_markup: { inline_keyboard: [
-      [{ text: '✅ Подтвердить', callback_data: 'analytics:broadcast:confirm' }],
+      [{ text: '✅ Подтвердить', callback_data: `analytics:broadcast:confirm:${nonce}` }],
       [{ text: 'Отмена', callback_data: 'analytics:home' }]
     ] }
   });
@@ -4354,6 +4442,26 @@ async function handleUpdate(env, update) {
       try { await profileStore.touchProfile(profileUser); }
       catch (error) { console.error('Profile tracking failed', error); }
     }
+  }
+  const adminId = String(env.ADMIN_ID || env.ADMIN_TELEGRAM_ID || '');
+  if (env.ANALYTICS_DB && adminId && update.message?.chat?.type === 'private') {
+    try {
+      if (await receiveCrmReply(env.ANALYTICS_DB, update.message, async (incoming, parent, original) => {
+        const name = original.from?.first_name || original.from?.username || incoming.user_id;
+        const notification = await telegram(env, 'sendMessage', { chat_id: adminId,
+          text: `💬 Ответ от ${name}\n\nНа сообщение: ${parent.message_text.slice(0, 300)}\n\n${incoming.message_text.slice(0, 1200)}`,
+          reply_markup: { inline_keyboard: [
+            [{ text: '↩️ Ответить', callback_data: `analytics:reply:${incoming.user_id}:${incoming.id}` }],
+            [{ text: '💬 Переписка', callback_data: `analytics:conversation:${incoming.user_id}:0` }]
+          ] }
+        });
+        if (!original.text) {
+          try { await telegram(env, 'copyMessage', { chat_id: adminId, from_chat_id: original.chat.id, message_id: original.message_id }); }
+          catch (error) { console.error('CRM attachment copy failed', error); }
+        }
+        return notification;
+      })) return;
+    } catch (error) { console.error('CRM reply handling failed', error); }
   }
   if (update.message?.document) {
     if (isGroupChat(update.message.chat)) await offerGroupCalculation(env, update.message);
@@ -4460,7 +4568,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'declaration-vin-v30' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'crm-messaging-v31' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {

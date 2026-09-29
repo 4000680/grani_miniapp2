@@ -1,3 +1,5 @@
+import { acquireDeliveryLock, releaseDeliveryLock, recordOutgoingMessage } from './crm-messaging.js';
+
 const ISO_NOW = () => new Date().toISOString();
 
 function getActor(update) {
@@ -218,8 +220,17 @@ export async function createCampaign(db, adminId, audience, messageText) {
   return { id, count: audience === 'all_consented' ? (await db.prepare('SELECT recipient_count FROM analytics_campaigns WHERE id=?').bind(id).first()).recipient_count : 1 };
 }
 
-export async function processCampaignBatch(db, sendMessage, logger = console) {
-  const campaign = await db.prepare("SELECT id,message_text,audience FROM analytics_campaigns WHERE status IN ('queued','sending') ORDER BY id LIMIT 1").first();
+export async function processCampaignBatch(db, sendMessage, logger = console, campaignId = null) {
+  const token = await acquireDeliveryLock(db);
+  if (!token) return false;
+  try { return await deliverCampaignBatch(db, sendMessage, logger, campaignId); }
+  finally { await releaseDeliveryLock(db, token); }
+}
+
+async function deliverCampaignBatch(db, sendMessage, logger, campaignId) {
+  const campaign = campaignId == null
+    ? await db.prepare("SELECT id,message_text,audience FROM analytics_campaigns WHERE status IN ('queued','sending') ORDER BY id LIMIT 1").first()
+    : await db.prepare("SELECT id,message_text,audience FROM analytics_campaigns WHERE id=? AND status IN ('queued','sending')").bind(campaignId).first();
   if (!campaign) return false;
   await db.prepare("UPDATE analytics_campaigns SET status='sending',started_at=COALESCE(started_at,?) WHERE id=?").bind(ISO_NOW(), campaign.id).run();
   if (campaign.audience === 'all_users') {
@@ -237,9 +248,11 @@ export async function processCampaignBatch(db, sendMessage, logger = console) {
       AND (? IN ('admin_test','all_users') OR u.marketing_consent=1) LIMIT 20`).bind(campaign.id, campaign.audience).all();
   for (const recipient of recipients.results || []) {
     try {
-      await sendMessage(recipient.user_id, campaign.message_text);
+      const sent = await sendMessage(recipient.user_id, campaign.message_text);
       await db.prepare("UPDATE analytics_campaign_recipients SET status='sent',sent_at=? WHERE campaign_id=? AND user_id=?").bind(ISO_NOW(), campaign.id, recipient.user_id).run();
       await db.prepare('UPDATE analytics_campaigns SET sent_count=sent_count+1 WHERE id=?').bind(campaign.id).run();
+      try { await recordOutgoingMessage(db, recipient.user_id, campaign.message_text, sent, { campaignId: campaign.id }); }
+      catch (error) { logger.error('CRM outgoing message recording failed', campaign.id, recipient.user_id, error); }
     } catch (error) {
       const code = Number(error?.telegramCode || 0) === 403 ? '403' : String(error?.telegramCode || 'error').slice(0, 20);
       if (code === '429') {

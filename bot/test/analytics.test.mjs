@@ -66,6 +66,7 @@ function campaignDb(recipientIds = ['100', '200']) {
     calls,
     prepare(sql) {
       return {
+        async run() { calls.push({ sql, values: [] }); return { meta: { changes: 1 } }; },
         async first() {
           calls.push({ sql, values: [] });
           if (sql.includes('SELECT id,message_text,audience')) return { id: 5, message_text: 'Test', audience: 'all_consented' };
@@ -80,7 +81,7 @@ function campaignDb(recipientIds = ['100', '200']) {
               return null;
             },
             async all() { calls.push({ sql, values }); return { results: recipientIds.map(user_id => ({ user_id })) }; },
-            async run() { calls.push({ sql, values }); return {}; }
+            async run() { calls.push({ sql, values }); return { meta: { changes: 1 } }; }
           };
         }
       };
