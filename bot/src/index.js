@@ -4209,7 +4209,7 @@ async function showAnalyticsUser(env, message, userId) {
   const username = user.username ? `@${escapeHtml(user.username)}` : 'не указан';
   const name = [user.first_name, user.last_name].filter(Boolean).map(escapeHtml).join(' ') || 'не указано';
   const profile = user.username ? `\n<a href="https://t.me/${encodeURIComponent(user.username)}">Открыть профиль Telegram</a>` : '';
-  const text = `👤 <b>Карточка пользователя</b>\n\nИмя: ${name}\nUsername: ${username}\nID: <code>${escapeHtml(user.user_id)}</code>\nПервый запуск: ${escapeHtml(user.first_seen_at)}\nПоследняя активность: ${escapeHtml(user.last_seen_at)}\nАктивных дней: ${user.active_days}\nДействий: ${user.actions}\nРасчётов: ${user.calculations}\nСогласие на рассылку: ${user.marketing_consent ? 'да' : 'нет'}${profile}`;
+  const text = `👤 <b>Карточка пользователя</b>\n\nИмя: ${name}\nUsername: ${username}\nID: <code>${escapeHtml(user.user_id)}</code>\nПервый запуск: ${escapeHtml(user.first_seen_at)}\nПоследняя активность: ${escapeHtml(user.last_seen_at)}\nАктивных дней: ${user.active_days}\nДействий: ${user.actions}\nРасчётов: ${user.calculations}\nДоставка сообщений: ${user.chat_available ? 'доступна' : 'недоступна'}${profile}`;
   await telegram(env, 'editMessageText', {
     chat_id: message.chat.id, message_id: message.message_id, text, parse_mode: 'HTML',
     reply_markup: { inline_keyboard: [
@@ -4266,9 +4266,9 @@ async function handleAnalyticsCallback(env, query) {
     await showAnalyticsHistory(env, message, userId, Math.max(0, Number(offset) || 0));
   } else if (data === 'analytics:broadcast') {
     await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id,
-      text: '📣 <b>Рассылка</b>\n\nВыберите аудиторию. Массовая рассылка доступна только пользователям, которые сами подписались командой /subscribe. Тест придёт только вам.',
+      text: '📣 <b>Рассылка</b>\n\nВыберите аудиторию. Тест придёт только вам.',
       parse_mode: 'HTML', reply_markup: { inline_keyboard: [
-        [{ text: 'Подписавшиеся пользователи', callback_data: 'analytics:broadcast:all_consented' }],
+        [{ text: 'Все пользователи', callback_data: 'analytics:broadcast:all_users' }],
         [{ text: 'Тест только мне', callback_data: 'analytics:broadcast:admin_test' }],
         [{ text: '📃 История рассылок', callback_data: 'analytics:broadcast_history' }],
         [{ text: '‹ В аналитику', callback_data: 'analytics:home' }]
@@ -4277,7 +4277,7 @@ async function handleAnalyticsCallback(env, query) {
   } else if (data === 'analytics:broadcast_history') {
     const campaigns = await listCampaigns(env.ANALYTICS_DB);
     const rows = (campaigns.results || []).map(item => {
-      const audience = item.audience === 'admin_test' ? 'тест' : 'подписчики';
+      const audience = item.audience === 'admin_test' ? 'тест' : item.audience === 'all_users' ? 'все пользователи' : 'подписчики (старая рассылка)';
       return `• ${escapeHtml(item.created_at)} · ${audience}: ${item.sent_count}/${item.recipient_count}, ошибок ${item.error_count} (${escapeHtml(item.status)})`;
     });
     await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id,
@@ -4290,12 +4290,12 @@ async function handleAnalyticsCallback(env, query) {
     const campaign = await createCampaign(env.ANALYTICS_DB, adminId, session.audience, session.text);
     await clearAdminSession(env.ANALYTICS_DB, adminId);
     await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id,
-      text: `✅ Рассылка поставлена в очередь.\nПолучателей: ${campaign.count}.\n\nОтправка будет идти частями, автоматически бот ничего не рассылает.`,
+      text: `✅ Рассылка поставлена в очередь.\nПолучателей: ${campaign.count}.\n\nПодтверждённая рассылка будет отправлена частями. Новые рассылки запускаются только вами.`,
       reply_markup: analyticsBackKeyboard('home')
     });
   } else if (data.startsWith('analytics:broadcast:')) {
     const audience = data.split(':')[2];
-    if (!['all_consented', 'admin_test'].includes(audience)) return true;
+    if (!['all_users', 'admin_test'].includes(audience)) return true;
     await saveAdminSession(env.ANALYTICS_DB, adminId, { step: 'broadcast_text', audience });
     await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Напишите текст сообщения для рассылки. Для отмены отправьте /cancel.' });
   }
@@ -4329,7 +4329,7 @@ async function handleAnalyticsAdminText(env, message) {
     await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Отправьте обычный текст до 3000 символов. Для отмены — /cancel.' });
     return true;
   }
-  const recipients = session.audience === 'admin_test' ? 1 : await env.ANALYTICS_DB.prepare('SELECT COUNT(*) count FROM analytics_users WHERE marketing_consent=1 AND chat_available=1').first().then(row => row?.count || 0);
+  const recipients = session.audience === 'admin_test' ? 1 : await env.ANALYTICS_DB.prepare(session.audience === 'all_users' ? 'SELECT COUNT(*) count FROM analytics_users WHERE chat_available=1' : 'SELECT COUNT(*) count FROM analytics_users WHERE marketing_consent=1 AND chat_available=1').first().then(row => row?.count || 0);
   await saveAdminSession(env.ANALYTICS_DB, adminId, { ...session, step: 'broadcast_confirm', text });
   await telegram(env, 'sendMessage', { chat_id: message.chat.id,
     text: `Предпросмотр:\n\n${text}\n\nПолучателей: ${recipients}. Подтвердить отправку?`,
@@ -4367,9 +4367,7 @@ async function handleUpdate(env, update) {
       return;
     }
     if (command === '/subscribe' || command === '/unsubscribe') {
-      await telegram(env, 'sendMessage', { chat_id: update.message.chat.id, text: command === '/subscribe'
-        ? '✅ Вы подписались на сообщения о новостях и услугах. Отказаться можно командой /unsubscribe.'
-        : 'Вы отписались от рассылок. Бот продолжит отвечать на ваши запросы.' });
+      await sendMenu(env, update.message.chat.id);
       return;
     }
     if (await handleAnalyticsAdminText(env, update.message)) return;

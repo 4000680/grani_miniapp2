@@ -62,13 +62,6 @@ export async function trackUpdate(db, update) {
       VALUES (?, ?, ?, ?, ?, ?, ?)`)
       .bind(String(from.id), update.update_id == null ? null : String(update.update_id), now, event[0], event[1], event[2], JSON.stringify({ chatType: 'private' })).run();
   }
-  const text = String(update.message?.text || '').trim().toLowerCase();
-  const consentCommand = text.split(/\s+/)[0].split('@')[0];
-  if (consentCommand === '/unsubscribe') {
-    await db.prepare('UPDATE analytics_users SET marketing_consent=0, consent_updated_at=? WHERE user_id=?').bind(now, String(from.id)).run();
-  } else if (consentCommand === '/subscribe') {
-    await db.prepare('UPDATE analytics_users SET marketing_consent=1, consent_updated_at=? WHERE user_id=?').bind(now, String(from.id)).run();
-  }
 }
 
 export async function analyticsOverview(db) {
@@ -151,7 +144,7 @@ export async function miniAppProfile(db, user) {
     (user_id, username, first_name, last_name, language_code, first_seen_at, last_seen_at, chat_available)
     VALUES (?, ?, ?, ?, ?, ?, ?, 1)
     ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, first_name=excluded.first_name,
-    last_name=excluded.last_name, language_code=excluded.language_code, last_seen_at=excluded.last_seen_at, chat_available=1`)
+    last_name=excluded.last_name, language_code=excluded.language_code, last_seen_at=excluded.last_seen_at`)
     .bind(String(user.id), user.username || null, user.first_name || null, user.last_name || null,
       user.language_code || null, now, now).run();
   const row = await db.prepare(`SELECT u.user_id, u.username, u.first_name, u.last_name, u.first_seen_at, u.last_seen_at,
@@ -197,6 +190,18 @@ export async function clearAdminSession(db, adminId) {
 }
 
 export async function createCampaign(db, adminId, audience, messageText) {
+  if (!['all_users', 'all_consented', 'admin_test'].includes(audience)) throw new Error('Unknown campaign audience');
+  if (audience === 'all_users') {
+    const result = await db.prepare(`INSERT INTO analytics_campaigns(created_by,audience,message_text,created_at,recipient_count)
+      VALUES(?,?,?,?,(SELECT COUNT(*) FROM analytics_users WHERE chat_available=1))`)
+      .bind(String(adminId), audience, messageText, ISO_NOW()).run();
+    const id = result.meta?.last_row_id;
+    await db.prepare(`INSERT INTO analytics_campaign_recipients(campaign_id,user_id)
+      SELECT ?,user_id FROM analytics_users WHERE chat_available=1`).bind(id).run();
+    const row = await db.prepare('SELECT COUNT(*) count FROM analytics_campaign_recipients WHERE campaign_id=?').bind(id).first();
+    await db.prepare('UPDATE analytics_campaigns SET recipient_count=? WHERE id=?').bind(row.count, id).run();
+    return { id, count: row.count };
+  }
   const insert = audience === 'all_consented'
     ? `INSERT INTO analytics_campaigns(created_by,audience,message_text,created_at,recipient_count) VALUES(?,?,?,?,(SELECT COUNT(*) FROM analytics_users WHERE marketing_consent=1 AND chat_available=1))`
     : `INSERT INTO analytics_campaigns(created_by,audience,message_text,created_at,recipient_count) VALUES(?,?,?,?,(SELECT COUNT(*) FROM analytics_users WHERE user_id=? AND chat_available=1))`;
@@ -217,7 +222,11 @@ export async function processCampaignBatch(db, sendMessage, logger = console) {
   const campaign = await db.prepare("SELECT id,message_text,audience FROM analytics_campaigns WHERE status IN ('queued','sending') ORDER BY id LIMIT 1").first();
   if (!campaign) return false;
   await db.prepare("UPDATE analytics_campaigns SET status='sending',started_at=COALESCE(started_at,?) WHERE id=?").bind(ISO_NOW(), campaign.id).run();
-  if (campaign.audience === 'all_consented') {
+  if (campaign.audience === 'all_users') {
+    await db.prepare(`UPDATE analytics_campaign_recipients SET status='skipped'
+      WHERE campaign_id=? AND status='queued' AND user_id IN
+      (SELECT user_id FROM analytics_users WHERE chat_available=0)`).bind(campaign.id).run();
+  } else if (campaign.audience === 'all_consented') {
     await db.prepare(`UPDATE analytics_campaign_recipients SET status='skipped'
       WHERE campaign_id=? AND status='queued' AND user_id IN
       (SELECT user_id FROM analytics_users WHERE marketing_consent=0 OR chat_available=0)`).bind(campaign.id).run();
@@ -225,7 +234,7 @@ export async function processCampaignBatch(db, sendMessage, logger = console) {
   const recipients = await db.prepare(`SELECT r.user_id FROM analytics_campaign_recipients r
     JOIN analytics_users u ON u.user_id=r.user_id
     WHERE r.campaign_id=? AND r.status='queued' AND u.chat_available=1
-      AND (?='admin_test' OR u.marketing_consent=1) LIMIT 20`).bind(campaign.id, campaign.audience).all();
+      AND (? IN ('admin_test','all_users') OR u.marketing_consent=1) LIMIT 20`).bind(campaign.id, campaign.audience).all();
   for (const recipient of recipients.results || []) {
     try {
       await sendMessage(recipient.user_id, campaign.message_text);

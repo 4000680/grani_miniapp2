@@ -3,6 +3,14 @@
   "name": "grani-miniapp2",
   "main": "bot/src/index.js",
   "compatibility_date": "2026-09-01",
+  "keep_vars": true,
+  "d1_databases": [
+    {
+      "binding": "ANALYTICS_DB",
+      "database_name": "grani-analytics",
+      "database_id": "6ed30b11-13d8-415e-baad-6b2b139fab94"
+    }
+  ],
   "durable_objects": {
     "bindings": [
       {
