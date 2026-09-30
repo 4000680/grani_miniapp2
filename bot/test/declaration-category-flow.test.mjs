@@ -26,7 +26,7 @@ test('декларация показывает открытый VIN отдел�
   const vinEnd = source.indexOf('function peniCases', vinStart);
   const vinFunction = source.slice(vinStart, vinEnd);
   assert.ok(vinFunction.includes('const text = vehicle.vin ||'));
-  assert.ok(vinFunction.includes("return telegram(env, 'sendMessage', { chat_id: chatId, text })"));
+  assert.ok(vinFunction.includes("return telegram(env, 'sendMessage', { chat_id: chatId, text, reply_markup })"));
   assert.equal(vinFunction.includes('editMessageText'), false);
   const continueStart = source.indexOf('async function continueDeclarationAfterDocument');
   const continueEnd = source.indexOf('async function handleDeclarationReply', continueStart);

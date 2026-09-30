@@ -724,9 +724,9 @@ async function sendDocumentIdentity(env, chatId, vehicle, replyToMessageId = nul
   });
 }
 
-async function sendDeclarationVin(env, chatId, vehicle) {
+async function sendDeclarationVin(env, chatId, vehicle, reply_markup = undefined) {
   const text = vehicle.vin || 'VIN не найден';
-  return telegram(env, 'sendMessage', { chat_id: chatId, text });
+  return telegram(env, 'sendMessage', { chat_id: chatId, text, reply_markup });
 }
 
 function peniCases(util) {
@@ -3748,7 +3748,7 @@ function declarationResultText(state, payment) {
     `✅ <b>Расчёт утильсбора по декларации · ставки ${payment.calculationYear} года</b>`,
     '',
     ...declarationVehicleLines(state.vehicle),
-    `<b>Наименование ФТС:</b> ${escapeHtml(state.ftsName)}`,
+    `<b>${state.ftsNameSource === 'document' ? 'Наименование подтверждено пользователем' : 'Наименование ФТС'}:</b> ${escapeHtml(state.ftsName)}`,
     `<b>Стоимость по перечню:</b> ${formatMoney(payment.price, true)}`,
     '',
     '<b>Российские платежи</b>',
@@ -3814,6 +3814,11 @@ async function promptDeclarationCategory(env, chatId, userId, state, workingMess
 async function promptDeclarationFtsName(env, chatId, userId, state, workingMessage = null) {
   const next = { ...state, mode: 'declaration', stage: 'fts-name' };
   await setCustomsState(env, userId, next);
+  const documentName = [next.vehicle.brand, next.vehicle.model].filter(Boolean).join(' ');
+  const suggestedPrice = findDeclarationPrice(documentName).exact;
+  const reply_markup = declarationKeyboard([
+    [{ text: '✅ Подтверждаю наименование', callback_data: 'declaration:fts:confirm' }]
+  ], next.backFromFts || 'declaration:back:start');
   const baseUtilLines = (next.util || []).map(item =>
     `<b>Коммерческий утилизационный сбор (${ageLabel(item.age)}):</b> ${formatMoney(item.commercial)}`
   );
@@ -3822,17 +3827,21 @@ async function promptDeclarationFtsName(env, chatId, userId, state, workingMessa
     '',
     ...declarationVehicleLines(next.vehicle),
     ...baseUtilLines,
+    ...(suggestedPrice ? ['', `<b>Наименование в перечне:</b> ${escapeHtml(suggestedPrice.name)}`, `<b>Стоимость по перечню:</b> ${formatMoney(suggestedPrice.price, true)}`] : []),
     '',
     'Проверьте VIN на сайте <a href="https://customs.gov.ru/">ФТС</a> и пришлите сюда <b>точное наименование</b> автомобиля, как оно указано на сайте ФТС.',
-    '<i>Для таможенного органа наименование должно совпадать один в один.</i>'
+    '<i>Для таможенного органа наименование должно совпадать один в один.</i>',
+    '',
+    'Чтобы продолжить с наименованием из документа или шаблона СЭП, нажмите «✅ Подтверждаю наименование». Бот не выполняет автоматическую проверку на сайте ФТС. Если сведений пока нет, расчёт остаётся предварительным — сверку необходимо выполнить после их появления.'
   ].join('\n');
   if (workingMessage?.from?.is_bot) {
-    await telegram(env, 'editMessageText', { chat_id: chatId, message_id: workingMessage.message_id, text, parse_mode: 'HTML', reply_markup: declarationKeyboard([], next.backFromFts || 'declaration:back:start') });
+    await telegram(env, 'editMessageText', { chat_id: chatId, message_id: workingMessage.message_id, text, parse_mode: 'HTML', reply_markup });
     await trackTemporaryMessage(env, userId, workingMessage.message_id);
   } else {
-    const sent = await telegram(env, 'sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', reply_markup: declarationKeyboard([], next.backFromFts || 'declaration:back:start') });
+    const sent = await telegram(env, 'sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', reply_markup });
     await trackTemporaryMessage(env, userId, sent.message_id);
   }
+  return reply_markup;
 }
 
 async function continueDeclarationAfterDocument(env, chatId, userId, state, vehicle, util, deadline, workingMessage = null) {
@@ -3847,8 +3856,8 @@ async function continueDeclarationAfterDocument(env, chatId, userId, state, vehi
   // Убираем техническое сообщение обработки, чтобы VIN был отдельным
   // последним сообщением после карточки с данными автомобиля.
   if (workingMessage?.from?.is_bot) await discardWorkingCard(env, workingMessage, userId);
-  await promptDeclarationFtsName(env, chatId, userId, declaration);
-  await sendDeclarationVin(env, chatId, vehicle);
+  const reply_markup = await promptDeclarationFtsName(env, chatId, userId, declaration);
+  await sendDeclarationVin(env, chatId, vehicle, reply_markup);
 }
 
 async function handleDeclarationReply(env, message) {
@@ -3859,13 +3868,13 @@ async function handleDeclarationReply(env, message) {
   if (state.stage === 'fts-name' || state.stage === 'price-choice') {
     const found = findDeclarationPrice(message.text);
     if (found.exact) {
-      await setCustomsState(env, userId, { ...state, stage: 'country', ftsName: message.text.trim(), priceName: found.exact.name, priceRub: found.exact.price });
+      await setCustomsState(env, userId, { ...state, stage: 'country', ftsName: message.text.trim(), ftsNameSource: message.declarationNameSource || 'fts', priceName: found.exact.name, priceRub: found.exact.price });
       const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: `✅ <b>Точное совпадение найдено</b>\n\n<b>Наименование:</b> ${escapeHtml(found.exact.name)}\n<b>Стоимость:</b> ${formatMoney(found.exact.price, true)}\n\nВыберите страну, в которой выдана декларация:`, parse_mode: 'HTML', reply_markup: declarationCountryKeyboard() });
       await trackTemporaryMessage(env, userId, sent.message_id);
       return true;
     }
     const rows = found.closest.map((item, index) => [{ text: `${item.name} — ${formatMoney(item.price)}`.slice(0, 60), callback_data: `declaration:price:${index}` }]);
-    await setCustomsState(env, userId, { ...state, stage: 'price-choice', ftsName: message.text.trim(), closest: found.closest });
+    await setCustomsState(env, userId, { ...state, stage: 'price-choice', ftsName: message.text.trim(), ftsNameSource: message.declarationNameSource || 'fts', closest: found.closest });
     const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Точного наименования в перечне не найдено. Ниже — ближайшие варианты. Для таможни наименование должно совпадать один в один.', parse_mode: 'HTML', reply_markup: declarationKeyboard(rows, 'declaration:back:fts') });
     await trackTemporaryMessage(env, userId, sent.message_id);
     return true;
@@ -3934,6 +3943,17 @@ async function handleDeclarationCallback(env, query) {
     return;
   }
   if (state?.mode !== 'declaration') return;
+  if (query.data === 'declaration:fts:confirm') {
+    if (state.stage !== 'fts-name' || !state.vehicle) return;
+    // Reuse the existing declaration lookup, including its ambiguity handling.
+    // This is the user's confirmation, not an automated FTS verification.
+    return handleDeclarationReply(env, {
+      chat: message.chat,
+      from: query.from,
+      text: [state.vehicle.brand, state.vehicle.model].filter(Boolean).join(' '),
+      declarationNameSource: 'document'
+    });
+  }
   if (query.data === 'declaration:back:paid-vat' && state.stage === 'result') {
     await setCustomsState(env, userId, { ...state, stage: 'paid-vat' });
     const sent = await telegram(env, 'sendMessage', {
