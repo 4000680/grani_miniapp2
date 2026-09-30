@@ -14,7 +14,7 @@ function normalized(value) {
   return String(value || '')
     .toUpperCase()
     .replace(/Ё/g, 'Е')
-    .replace(/[^A-ZА-Я0-9]+/g, ' ')
+    .replace(/[^A-ZА-Я0-9+]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -27,11 +27,18 @@ function score(query, candidate) {
   return common * 100 - Math.abs(queryWords.size - candidateWords.size) * 5 - Math.abs(String(query).length - String(candidate).length) / 100;
 }
 
-export function findDeclarationPrice(name) {
+export function findDeclarationPrice(name, priceList = DECLARATION_PRICE_LIST) {
   const query = normalized(name);
   if (!query) return { exact: null, closest: [] };
-  const exact = DECLARATION_PRICE_LIST.find(item => normalized(item.name) === query) || null;
-  const closest = DECLARATION_PRICE_LIST
+  // Spaces may vary inside a model (RAV4 / RAV 4), but every other character
+  // and all trim words must still match. Never turn a base model into PLUS/HYBRID.
+  const compactQuery = query.replace(/ /g, '');
+  const literalMatches = priceList.filter(item => normalized(item.name) === query);
+  const matches = literalMatches.length ? literalMatches
+    : priceList.filter(item => normalized(item.name).replace(/ /g, '') === compactQuery);
+  const exact = matches.length === 1 ? matches[0] : null;
+  if (matches.length > 1) return { exact: null, closest: matches.slice(0, 5) };
+  const closest = priceList
     .map(item => ({ ...item, score: score(name, item.name) }))
     .filter(item => item.score > 0)
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))

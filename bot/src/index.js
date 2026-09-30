@@ -3856,7 +3856,7 @@ async function handleDeclarationReply(env, message) {
   const state = await getCustomsState(env, userId);
   if (state?.mode !== 'declaration') return false;
   if (state.stage === 'input') return false;
-  if (state.stage === 'fts-name') {
+  if (state.stage === 'fts-name' || state.stage === 'price-choice') {
     const found = findDeclarationPrice(message.text);
     if (found.exact) {
       await setCustomsState(env, userId, { ...state, stage: 'country', ftsName: message.text.trim(), priceName: found.exact.name, priceRub: found.exact.price });

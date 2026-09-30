@@ -1,10 +1,84 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import { calculateDeclarationPayment, findDeclarationPrice } from '../src/declaration-flow.js';
+import { DECLARATION_PRICE_LIST, DECLARATION_PRICE_SOURCE } from '../src/declaration-price-list.js';
 
 test('перечень цен находит точное наименование из загруженного списка', () => {
   const found = findDeclarationPrice('SCANIA P320');
   assert.deepEqual(found.exact, { name: 'SCANIA P320', price: 6762444.98 });
+});
+
+test('numeric model suffixes stay in their names and never become part of the price', () => {
+  for (const [name, price] of [
+    ['LEXUS RX 350', 5905158.97],
+    ['LEXUS RX 300', 4637383.38],
+    ['ABI TRAILERS KT 38', 16578123.16],
+    ['AGRO MASZ PAWEL NOWAK REWO 8200', 2282896.76],
+    ['945450 0000010', 4500000],
+    ['ИНВОТЭК ЭНЕРДЖИ 63560000010 02', 1926983.85],
+    ['СЛОНЕНОК 63560000010 02', 1902059.99]
+  ]) {
+    assert.deepEqual(findDeclarationPrice(name).exact, { name, price });
+  }
+  assert.equal(findDeclarationPrice('LEXUS RX').exact, null);
+});
+
+test('space variations resolve to the base RAV4 and preserve distinct trims', () => {
+  for (const query of ['Toyota RAV4', 'Toyota RAV 4', 'TOYOTA RAV  4']) {
+    assert.deepEqual(findDeclarationPrice(query).exact, { name: 'TOYOTA RAV 4', price: 2332583.53 });
+  }
+  assert.deepEqual(findDeclarationPrice('Toyota RAV4 PLUS').exact, { name: 'TOYOTA RAV4 PLUS', price: 2246561.75 });
+  assert.deepEqual(findDeclarationPrice('Toyota RAV 4 Fashion Plus').exact, { name: 'TOYOTA RAV4 FASHION PLUS', price: 2092878 });
+  assert.deepEqual(findDeclarationPrice('Lexus RX350').exact, { name: 'LEXUS RX 350', price: 5905158.97 });
+});
+
+test('space equivalence works on arbitrary names and ambiguous matches require selection', () => {
+  const rows = [{ name: 'ACME AX 12', price: 123456 }, { name: 'ACME AX12 PLUS', price: 234567 }];
+  assert.equal(findDeclarationPrice('Acme AX12', rows).exact.name, 'ACME AX 12');
+  assert.equal(findDeclarationPrice('Acme AX 12 Plus', rows).exact.name, 'ACME AX12 PLUS');
+  const ambiguous = [...rows, { name: 'ACME A X12', price: 345678 }];
+  assert.equal(findDeclarationPrice('AcmeAX12', ambiguous).exact, null);
+  assert.equal(findDeclarationPrice('AcmeAX12', ambiguous).closest.length, 2);
+  assert.equal(findDeclarationPrice('ACME AX12', [{ name: 'ACME AX12+', price: 123 }]).exact, null);
+  const duplicates = [{ name: 'ACME AX12', price: 123 }, { name: 'ACME AX12', price: 456 }];
+  assert.equal(findDeclarationPrice('ACME AX12', duplicates).exact, null);
+  assert.deepEqual(findDeclarationPrice('ACME AX12', duplicates).closest, duplicates);
+});
+
+test('text refinement at price-choice stays in the declaration flow and selects the base model', async () => {
+  const source = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+  const start = source.indexOf('async function handleDeclarationReply(');
+  const end = source.indexOf('async function handleDeclarationCallback(', start);
+  assert.ok(start >= 0 && end > start);
+  let state = { mode: 'declaration', stage: 'price-choice', vehicle: { category: 'M1' } };
+  const sent = [];
+  const context = vm.createContext({
+    getCustomsState: async () => state,
+    setCustomsState: async (_env, _userId, next) => { state = next; },
+    findDeclarationPrice,
+    telegram: async (_env, method, payload) => { sent.push({ method, payload }); return { message_id: 1 }; },
+    trackTemporaryMessage: async () => {},
+    escapeHtml: value => value,
+    formatMoney: value => String(value),
+    declarationCountryKeyboard: () => ({ inline_keyboard: [] })
+  });
+  vm.runInContext(source.slice(start, end), context);
+  const handled = await context.handleDeclarationReply({}, { from: { id: 123 }, chat: { id: 123 }, text: 'Toyota RAV4' });
+  assert.equal(handled, true);
+  assert.equal(state.stage, 'country');
+  assert.equal(state.priceName, 'TOYOTA RAV 4');
+  assert.equal(state.priceRub, 2332583.53);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].payload.text, /Точное совпадение найдено/);
+});
+
+test('the rebuilt FTS list includes every numbered source row with valid prices', () => {
+  assert.equal(DECLARATION_PRICE_SOURCE.pages, 158);
+  assert.equal(DECLARATION_PRICE_SOURCE.rows, 8334);
+  assert.equal(DECLARATION_PRICE_LIST.length, 8334);
+  assert.equal(DECLARATION_PRICE_LIST.every(item => item.name && Number.isFinite(item.price) && item.price > 0), true);
 });
 
 test('расчёт по декларации использует только коммерческий утильсбор', () => {
