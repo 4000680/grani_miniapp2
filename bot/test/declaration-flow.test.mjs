@@ -151,3 +151,24 @@ test('declaration can recalculate commercial util at 2027 coefficients', () => {
   assert.equal(nextYear.util[0].amount, 6_676_500);
   assert.equal(nextYear.calculationYear, 2027);
 });
+
+test('foreign duty overpayment never reduces declaration total or other payments', () => {
+  const input = {
+    priceRub: 2332583.53, paidVatRub: 477543, calculationYear: 2026,
+    vehicle: { category: 'M1', year: 2026, totalKw: 126, ccm: 1998, hybridType: 'combustion' }
+  };
+  const result = calculateDeclarationPayment({ ...input, paidDutyRub: 389295 });
+  assert.equal(result.duty, 349888);
+  assert.equal(result.excise, 102984);
+  assert.equal(result.vat, 612800);
+  assert.equal(result.util[0].dutyDifference, 0);
+  assert.equal(result.util[0].vatDifference, 135257);
+  assert.equal(result.util[0].total, 1138241);
+  const equal = calculateDeclarationPayment({ ...input, paidDutyRub: result.duty });
+  const larger = calculateDeclarationPayment({ ...input, paidDutyRub: 1000000 });
+  assert.equal(equal.util[0].total, result.util[0].total);
+  assert.equal(larger.util[0].total, result.util[0].total);
+  const less = calculateDeclarationPayment({ ...input, paidDutyRub: 100000 });
+  assert.equal(less.util[0].dutyDifference, 249888);
+  assert.equal(less.util[0].total, result.util[0].total + 249888);
+});

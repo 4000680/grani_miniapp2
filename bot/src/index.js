@@ -3769,6 +3769,7 @@ function declarationResultText(state, payment) {
     lines.push(`<b>${ageLabel(item.age)}</b>`);
     lines.push(`Доплата таможенной пошлины: ${formatMoney(item.dutyDifference)}`);
     lines.push(`Доплата НДС: ${formatMoney(item.vatDifference)}`);
+    lines.push(`Акциз: ${formatMoney(payment.excise)}`);
     lines.push(`<b>Коммерческий утилизационный сбор${item.coefficient == null ? '' : ` (коэффициент ${item.coefficient})`}: ${formatMoney(item.amount)}</b>`);
     lines.push(`<b>Итого к оплате: ${formatMoney(item.total)}</b>`);
   }
@@ -3816,9 +3817,12 @@ async function promptDeclarationFtsName(env, chatId, userId, state, workingMessa
   await setCustomsState(env, userId, next);
   const documentName = [next.vehicle.brand, next.vehicle.model].filter(Boolean).join(' ');
   const suggestedPrice = findDeclarationPrice(documentName).exact;
-  const reply_markup = declarationKeyboard([
+  const confirmationKeyboard = declarationKeyboard([
     [{ text: '✅ Подтверждаю наименование', callback_data: 'declaration:fts:confirm' }]
   ], next.backFromFts || 'declaration:back:start');
+  const reply_markup = next.vehicle.vin
+    ? declarationKeyboard([], next.backFromFts || 'declaration:back:start')
+    : confirmationKeyboard;
   const baseUtilLines = (next.util || []).map(item =>
     `<b>Коммерческий утилизационный сбор (${ageLabel(item.age)}):</b> ${formatMoney(item.commercial)}`
   );
@@ -3829,10 +3833,8 @@ async function promptDeclarationFtsName(env, chatId, userId, state, workingMessa
     ...baseUtilLines,
     ...(suggestedPrice ? ['', `<b>Наименование в перечне:</b> ${escapeHtml(suggestedPrice.name)}`, `<b>Стоимость по перечню:</b> ${formatMoney(suggestedPrice.price, true)}`] : []),
     '',
-    'Проверьте VIN на сайте <a href="https://customs.gov.ru/">ФТС</a> и пришлите сюда <b>точное наименование</b> автомобиля, как оно указано на сайте ФТС.',
-    '<i>Для таможенного органа наименование должно совпадать один в один.</i>',
-    '',
-    'Чтобы продолжить с наименованием из документа или шаблона СЭП, нажмите «✅ Подтверждаю наименование». Бот не выполняет автоматическую проверку на сайте ФТС. Если сведений пока нет, расчёт остаётся предварительным — сверку необходимо выполнить после их появления.'
+    'Проверьте сведения об автомобиле на сайте <a href="https://customs.gov.ru/">ФТС</a>. Если сведения совпадают, нажмите «✅ Подтверждаю наименование». Если наименование отличается, пришлите сюда <b>точное наименование</b> с сайта ФТС.',
+    '<i>Для таможенного органа наименование должно совпадать один в один.</i>'
   ].join('\n');
   if (workingMessage?.from?.is_bot) {
     await telegram(env, 'editMessageText', { chat_id: chatId, message_id: workingMessage.message_id, text, parse_mode: 'HTML', reply_markup });
@@ -3841,7 +3843,7 @@ async function promptDeclarationFtsName(env, chatId, userId, state, workingMessa
     const sent = await telegram(env, 'sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', reply_markup });
     await trackTemporaryMessage(env, userId, sent.message_id);
   }
-  return reply_markup;
+  if (next.vehicle.vin) await sendDeclarationVin(env, chatId, next.vehicle, confirmationKeyboard);
 }
 
 async function continueDeclarationAfterDocument(env, chatId, userId, state, vehicle, util, deadline, workingMessage = null) {
@@ -3856,8 +3858,7 @@ async function continueDeclarationAfterDocument(env, chatId, userId, state, vehi
   // Убираем техническое сообщение обработки, чтобы VIN был отдельным
   // последним сообщением после карточки с данными автомобиля.
   if (workingMessage?.from?.is_bot) await discardWorkingCard(env, workingMessage, userId);
-  const reply_markup = await promptDeclarationFtsName(env, chatId, userId, declaration);
-  await sendDeclarationVin(env, chatId, vehicle, reply_markup);
+  await promptDeclarationFtsName(env, chatId, userId, declaration);
 }
 
 async function handleDeclarationReply(env, message) {

@@ -31,7 +31,10 @@ test('декларация показывает открытый VIN отдел�
   const continueStart = source.indexOf('async function continueDeclarationAfterDocument');
   const continueEnd = source.indexOf('async function handleDeclarationReply', continueStart);
   const continueFunction = source.slice(continueStart, continueEnd);
-  assert.ok(continueFunction.indexOf('await promptDeclarationFtsName') < continueFunction.indexOf('await sendDeclarationVin'));
+  assert.ok(continueFunction.includes('await promptDeclarationFtsName'));
+  const promptStart = source.indexOf('async function promptDeclarationFtsName');
+  const promptFunction = source.slice(promptStart, continueStart);
+  assert.ok(promptFunction.indexOf("await telegram(env, 'sendMessage'") < promptFunction.indexOf('await sendDeclarationVin'));
   assert.ok(source.includes('<b>Технически допустимая максимальная масса:</b>'));
   assert.match(source, /<a href="https:\/\/customs\.gov\.ru\/">ФТС<\/a>/);
   assert.match(source, /Для таможенного органа наименование должно совпадать один в один/);

@@ -85,11 +85,13 @@ export function calculateDeclarationPayment({ priceRub, vehicle, paidDutyRub = 0
     ? Math.round(hp * electricExciseRate(powerKw))
     : 0;
   const vat = Math.round((price + duty + excise) * 0.22);
+  // Foreign duty overpayment is not a credit against other payments.
+  const dutyDifference = Math.max(0, duty - paidDutyRub);
   const util = commercialDeclarationUtil(vehicle, calculationYear).map(item => ({
     ...item,
-    dutyDifference: Math.round(duty - paidDutyRub),
+    dutyDifference: Math.round(dutyDifference),
     vatDifference: Math.round(vat - paidVatRub),
-    total: Math.round(duty - paidDutyRub + vat - paidVatRub + excise + item.amount)
+    total: Math.round(dutyDifference + vat - paidVatRub + excise + item.amount)
   }));
   return { price, duty, excise, vat, util, calculationYear };
 }
