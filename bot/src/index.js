@@ -14,6 +14,7 @@ import {
 import {
   addWorkingDays,
   calculatePeni,
+  calculatePeniForecast,
   calculateUtil,
   DocumentProcessingError,
   parseFlexibleDate,
@@ -588,17 +589,15 @@ function nextDay(date) {
 }
 
 function formatPeniCompact(cases, deadline, target) {
-  if (target <= deadline) {
-    return `Пени пока нет. Начнут начисляться с <b>${formatDate(nextDay(deadline))}</b>.`;
-  }
   const lines = [];
   for (const item of cases) {
-    const result = calculatePeni(item.sum, deadline, target);
-    const prefix = cases.length > 1 ? `${item.label}: ` : '';
-    lines.push(`<b>Просрочка:</b> ${result.days} календарных дн.`);
-    lines.push(`${prefix}<b>Пени на ${formatDate(target)}: ${formatMoney(result.total, true)}</b>`);
-    lines.push(`<b>Итого к оплате: ${formatMoney(item.sum + result.total, true)}</b>`);
+    if (cases.length > 1) lines.push(`<b>${item.label}</b>`);
+    for (const [index, result] of calculatePeniForecast(item.sum, deadline, target).entries()) {
+      const label = index === 0 ? 'Сегодня' : 'Следующий рабочий день';
+      lines.push(`${label}, ${formatDate(result.date)} — пени (${result.days} дн.): <b>${formatMoney(result.total, true)}</b>; итого: <b>${formatMoney(item.sum + result.total, true)}</b>.`);
+    }
   }
+  if (target <= deadline) lines.push(`Пени начнут начисляться с <b>${formatDate(nextDay(deadline))}</b>.`);
   return lines.join('\n');
 }
 
@@ -4589,7 +4588,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'crm-messaging-v31' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'peni-workday-v32' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {

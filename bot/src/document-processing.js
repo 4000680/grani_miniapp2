@@ -374,5 +374,12 @@ export function calculatePeni(sum, deadline, target) {
   return { days: Math.max(0, Math.round((target - deadline) / DAY)), total, periods };
 }
 
+export function calculatePeniForecast(sum, deadline, today = todayUtc()) {
+  return [today, addWorkingDays(today, 1)].map(date => ({
+    date,
+    ...calculatePeni(sum, deadline, date)
+  }));
+}
+
 export function toIso(date) { return date.toISOString().slice(0, 10); }
 export function todayUtc(now = new Date()) { return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())); }
