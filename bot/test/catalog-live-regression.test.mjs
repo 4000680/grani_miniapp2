@@ -13,6 +13,17 @@ function matches(query) {
   return exact.length ? exact : listCatalogSuggestions(catalog, parsed, 8);
 }
 
+test('compound brand conjunctions do not swallow the model number', () => {
+  for (const query of ['Lynk & Co 900 2026', 'LYNK AND CO 900 2026', 'Lynk Co 900 2026', 'Lynk-Co 900 2026', 'LynkCo 900 2026', '900 Lynk & Co 2026']) {
+    const exact = listCatalogModifications(catalog, parseCatalogQuery(query));
+    assert.equal(exact.length, 1, query);
+    assert.equal(exact[0].brand, 'LYNK AND CO', query);
+    assert.equal(exact[0].model, '900', query);
+    assert.equal(exact[0].year, 2026, query);
+    assert.ok(exact[0].rowIndexes.length > 0);
+  }
+});
+
 test('the live SEP template stores the EXEED control vehicle as STERRA ET', () => {
   const rows = matches('EXEED STERRA ET 2026');
   assert.equal(rows[0].brand, 'EXEED');

@@ -35,6 +35,23 @@ const catalog = {
   ]
 };
 
+test('compound brand normalization is generic and leaves model qualifiers intact', () => {
+  const fixture = {
+    brands: ['ALPHA AND BETA', 'NORTH & SOUTH', 'LAND ROVER'],
+    models: ['900', '900 PLUS', '7', 'DEFENDER'],
+    rows: [[0,0,2026,0,120,0,1900], [0,1,2026,0,150,0,2000], [1,2,2026,0,100,0,1700], [2,3,2026,0,200,0,2500]]
+  };
+  for (const query of ['Alpha & Beta 900 2026', 'Alpha Beta 900 2026', 'AlphaBeta 900 2026']) {
+    const found = listCatalogModifications(fixture, parseCatalogQuery(query));
+    assert.deepEqual(found.map(item => item.model).sort(), ['900', '900 PLUS']);
+    assert.ok(found.every(item => item.brand === 'ALPHA AND BETA'));
+  }
+  assert.deepEqual(listCatalogModifications(fixture, parseCatalogQuery('Alpha & Beta 900 PLUS 2026')).map(item => item.model), ['900 PLUS']);
+  assert.equal(listCatalogModifications(fixture, parseCatalogQuery('North AND South 7 2026'))[0].brand, 'NORTH & SOUTH');
+  assert.equal(listCatalogModifications(fixture, parseCatalogQuery('LandRover Defender 2026'))[0].brand, 'LAND ROVER');
+  assert.equal(listCatalogModifications(fixture, parseCatalogQuery('Alpha & Beta 901 2026')).length, 0);
+});
+
 test('parses a brand, model and one year from free text', () => {
   assert.deepEqual(parseCatalogQuery('Kia Niro EV, 2022 год'), {
     year: 2022,

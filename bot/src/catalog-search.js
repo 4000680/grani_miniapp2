@@ -123,10 +123,18 @@ function scoreEntry(parsedQuery, entry, knownBrandMatch=null) {
 }
 
 function exactBrandMatch(queryTokens,entry) {
-  const count=Math.min(Math.max(1,entry.brandTokens.length),queryTokens.length);
-  for(let start=0;start<=queryTokens.length-count;start++){
-    const part=queryTokens.slice(start,start+count).join(' '),canonical=transliterate(part).replace(/\s/g,'');
-    if(canonical===entry.brandCanonical)return {score:1,start,count,queryBrand:part,related:false};
+  // Conjunctions and spacing belong to the brand, not to the model. Match
+  // variable-length spans so a missing AND cannot consume the model number.
+  const compactBrand = parts => parts.filter((token,index) =>
+    token !== 'and' || index === 0 || index === parts.length-1
+  ).join('');
+  const expected=compactBrand(entry.brandTokens);
+  const maximum=Math.min(queryTokens.length,entry.brandTokens.length+2);
+  for(let start=0;start<queryTokens.length;start++){
+    for(let count=1;count<=maximum && start+count<=queryTokens.length;count++){
+      const span=queryTokens.slice(start,start+count);
+      if(compactBrand(span)===expected)return {score:1,start,count,queryBrand:span.join(' '),related:false};
+    }
   }
   return null;
 }
