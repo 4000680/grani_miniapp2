@@ -195,6 +195,19 @@ export function listCatalogSuggestions(catalog, parsedQuery, limit=26) {
 }
 export function listCatalogModifications(catalog, parsedQuery) { return rankedEntries(catalog,parsedQuery,'exact'); }
 
+export function listCatalogNeighborYears(catalog, parsedQuery) {
+  if (!parsedQuery?.year || listCatalogModifications(catalog, parsedQuery).length) return [];
+  return rankedEntries(catalog, {...parsedQuery, year:null}, 'exact')
+    .filter(item => item.modelScore === 1 && Math.abs(item.year-parsedQuery.year) === 1)
+    .sort((a,b) => b.year-a.year || a.model.localeCompare(b.model,'ru'));
+}
+
+export function applyCatalogTemplateChoice(candidate, choice) {
+  if (!candidate || !choice || candidate.brandIndex !== choice.brandIndex ||
+      candidate.modelIndex !== choice.modelIndex || candidate.year !== choice.templateYear) return candidate;
+  return {...candidate, templateYear:candidate.year, year:choice.vehicleYear};
+}
+
 export function paginateCatalogModifications(modifications,page=0,pageSize=8) {
   const size=Math.max(1,Math.floor(Number(pageSize))||8), pageCount=Math.max(1,Math.ceil(modifications.length/size));
   const currentPage=Math.min(Math.max(0,Math.floor(Number(page))||0),pageCount-1), startIndex=currentPage*size;

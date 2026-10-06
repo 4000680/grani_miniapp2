@@ -3,6 +3,8 @@ import {
   getCatalogCandidate,
   getCatalogVariants,
   listCatalogModifications,
+  listCatalogNeighborYears,
+  applyCatalogTemplateChoice,
   listCatalogSuggestions,
   loadCatalog,
   paginateCatalogModifications,
@@ -796,7 +798,16 @@ async function getCustomsState(env, userId) {
 
 async function setCustomsState(env, userId, state) {
   const stub = applicationsStub(env, userId);
+  if (stub && state && !Object.hasOwn(state, 'catalogTemplateChoice') && (state.rowIndex !== undefined || state.pickupRowIndex !== undefined)) {
+    const previous = await stub.getCustomsState();
+    if (previous?.catalogTemplateChoice) state = {...state, catalogTemplateChoice:previous.catalogTemplateChoice};
+  }
   if (stub) await stub.setCustomsState(state);
+}
+
+async function getCatalogCandidateForUser(env, catalog, rowIndex, userId) {
+  const state = await getCustomsState(env, userId);
+  return applyCatalogTemplateChoice(getCatalogCandidate(catalog, rowIndex), state?.catalogTemplateChoice);
 }
 
 async function saveUtilYearContext(env, userId, vehicle, deadline) {
@@ -1581,7 +1592,7 @@ async function handleCustomsCallback(env, query) {
   if (editUnder3Value) {
     const userId = query.from?.id || message.chat.id;
     const catalog = await loadCatalog(env.CATALOG_URL);
-    const candidate = getCatalogCandidate(catalog, Number(editUnder3Value[1]));
+    const candidate = await getCatalogCandidateForUser(env, catalog, Number(editUnder3Value[1]), message.chat.id);
     if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
     const currency = electricCustomsCurrency(editUnder3Value[4]);
     await cleanupCustomsMessages(env, userId, message.chat.id);
@@ -1600,7 +1611,7 @@ async function handleCustomsCallback(env, query) {
   if (editElectricValue) {
     const userId = query.from?.id || message.chat.id;
     const catalog = await loadCatalog(env.CATALOG_URL);
-    const candidate = getCatalogCandidate(catalog, Number(editElectricValue[1]));
+    const candidate = await getCatalogCandidateForUser(env, catalog, Number(editElectricValue[1]), message.chat.id);
     if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
     electricCustomsPowerDetails(candidate);
     await cleanupCustomsMessages(env, userId, message.chat.id);
@@ -1614,7 +1625,7 @@ async function handleCustomsCallback(env, query) {
   if (editPickupValue) {
     const userId = query.from?.id || message.chat.id;
     const catalog = await loadCatalog(env.CATALOG_URL);
-    const candidate = getCatalogCandidate(catalog, Number(editPickupValue[1]));
+    const candidate = await getCatalogCandidateForUser(env, catalog, Number(editPickupValue[1]), message.chat.id);
     if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
     const currency = electricCustomsCurrency(editPickupValue[6]);
     await cleanupCustomsMessages(env, userId, message.chat.id);
@@ -1638,7 +1649,7 @@ async function handleCustomsCallback(env, query) {
   if (electricCurrency) {
     const userId = query.from?.id || message.chat.id;
     const catalog = await loadCatalog(env.CATALOG_URL);
-    const candidate = getCatalogCandidate(catalog, Number(electricCurrency[1]));
+    const candidate = await getCatalogCandidateForUser(env, catalog, Number(electricCurrency[1]), message.chat.id);
     if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
     electricCustomsPowerDetails(candidate);
     await discardWorkingCard(env, message, userId);
@@ -1679,7 +1690,7 @@ async function handleCustomsCallback(env, query) {
   if (electricRoute) {
     const userId = query.from?.id || message.chat.id;
     const catalog = await loadCatalog(env.CATALOG_URL);
-    const candidate = getCatalogCandidate(catalog, Number(electricRoute[1]));
+    const candidate = await getCatalogCandidateForUser(env, catalog, Number(electricRoute[1]), message.chat.id);
     if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
     electricCustomsPowerDetails(candidate);
     const requestedWeight = Number(electricRoute[2]) || candidate.mass || null;
@@ -1699,7 +1710,7 @@ async function handleCustomsCallback(env, query) {
   if (under3Volume) {
     const userId = query.from?.id || message.chat.id;
     const catalog = await loadCatalog(env.CATALOG_URL);
-    const candidate = getCatalogCandidate(catalog, Number(under3Volume[1]));
+    const candidate = await getCatalogCandidateForUser(env, catalog, Number(under3Volume[1]), message.chat.id);
     if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
     const requestedWeight = Number(under3Volume[2]) || candidate.mass || null;
     await discardWorkingCard(env, message, userId);
@@ -1855,7 +1866,7 @@ async function handleCustomsCallback(env, query) {
     const userId = query.from?.id || message.chat.id;
     const state = await getCustomsState(env, userId);
     const catalog = await loadCatalog(env.CATALOG_URL);
-    const candidate = getCatalogCandidate(catalog, Number(pickupVehicle[1]));
+    const candidate = await getCatalogCandidateForUser(env, catalog, Number(pickupVehicle[1]), message.chat.id);
     const mass = Number(pickupVehicle[2]) || candidate?.mass;
     if (!candidate || !mass || state?.stage !== 'catalog-input' || state.mode !== 'pickup') {
       throw new Error('Шаг выбора пикапа устарел. Начните расчёт заново.');
@@ -1978,7 +1989,7 @@ async function handleCustomsReply(env, message) {
       return true;
     }
     const catalog = await loadCatalog(env.CATALOG_URL);
-    const candidate = getCatalogCandidate(catalog, rowIndex);
+    const candidate = await getCatalogCandidateForUser(env, catalog, rowIndex, message.chat.id);
     if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
     if (!candidate.combustionKw && candidate.electricKw) {
       const requestedWeight = parsePositiveNumber(state.requestedWeight) || candidate.mass || null;
@@ -2024,7 +2035,7 @@ async function handleCustomsReply(env, message) {
     }
     const value = valueDetails.valueRub;
     const catalog = await loadCatalog(env.CATALOG_URL);
-    const candidate = getCatalogCandidate(catalog, rowIndex);
+    const candidate = await getCatalogCandidateForUser(env, catalog, rowIndex, message.chat.id);
     if (!candidate) throw new Error('Выбранный автомобиль больше не найден в шаблоне СЭП');
     const requestedWeight = parsePositiveNumber(state.requestedWeight) || candidate.mass || null;
     const totalKw = calculationPower(candidate, false);
@@ -2145,7 +2156,7 @@ async function handleCustomsReply(env, message) {
     }
     const value = convertCurrencyToRub(enteredValue, currencyRate);
     const catalog = await loadCatalog(env.CATALOG_URL);
-    const candidate = getCatalogCandidate(catalog, rowIndex);
+    const candidate = await getCatalogCandidateForUser(env, catalog, rowIndex, message.chat.id);
     const power = electricCustomsPowerDetails(candidate);
     const utilPowerKw = power.utilPowerKw;
     const excisePowerKw = power.excisePowerKw;
@@ -2400,6 +2411,7 @@ function catalogCandidateDescription(candidate, requestedWeight = null) {
   if (candidate.electricKw) power.push(candidate.electricKw + ' кВт (30 мин)');
   return [
     '<b>' + escapeHtml([candidate.brand, candidate.model].filter(Boolean).join(' ')) + '</b>, ' + candidate.year,
+    candidate.templateYear ? '⚠️ Использован шаблон СЭП за ' + candidate.templateYear + ' год; год автомобиля — ' + candidate.year + '. Сверьте мощность и массу. Расчёт предварительный.' : '',
     power.length ? 'Мощность в шаблоне СЭП: ' + power.join(' + ') : 'Мощность в шаблоне СЭП не указана',
     requestedWeight || candidate.mass
       ? 'Технически допустимая масса: ' + (requestedWeight || candidate.mass) + ' кг'
@@ -2456,6 +2468,13 @@ function catalogModificationKeyboard(modifications, page = 0) {
 }
 
 function catalogSuggestionsText(suggestions, parsed) {
+  if (suggestions.some(item => item.neighborYear)) return [
+    '📅 <b>Автомобиль найден в шаблоне СЭП другого года</b>',
+    `За ${parsed.year} год точного шаблона нет. Ниже — та же модификация за соседние годы.`,
+    'Год выпуска вашего автомобиля остаётся ' + parsed.year + '.',
+    'Выберите шаблон только если мощность и технически допустимая масса совпадают с вашим автомобилем. Расчёт будет предварительным.',
+    catalogNavigationLine(parsed)
+  ].join('\n\n');
   const hasRelatedGac = suggestions.some(item => item.relatedBrand && item.brand.toUpperCase() === 'TRUMPCHI');
   return [
     'Точного совпадения по марке или модели в шаблоне СЭП нет.',
@@ -2474,7 +2493,9 @@ function catalogSuggestionsKeyboard(suggestions) {
     inline_keyboard: [
       ...suggestions.map(item => [{
         text: compactButtonText(`${item.brand} ${item.model}, ${item.year}`),
-        callback_data: `catalog:model:${item.brandIndex}:${item.modelIndex}:${item.year}:0`
+        callback_data: item.neighborYear
+          ? `catalog:neighbor:${item.brandIndex}:${item.modelIndex}:${item.year}:${item.vehicleYear}`
+          : `catalog:model:${item.brandIndex}:${item.modelIndex}:${item.year}:0`
       }]),
       [
         { text: '✏️ Изменить запрос', callback_data: 'catalog:back:search' },
@@ -2563,7 +2584,7 @@ function catalogCalculationResultKeyboard(candidate, weight) {
       ...(todayUtc().getUTCFullYear() < 2027
         ? [[{ text: '📅 Рассчитать на 2027 год', callback_data: 'calc:year:2027' }]]
         : []),
-      [{ text: '← Назад к выбору объёма', callback_data: `catalog:result:back:${candidate.rowIndex}:${weight || candidate.mass || 0}` }],
+      [{ text: '← Назад к выбору объёма', callback_data: `catalog:result:back:${candidate.rowIndex}:${weight || candidate.mass || 0}:${candidate.year}` }],
       [
         { text: '🔄 Новый расчёт', callback_data: 'calc:result:new' },
         { text: '🏠 Главное меню', callback_data: 'calc:result:menu' }
@@ -2604,6 +2625,7 @@ function formatCatalogResult(candidate, vehicle, util, customs = null) {
     '',
     '<b>Автомобиль:</b> ' + escapeHtml([candidate.brand, candidate.model].filter(Boolean).join(' ')),
     '<b>Год выпуска:</b> ' + candidate.year,
+    ...(candidate.templateYear ? ['⚠️ Шаблон СЭП: ' + candidate.templateYear + ' год. Характеристики необходимо сверить; расчёт предварительный.'] : []),
     '<b>Технически допустимая масса:</b> ' + (vehicle.maxMass || candidate.mass || '—') + (vehicle.maxMass || candidate.mass ? ' кг' : ''),
     '<b>Тип:</b> ' + (electric ? 'электромобиль / последовательный гибрид' : 'ДВС / параллельный гибрид'),
     '<b>Мощность для расчёта:</b> ' + formatPower(vehicle.totalKw) + (electric ? ' (30-минутная)' : ''),
@@ -2650,7 +2672,7 @@ function formatCatalogResult(candidate, vehicle, util, customs = null) {
 
 async function showCatalogCandidate(env, message, rowIndex, weight, sourceParsed = null, backCallback = null) {
   const catalog = await loadCatalog(env.CATALOG_URL);
-  const candidate = getCatalogCandidate(catalog, rowIndex);
+  const candidate = await getCatalogCandidateForUser(env, catalog, rowIndex, message.chat.id);
   if (!candidate) throw new Error('Выбранная версия автомобиля больше не найдена в шаблоне СЭП');
   const source = sourceParsed || parseCatalogQuery(candidate.brand + ' ' + candidate.model + ' ' + candidate.year);
   const back = backCallback || 'catalog:back:variants:' + candidate.rowIndex;
@@ -2734,6 +2756,8 @@ async function showCatalogModification(env, message, brandIndex, modelIndex, yea
   const first = variants[0];
   const parsed = parseCatalogQuery(first.brand + ' ' + first.model + ' ' + first.year);
   const source = sourceParsed || parsed;
+  const templateNotice = source.year && source.year !== year
+    ? `⚠️ Шаблон СЭП за ${year} год; автомобиль — ${source.year} года. Сверьте мощность и массу. Расчёт предварительный.` : '';
   const pagination = paginateCatalogVariants(variants, page);
   if (!pagination.total) {
     await telegram(env, 'editMessageText', {
@@ -2763,6 +2787,7 @@ async function showCatalogModification(env, message, brandIndex, modelIndex, yea
     message_id: message.message_id,
     text: [
       '<b>' + escapeHtml(first.brand + ' ' + first.model) + ' ' + first.year + '</b>',
+      templateNotice,
       '',
       'Выберите мощность и технически допустимую максимальную массу по шильдику автомобиля:',
       pagination.pageCount > 1
@@ -2882,6 +2907,8 @@ async function handleCatalogWeightReply(env, message) {
 
 async function runCatalogTextSearch(env, message, parsed) {
   const userId = message.from?.id || message.chat.id;
+  const previous = await getCustomsState(env, userId);
+  if (previous?.catalogTemplateChoice) await setCustomsState(env, userId, {...previous, catalogTemplateChoice:null});
   await cleanupTemporaryMessages(env, userId, message.chat.id);
   await telegram(env, 'sendChatAction', { chat_id: message.chat.id, action: 'typing' });
   const status = await telegram(env, 'sendMessage', {
@@ -2893,7 +2920,10 @@ async function runCatalogTextSearch(env, message, parsed) {
     const catalog = await loadCatalog(env.CATALOG_URL);
     const modifications = listCatalogModifications(catalog, parsed);
     if (!modifications.length) {
-      const suggestions = listCatalogSuggestions(catalog, parsed);
+      const neighbors = listCatalogNeighborYears(catalog, parsed);
+      const suggestions = neighbors.length
+        ? neighbors.map(item => ({...item, neighborYear:true, vehicleYear:parsed.year}))
+        : listCatalogSuggestions(catalog, parsed);
       if (suggestions.length) {
         if (suggestions.length > 25) {
           await telegram(env, 'editMessageText', {
@@ -2973,6 +3003,14 @@ async function showCatalogModificationsPage(env, message, sourceParsed, page = 0
   if (!sourceParsed) throw new Error('Не удалось восстановить исходный запрос');
   const catalog = await loadCatalog(env.CATALOG_URL);
   const modifications = listCatalogModifications(catalog, sourceParsed);
+  if (!modifications.length) {
+    const neighbors = listCatalogNeighborYears(catalog, sourceParsed).map(item => ({...item, neighborYear:true, vehicleYear:sourceParsed.year}));
+    if (neighbors.length && neighbors.length <= 25) {
+      await telegram(env, 'editMessageText', {chat_id:message.chat.id, message_id:message.message_id,
+        text:catalogSuggestionsText(neighbors, sourceParsed), parse_mode:'HTML', reply_markup:catalogSuggestionsKeyboard(neighbors)});
+      return;
+    }
+  }
   if (!modifications.length || modifications.length > 25) {
     await telegram(env, 'editMessageText', {
       chat_id: message.chat.id,
@@ -2998,11 +3036,31 @@ async function handleCatalogCallback(env, query) {
   const state = await getCustomsState(env, query.from?.id || message.chat.id);
   const sourceParsed = withCustomsState(catalogQueryFromNavigationMessage(message), state);
   if (query.data === 'catalog:noop') return;
-  const resultBack = query.data.match(/^catalog:result:back:(\d+):(\d+(?:\.\d+)?)$/);
+  const neighbor = query.data.match(/^catalog:neighbor:(\d+):(\d+):(\d{4}):(\d{4})$/);
+  if (neighbor) {
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const valid = listCatalogNeighborYears(catalog, sourceParsed).some(item =>
+      item.brandIndex === Number(neighbor[1]) && item.modelIndex === Number(neighbor[2]) && item.year === Number(neighbor[3]));
+    if (!valid || sourceParsed?.year !== Number(neighbor[4])) throw new Error('Шаблон соседнего года больше не найден. Повторите поиск.');
+    await setCustomsState(env, query.from?.id || message.chat.id, {...state, catalogTemplateChoice:{
+      brandIndex:Number(neighbor[1]), modelIndex:Number(neighbor[2]), templateYear:Number(neighbor[3]), vehicleYear:Number(neighbor[4])
+    }});
+    await showCatalogModification(env, message, Number(neighbor[1]), Number(neighbor[2]), Number(neighbor[3]), sourceParsed);
+    return;
+  }
+  const resultBack = query.data.match(/^catalog:result:back:(\d+):(\d+(?:\.\d+)?)(?::(\d{4}))?$/);
   if (resultBack) {
     const catalog = await loadCatalog(env.CATALOG_URL);
-    const candidate = getCatalogCandidate(catalog, Number(resultBack[1]));
+    const candidate = await getCatalogCandidateForUser(env, catalog, Number(resultBack[1]), message.chat.id);
     if (!candidate) throw new Error('Автомобиль больше не найден в шаблоне СЭП');
+    const raw = getCatalogCandidate(catalog, candidate.rowIndex);
+    candidate.year = Number(resultBack[3] || raw.year);
+    const restoredChoice = candidate.year !== raw.year ? {
+      brandIndex:raw.brandIndex, modelIndex:raw.modelIndex, templateYear:raw.year, vehicleYear:candidate.year
+    } : null;
+    if (restoredChoice) candidate.templateYear = raw.year;
+    else delete candidate.templateYear;
+    await setCustomsState(env, query.from?.id || message.chat.id, {...state, catalogTemplateChoice:restoredChoice});
     const weight = Number(resultBack[2]) || candidate.mass || null;
     const source = parseCatalogQuery(candidate.brand + ' ' + candidate.model + ' ' + candidate.year);
     const sent = await telegram(env, 'sendMessage', {
@@ -3066,14 +3124,14 @@ async function handleCatalogCallback(env, query) {
   const variantsBack = query.data.match(/^catalog:back:variants:(\d+)$/);
   if (variantsBack) {
     const catalog = await loadCatalog(env.CATALOG_URL);
-    const candidate = getCatalogCandidate(catalog, Number(variantsBack[1]));
+    const candidate = await getCatalogCandidateForUser(env, catalog, Number(variantsBack[1]), message.chat.id);
     if (!candidate) throw new Error('Автомобиль больше не найден в шаблоне СЭП');
     await showCatalogModification(
       env,
       message,
       candidate.brandIndex,
       candidate.modelIndex,
-      candidate.year,
+      candidate.templateYear || candidate.year,
       sourceParsed
     );
     return;
@@ -3109,11 +3167,11 @@ async function handleCatalogCallback(env, query) {
   const pick = query.data.match(/^catalog:pick:(\d+)(?::(\d+))?(?::(\d+))?(?::(\d+))?$/);
   if (pick) {
     const catalog = await loadCatalog(env.CATALOG_URL);
-    const candidate = getCatalogCandidate(catalog, Number(pick[1]));
+    const candidate = await getCatalogCandidateForUser(env, catalog, Number(pick[1]), message.chat.id);
     if (!candidate) throw new Error('Автомобиль больше не найден в шаблоне СЭП');
     const backCallback = message.text?.startsWith('Нашёл несколько вариантов для массы')
       ? 'catalog:back:weight'
-      : `catalog:variants:${candidate.brandIndex}:${candidate.modelIndex}:${candidate.year}:${Number(pick[3]) || 0}:${Number(pick[4]) || 0}`;
+      : `catalog:variants:${candidate.brandIndex}:${candidate.modelIndex}:${candidate.templateYear || candidate.year}:${Number(pick[3]) || 0}:${Number(pick[4]) || 0}`;
     await showCatalogCandidate(
       env,
       message,
@@ -3128,7 +3186,7 @@ async function handleCatalogCallback(env, query) {
   const calculation = query.data.match(/^catalog:calc:(\d+):(e|\d+(?:\.\d+)?)(?::(\d+(?:\.\d+)?))?$/);
   if (!calculation) return;
   const catalog = await loadCatalog(env.CATALOG_URL);
-  const candidate = getCatalogCandidate(catalog, Number(calculation[1]));
+  const candidate = await getCatalogCandidateForUser(env, catalog, Number(calculation[1]), message.chat.id);
   if (!candidate) throw new Error('Автомобиль больше не найден в шаблоне СЭП');
 
   const electric = calculation[2] === 'e';
