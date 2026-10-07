@@ -3072,13 +3072,15 @@ async function handleCatalogCallback(env, query) {
     await setCustomsState(env, query.from?.id || message.chat.id, {...state, catalogTemplateChoice:restoredChoice});
     const weight = Number(resultBack[2]) || candidate.mass || null;
     const source = parseCatalogQuery(candidate.brand + ' ' + candidate.model + ' ' + candidate.year);
-    const sent = await telegram(env, 'sendMessage', {
+    const permanent = isPermanentResultText(message.text || '');
+    const sent = await telegram(env, permanent ? 'sendMessage' : 'editMessageText', {
       chat_id: message.chat.id,
+      ...(permanent ? {} : { message_id: message.message_id }),
       text: catalogEnginePrompt(candidate, weight, source),
       parse_mode: 'HTML',
       reply_markup: catalogEngineKeyboard(candidate.rowIndex, weight, `catalog:back:variants:${candidate.rowIndex}`, source)
     });
-    await trackTemporaryMessage(env, query.from?.id || message.chat.id, sent.message_id);
+    await trackTemporaryMessage(env, query.from?.id || message.chat.id, sent.message_id || message.message_id);
     return;
   }
   if (query.data === 'catalog:back:search') {
@@ -4728,7 +4730,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'catalog-category-v33' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'catalog-category-v34' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {

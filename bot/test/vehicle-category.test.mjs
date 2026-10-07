@@ -44,6 +44,8 @@ function flow(candidate) {
     setCustomsState:async(_env,_id,next)=>{state=next;},
     catalogQueryFromNavigationMessage:()=>null, withCustomsState:x=>x,
     loadCatalog:async()=>({}),getCatalogCandidateForUser:async()=>({...candidate}),
+    getCatalogCandidate:()=>({...candidate}), parseCatalogQuery:()=>({}),
+    catalogEnginePrompt:()=> 'choose engine', catalogEngineKeyboard:()=>({}),
     calculationPower:()=>100,
     telegram:async(_env,method,payload)=>{sent.push({method,payload});return {message_id:77};},
     trackTemporaryMessage:async()=>{}, releaseTemporaryMessage:async()=>{},
@@ -113,4 +115,12 @@ test('category callbacks cannot assign an incompatible cargo category', async ()
   const f=flow(candidate);
   await f.press('catalog:category:0:2000:3100:N3');
   assert.equal(f.saved.length,0);
+});
+
+test('back replaces an unfinished category card but keeps a completed calculation', async () => {
+  const f=flow(candidate);
+  await f.press('catalog:result:back:0:3100:2026','Выберите категорию:');
+  assert.equal(f.sent.at(-1).method,'editMessageText');
+  await f.press('catalog:result:back:0:3100:2026','✅ Расчёт утильсбора');
+  assert.equal(f.sent.at(-1).method,'sendMessage');
 });
