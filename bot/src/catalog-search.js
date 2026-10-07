@@ -159,6 +159,13 @@ function candidateBrands(catalog,parsedQuery) {
   if(exact.length)return {index,selected:appendRelatedBrands(exact,index,queryTokens)};
   const ranked=index.brands.map(entry=>({...brandMatch(queryTokens,entry),entry})).sort((a,b)=>b.score-a.score);
   const topScore=ranked[0]?.score||0;
+  // Resolve a clear brand typo before comparing models. A model from another
+  // brand must not override a confidently recognized brand. Ambiguous brand
+  // spellings still produce suggestions rather than an automatic choice.
+  const typoConfidence=ranked[0]?similarity(ranked[0].queryBrand,ranked[0].entry.brandCanonical):0;
+  if(typoConfidence>=0.78 && topScore-(ranked[1]?.score||0)>=0.12) {
+    return {index,selected:appendRelatedBrands([ranked[0]],index,queryTokens)};
+  }
   const minimum=topScore===1?0.8:Math.max(0.3,topScore-0.5);
   const selected=ranked.filter(item=>item.score>=minimum).slice(0,24);
   return {index,selected:appendRelatedBrands(selected,index,queryTokens)};
@@ -175,8 +182,9 @@ function rankedEntries(catalog, parsedQuery, mode) {
       if (mode==='exact') { if (!rank.exact) continue; }
       else {
         if (rank.brandScore<0.35 && !rank.strongMatches) continue;
-        if (!rank.broad && !rank.strongMatches && rank.modelScore<0.48 && rank.brandScore<0.95) continue;
-        if (rank.score<0.52 && rank.brandScore<0.95) continue;
+        // An exact brand is not evidence that an unrelated model fits.
+        if (!rank.broad && !rank.strongMatches && rank.modelScore<0.48) continue;
+        if (rank.score<0.52) continue;
       }
       matches.push({...entry,...rank,rowsCount:entry.rowIndexes.length});
     }
@@ -187,9 +195,10 @@ function rankedEntries(catalog, parsedQuery, mode) {
 export function listCatalogSuggestions(catalog, parsedQuery, limit=26) {
   const ranked = rankedEntries(catalog,parsedQuery,'fuzzy');
   const top = ranked[0];
-  const safeRanked = top?.brandScore >= 0.95
-    ? ranked.filter(item => item.brandIndex === top.brandIndex || item.relatedBrand)
-    : ranked.filter(item => !top || item.score >= top.score - 0.18);
+  const safeRanked = ranked.filter(item =>
+    (!top || top.brandScore<0.95 || item.brandIndex===top.brandIndex || item.relatedBrand) &&
+    (item.broad || !top || item.score>=top.score-0.18)
+  );
   return safeRanked.slice(0,Math.max(1,Number(limit)||26))
     .map(item=>({...item,relatedBrand:Boolean(item.relatedBrand&&normalizeCatalogText(item.brand)!==normalizeCatalogText(parsedQuery.tokens?.[0]))}));
 }
