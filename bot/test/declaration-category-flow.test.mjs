@@ -10,14 +10,14 @@ test('документ передаёт распознанную категор�
 });
 
 test('поиск по шаблону СЭП запрашивает группу категории до расчёта декларации', () => {
-  const declarationCatalogPart = source.slice(source.indexOf("const calculation = query.data.match"), source.indexOf("if (sourceParsed?.customsMode === 'electric')"));
+  const declarationCatalogPart = source.slice(source.indexOf("const categoryChoice = query.data.match"), source.indexOf("if (sourceParsed?.customsMode === 'electric')"));
   assert.match(declarationCatalogPart, /category: declarationFlow \? null : 'M1'/);
   assert.match(declarationCatalogPart, /categoryBack: `catalog:back:variants:\$\{candidate\.rowIndex\}`/);
   assert.doesNotMatch(declarationCatalogPart, /const util = calculateUtil\(vehicle\);[\s\S]*?promptDeclarationCategory/);
   assert.match(source, /text: 'M1 \/ M1G', callback_data: 'declaration:category:passenger'/);
-  assert.match(source, /text: 'N1 \/ N2', callback_data: 'declaration:category:cargo'/);
+  assert.match(source, /callback_data: `declaration:category:\$\{cargo\}`/);
   assert.match(source, /category: 'M1', categoryLabel: 'M1 \/ M1G'/);
-  assert.match(source, /category: 'N1', categoryLabel: 'N1 \/ N2'/);
+  assert.match(source, /category: cargo, categoryLabel: cargo/);
 });
 
 test('декларация показывает открытый VIN отдельно после карточки и без подписи', () => {

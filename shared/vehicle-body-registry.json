@@ -1,0 +1,367 @@
+{
+  "version": 1,
+  "purpose": "Body hints for category confirmation; not legal category assignments.",
+  "records": [
+    {
+      "brands": [
+        "TOYOTA"
+      ],
+      "models": [
+        "HILUX",
+        "TACOMA",
+        "TUNDRA"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.toyota.com/trucks/",
+      "exclude": [
+        "HILUX SURF"
+      ]
+    },
+    {
+      "brands": [
+        "FORD"
+      ],
+      "models": [
+        "RANGER",
+        "F-150",
+        "F-250",
+        "F-350"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.ford.com/f-series/"
+    },
+    {
+      "brands": [
+        "RAM"
+      ],
+      "models": [
+        "1500",
+        "2500",
+        "3500",
+        "TRX",
+        "TRX 1500",
+        "REBEL 1500",
+        "PICKUP 1500",
+        "1500TRX"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.ramtrucks.com/trucks.html"
+    },
+    {
+      "brands": [
+        "CHEVROLET"
+      ],
+      "models": [
+        "COLORADO",
+        "SILVERADO"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.chevrolet.com/trucks"
+    },
+    {
+      "brands": [
+        "GMC"
+      ],
+      "models": [
+        "CANYON",
+        "SIERRA",
+        "HUMMER EV PICKUP"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.gmc.com/trucks"
+    },
+    {
+      "brands": [
+        "MITSUBISHI"
+      ],
+      "models": [
+        "L200",
+        "TRITON"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.mitsubishi-motors.com/en/products/"
+    },
+    {
+      "brands": [
+        "NISSAN"
+      ],
+      "models": [
+        "NAVARA",
+        "NP300 NAVARA",
+        "FRONTIER",
+        "TITAN"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.nissan-global.com/EN/DOCUMENT/PDF/ALLIANCE/HANDBOOK/2008/AllianceFigureAndFacts2008.pdf"
+    },
+    {
+      "brands": [
+        "ISUZU"
+      ],
+      "models": [
+        "D-MAX",
+        "TFS85 D-MAX",
+        "TFS 85 D-MAX",
+        "PICKUP"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.isuzu.co.uk/vehicles/"
+    },
+    {
+      "brands": [
+        "GREAT WALL"
+      ],
+      "models": [
+        "POER",
+        "PAO",
+        "CHANG CHEN PAO",
+        "CHANG CHENG PAO",
+        "SHANGHAI POER",
+        "WINGLE"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.gwm-global.com/news/3403070.html"
+    },
+    {
+      "brands": [
+        "HONDA"
+      ],
+      "models": [
+        "RIDGELINE"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://automobiles.honda.com/ridgeline"
+    },
+    {
+      "brands": [
+        "HYUNDAI"
+      ],
+      "models": [
+        "SANTA CRUZ"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.hyundaiusa.com/us/en/vehicles/santa-cruz"
+    },
+    {
+      "brands": [
+        "JEEP"
+      ],
+      "models": [
+        "GLADIATOR",
+        "WRANGLER GLADIATOR"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.jeep.com/gladiator.html"
+    },
+    {
+      "brands": [
+        "MAZDA"
+      ],
+      "models": [
+        "BT-50"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://newsroom.mazda.com/en/publicity/release/2020/202006/200617a.html"
+    },
+    {
+      "brands": [
+        "VOLKSWAGEN"
+      ],
+      "models": [
+        "AMAROK"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.volkswagen-me.com/en/models/amarok.html"
+    },
+    {
+      "brands": [
+        "CHANGAN"
+      ],
+      "models": [
+        "HUNTER"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.globalchangan.com/newsroom/2024-changan-global-partners-conference.html"
+    },
+    {
+      "brands": [
+        "DONGFENG"
+      ],
+      "models": [
+        "RICH"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.dongfeng-cv.com/"
+    },
+    {
+      "brands": [
+        "JAC"
+      ],
+      "models": [
+        "HUNTER",
+        "T9 HUNTER",
+        "T6",
+        "T8"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://pickup.jac.com.cn/"
+    },
+    {
+      "brands": [
+        "FOTON"
+      ],
+      "models": [
+        "TUNLAND"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.foton-global.com/products.html"
+    },
+    {
+      "brands": [
+        "SOLLERS"
+      ],
+      "models": [
+        "ST6",
+        "ST8"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://sollers-auto.com/press-center/news/pikapy-sollers-i-uaz-poluchat-zashchitnoe-pokrytie-kuzova-iz-polikarbamida/"
+    },
+    {
+      "brands": [
+        "УАЗ",
+        "UAZ"
+      ],
+      "models": [
+        "UAZ PICKUP",
+        "PICKUP",
+        "ПИКАП"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://sollers-auto.com/press-center/news/pikapy-sollers-i-uaz-poluchat-zashchitnoe-pokrytie-kuzova-iz-polikarbamida/"
+    },
+    {
+      "brands": [
+        "KG MOBILITY"
+      ],
+      "models": [
+        "MUSSO",
+        "REXTON SPORTS"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://en.kg-mobility.com/attached/contents/display/file/200000300020002/20250131145537515_FYPdY8.pdf"
+    },
+    {
+      "brands": [
+        "SSANGYONG"
+      ],
+      "models": [
+        "MUSSO SPORTS",
+        "REXTON SPORTS",
+        "ACTYON SPORTS"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://en.wikipedia.org/wiki/List_of_pickup_trucks"
+    },
+    {
+      "brands": [
+        "MAXUS"
+      ],
+      "models": [
+        "T60",
+        "T90"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://en.wikipedia.org/wiki/List_of_pickup_trucks"
+    },
+    {
+      "brands": [
+        "MG"
+      ],
+      "models": [
+        "T60"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://mgmotor.com.ng/t60/"
+    },
+    {
+      "brands": [
+        "PEUGEOT"
+      ],
+      "models": [
+        "PICK UP"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.media.stellantis.com/em-en/peugeot/pick-up"
+    },
+    {
+      "brands": [
+        "RIVIAN"
+      ],
+      "models": [
+        "R1T"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://assets.rivian.com/2md5qhoeajym/530xs9hu11xOKefT2JrvA5/46f6cb5d5756b8320d3eb494a902e66c/r1t-og-en-us-20240527.pdf"
+    },
+    {
+      "brands": [
+        "TESLA"
+      ],
+      "models": [
+        "CYBERTRUCK"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.tesla.com/cybertruck"
+    },
+    {
+      "brands": [
+        "SHELBY"
+      ],
+      "models": [
+        "F-150"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://shelby.com/Multimedia/2026-Shelby-F-150Offroad"
+    },
+    {
+      "brands": [
+        "MERCEDES-BENZ"
+      ],
+      "models": [
+        "AMG G63 MANSORY PICKUP STAR TROOPER"
+      ],
+      "bodyType": "pickup",
+      "reviewedAt": "2026-10-07",
+      "source": "https://www.mansory.com/car/star-trooper-pickup-edition"
+    }
+  ]
+}

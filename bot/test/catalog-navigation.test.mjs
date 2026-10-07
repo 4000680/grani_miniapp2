@@ -63,8 +63,8 @@ test('ordinary catalog utility selection defaults to M1 before calculating, whil
   const handler = workerSource.slice(start, end);
   assert.match(handler, /const declarationFlow = state\?\.mode === 'declaration'/);
   assert.match(handler, /category: declarationFlow \? null : 'M1'/);
-  const calculationBranch = handler.slice(handler.indexOf('const calculation = query.data.match'));
-  assert.ok(calculationBranch.indexOf("if (sourceParsed?.customsMode === 'electric')") < calculationBranch.indexOf('const util = calculateUtil(vehicle)'));
+  const calculationBranch = handler.slice(handler.indexOf('const categoryChoice = query.data.match'));
+  assert.ok(calculationBranch.indexOf("if (sourceParsed?.customsMode === 'electric')") < calculationBranch.indexOf('return completeCatalogUtil('));
 });
 
 test('catalog utility result offers 2027 rates and can return to the volume choice', () => {

@@ -77,13 +77,14 @@ test('neighbor choice followed by volume calculation uses vehicle year, not temp
     withCustomsState:x=>x,catalogQueryFromNavigationMessage:()=>parsed,
     loadCatalog:async()=>catalog,listCatalogNeighborYears,getCatalogCandidate,applyCatalogTemplateChoice,
     showCatalogModification:async()=>{},calculationPower,
+    categoryConfirmationReason:()=>null,
     calculateUtil:vehicle=>{assert.equal(vehicle.year,2024);return [];},
     formatCatalogResult:(candidate,vehicle)=>{completed={candidate,vehicle};return 'result';},
     catalogCalculationResultKeyboard:()=>({}),telegram:async()=>({}),
     saveUtilYearContext:async()=>{},saveApplication:async()=>{},applicationFromVehicle:()=>({}),releaseTemporaryMessage:async()=>{}
   };
   vm.createContext(context);
-  vm.runInContext(extract('getCatalogCandidateForUser')+'\n'+extract('handleCatalogCallback'),context);
+  vm.runInContext(extract('getCatalogCandidateForUser')+'\n'+extract('handleCatalogCallback')+'\n'+extract('completeCatalogUtil'),context);
   const query={from:{id:1},message:{chat:{id:1},message_id:2,text:'source'}};
   await context.handleCatalogCallback({}, {...query,data:'catalog:neighbor:0:0:2023:2024'});
   await context.handleCatalogCallback({}, {...query,data:'catalog:calc:0:2500:3500'});

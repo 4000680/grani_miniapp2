@@ -59,6 +59,7 @@ import {
   miniAppProfile
 } from './analytics.js';
 import { formatUtilYearReference } from './util-rate-reference.js';
+import { categoryConfirmationReason, vehicleCategoryOptions, cargoCategoryForMass } from '../../shared/vehicle-category.js';
 import { takeAdminSession, sendDirectMessage, receiveCrmReply, listCrmMessages, getCrmMessage } from './crm-messaging.js';
 import organizationsCatalog from './organizations-catalog.json' with { type: 'json' };
 import organizationsGeo from './organizations-geo.json' with { type: 'json' };
@@ -2584,6 +2585,7 @@ function catalogCalculationResultKeyboard(candidate, weight) {
       ...(todayUtc().getUTCFullYear() < 2027
         ? [[{ text: '📅 Рассчитать на 2027 год', callback_data: 'calc:year:2027' }]]
         : []),
+      [{ text: '✏️ Изменить категорию', callback_data: `catalog:category:${candidate.rowIndex}:${candidate.categoryPowerInput || 'e'}:${weight || candidate.mass || 0}:choose` }],
       [{ text: '← Назад к выбору объёма', callback_data: `catalog:result:back:${candidate.rowIndex}:${weight || candidate.mass || 0}:${candidate.year}` }],
       [
         { text: '🔄 Новый расчёт', callback_data: 'calc:result:new' },
@@ -2625,6 +2627,7 @@ function formatCatalogResult(candidate, vehicle, util, customs = null) {
     '',
     '<b>Автомобиль:</b> ' + escapeHtml([candidate.brand, candidate.model].filter(Boolean).join(' ')),
     '<b>Год выпуска:</b> ' + candidate.year,
+    '<b>Категория:</b> ' + escapeHtml(vehicle.category),
     ...(candidate.templateYear ? ['⚠️ Шаблон СЭП: ' + candidate.templateYear + ' год. Характеристики необходимо сверить; расчёт предварительный.'] : []),
     '<b>Технически допустимая масса:</b> ' + (vehicle.maxMass || candidate.mass || '—') + (vehicle.maxMass || candidate.mass ? ' кг' : ''),
     '<b>Тип:</b> ' + (electric ? 'электромобиль / последовательный гибрид' : 'ДВС / параллельный гибрид'),
@@ -2640,6 +2643,12 @@ function formatCatalogResult(candidate, vehicle, util, customs = null) {
   if (!customs?.customsPayments) {
     for (const item of util) {
       lines.push('<b>' + ageLabel(item.age) + ':</b>');
+      if (item.cargo || item.pickup) {
+        lines.push('Тип грузового автомобиля: ' + escapeHtml(item.utilRate.vehicleTypeLabel || 'грузовой'));
+        lines.push('Коэффициент: ' + item.utilCoefficient + '; год ставок: ' + item.utilRate.calculationYear);
+        lines.push('<b>Коммерческий утильсбор: ' + formatMoney(item.commercial) + '</b>', '');
+        continue;
+      }
       if (item.personal !== item.commercial) {
         lines.push('<b>Льготный утильсбор для физлица: ' + formatMoney(item.personal) + '</b>');
         lines.push('Коммерческий утильсбор: ' + formatMoney(item.commercial));
@@ -3183,7 +3192,8 @@ async function handleCatalogCallback(env, query) {
     return;
   }
 
-  const calculation = query.data.match(/^catalog:calc:(\d+):(e|\d+(?:\.\d+)?)(?::(\d+(?:\.\d+)?))?$/);
+  const categoryChoice = query.data.match(/^catalog:category:(\d+):(e|\d+(?:\.\d+)?):(\d+(?:\.\d+)?):(choose|M1|N1|N2|N3)$/);
+  const calculation = categoryChoice || query.data.match(/^catalog:calc:(\d+):(e|\d+(?:\.\d+)?)(?::(\d+(?:\.\d+)?))?$/);
   if (!calculation) return;
   const catalog = await loadCatalog(env.CATALOG_URL);
   const candidate = await getCatalogCandidateForUser(env, catalog, Number(calculation[1]), message.chat.id);
@@ -3194,6 +3204,7 @@ async function handleCatalogCallback(env, query) {
   const ccm = electric ? null : Number(calculation[2]);
   const requestedWeight = Number(calculation[3]) || candidate.mass || null;
   const totalKw = calculationPower(candidate, electric);
+  candidate.categoryPowerInput = calculation[2];
   const vehicle = {
     type: 'catalog',
     brand: candidate.brand,
@@ -3229,7 +3240,57 @@ async function handleCatalogCallback(env, query) {
     );
     return;
   }
-  const util = calculateUtil(vehicle);
+  const ordinaryUtil = !sourceParsed?.customsMode && !sourceParsed?.customsDuty;
+  if (ordinaryUtil && ((categoryChoice && categoryChoice[4] === 'choose') ||
+      (!categoryChoice && categoryConfirmationReason(vehicle)))) {
+    return promptCatalogCategory(env, query, candidate, vehicle);
+  }
+  if (categoryChoice) {
+    const selectedCategory = categoryChoice[4];
+    if (!ordinaryUtil || !vehicleCategoryOptions(vehicle).some(option => option.id === selectedCategory)) return;
+    vehicle.category = selectedCategory;
+  }
+  return completeCatalogUtil(env, query, candidate, vehicle, sourceParsed);
+}
+
+async function promptCatalogCategory(env, query, candidate, vehicle) {
+  const userId = query.from?.id || query.message.chat.id;
+  const previous = await getCustomsState(env, userId);
+  await setCustomsState(env, userId, { ...previous, mode: 'catalog-category', stage: 'category' });
+  const callback = `catalog:category:${candidate.rowIndex}:${candidate.categoryPowerInput}:${vehicle.maxMass || 0}`;
+  const permanent = isPermanentResultText(query.message.text || '');
+  const sent = await telegram(env, permanent ? 'sendMessage' : 'editMessageText', {
+    chat_id: query.message.chat.id, ...(permanent ? {} : { message_id: query.message.message_id }),
+    text: [
+      'Похоже, выбранное транспортное средство относится к другой категории. Для него применяется другой расчёт утильсбора.',
+      '', catalogCandidateDescription(candidate, vehicle.maxMass), '', 'Выберите категорию:'
+    ].join('\n'), parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: [
+      ...vehicleCategoryOptions(vehicle).map(option => [{ text: option.label, callback_data: `${callback}:${option.id}` }]),
+      [{ text: '← Назад', callback_data: `catalog:result:back:${candidate.rowIndex}:${vehicle.maxMass || 0}:${candidate.year}` },
+       { text: '🏠 Главное меню', callback_data: 'calc:menu' }]
+    ] }
+  });
+  if (permanent) await trackTemporaryMessage(env, userId, sent.message_id);
+}
+
+async function completeCatalogUtil(env, query, candidate, vehicle, sourceParsed = null) {
+  const message = query.message;
+  const userId = query.from?.id || message.chat.id;
+  const requestedWeight = vehicle.maxMass;
+  let util;
+  try {
+    util = calculateUtil(vehicle);
+  } catch (error) {
+    if (error.code !== 'CARGO_TYPE_REQUIRED') throw error;
+    const previous = await getCustomsState(env, userId);
+    await setCustomsState(env, userId, { ...previous, mode: 'catalog-category', stage: 'cargo-type',
+      vehicle, catalogCandidate: candidate, cargoCandidates: error.details.candidates });
+    const prompt = cargoTypePrompt(vehicle, error.details.candidates);
+    prompt.reply_markup.inline_keyboard[prompt.reply_markup.inline_keyboard.length - 1][0].callback_data =
+      `catalog:category:${candidate.rowIndex}:${candidate.categoryPowerInput}:${vehicle.maxMass}:choose`;
+    return telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, ...prompt, parse_mode: 'HTML' });
+  }
   const customs = sourceParsed?.customsDuty ? {
     customsValue: Number(sourceParsed.customsValue) || null,
     customsPayments: Number(sourceParsed.customsDuty),
@@ -3245,7 +3306,11 @@ async function handleCatalogCallback(env, query) {
   const resultText = formatCatalogResult(candidate, vehicle, util, customs);
   await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id,
     text: resultText, parse_mode: 'HTML', reply_markup: customs ? customsResultKeyboard() : catalogCalculationResultKeyboard(candidate, requestedWeight) });
-  if (!customs) await saveUtilYearContext(env, query.from?.id || message.chat.id, vehicle, null);
+  if (!customs) {
+    const previous = await getCustomsState(env, userId);
+    await setCustomsState(env, userId, { mode: 'util', stage: 'result', catalogTemplateChoice: previous?.catalogTemplateChoice });
+    await saveUtilYearContext(env, query.from?.id || message.chat.id, vehicle, null);
+  }
   await saveApplication(env, query.from?.id,
     customs ? customsApplicationFromVehicle(vehicle, util, customs) : applicationFromVehicle(vehicle, util), resultText, 'HTML');
   await releaseTemporaryMessage(env, query.from?.id || message.chat.id, message.message_id);
@@ -3756,10 +3821,11 @@ function declarationCountryKeyboard() {
   ], 'declaration:back:fts');
 }
 
-function declarationCategoryKeyboard(back = 'declaration:back:start') {
+function declarationCategoryKeyboard(back = 'declaration:back:start', vehicle = {}) {
+  const cargo = cargoCategoryForMass(vehicle.maxMass);
   return declarationKeyboard([
     [{ text: 'M1 / M1G', callback_data: 'declaration:category:passenger' }],
-    [{ text: 'N1 / N2', callback_data: 'declaration:category:cargo' }]
+    ...(cargo ? [[{ text: `Пикап / грузовой — ${cargo}`, callback_data: `declaration:category:${cargo}` }]] : [])
   ], back);
 }
 
@@ -3859,7 +3925,7 @@ async function promptDeclarationCategory(env, chatId, userId, state, workingMess
     '',
     'Укажите категорию автомобиля для расчёта по декларации:'
   ].join('\n');
-  const reply_markup = declarationCategoryKeyboard(next.categoryBack);
+  const reply_markup = declarationCategoryKeyboard(next.categoryBack, next.vehicle);
   if (workingMessage?.from?.is_bot) {
     await telegram(env, 'editMessageText', { chat_id: chatId, message_id: workingMessage.message_id, text, parse_mode: 'HTML', reply_markup });
     await trackTemporaryMessage(env, userId, workingMessage.message_id);
@@ -4038,12 +4104,24 @@ async function handleDeclarationCallback(env, query) {
     await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: `Выбран ближайший вариант:\n<b>${escapeHtml(item.name)}</b>\nСтоимость: <b>${formatMoney(item.price, true)}</b>\n\nВыберите страну декларации:`, parse_mode: 'HTML', reply_markup: declarationCountryKeyboard() });
     return;
   }
-  const category = query.data.match(/^declaration:category:(passenger|cargo)$/);
+  const category = query.data.match(/^declaration:category:(passenger|cargo|N1|N2|N3)$/);
   if (category) {
+    if (state.stage !== 'category' || !state.vehicle) return;
+    const cargo = cargoCategoryForMass(state.vehicle.maxMass);
+    if (category[1] !== 'passenger' && (!cargo || (category[1] !== 'cargo' && category[1] !== cargo))) return;
     const vehicle = category[1] === 'passenger'
       ? { ...state.vehicle, category: 'M1', categoryLabel: 'M1 / M1G' }
-      : { ...state.vehicle, category: 'N1', categoryLabel: 'N1 / N2' };
-    const util = calculateUtil(vehicle);
+      : { ...state.vehicle, category: cargo, categoryLabel: cargo };
+    let util;
+    try { util = calculateUtil(vehicle); }
+    catch (error) {
+      if (error.code !== 'CARGO_TYPE_REQUIRED') throw error;
+      await setCustomsState(env, userId, { ...state, stage: 'cargo-type', vehicle, cargoCandidates: error.details.candidates });
+      const prompt = cargoTypePrompt(vehicle, error.details.candidates, true);
+      prompt.reply_markup.inline_keyboard.at(-1)[0].callback_data = 'declaration:back:category';
+      await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, ...prompt, parse_mode: 'HTML' });
+      return;
+    }
     await promptDeclarationFtsName(env, message.chat.id, userId, {
       ...state,
       vehicle,
@@ -4154,7 +4232,11 @@ async function handleCalculationCallback(env, query) {
   if (cargoType) {
     const state = await getCustomsState(env, userId);
     if (state?.stage !== 'cargo-type' || !state.vehicle) return;
+    if (!state.cargoCandidates?.some(item => item.id === cargoType[1])) return;
     const vehicle = { ...state.vehicle, cargoType: cargoType[1] };
+    if (state.mode === 'catalog-category') {
+      return completeCatalogUtil(env, query, state.catalogCandidate, vehicle);
+    }
     const util = calculateUtil(vehicle);
     const deadline = vehicle.issueDate ? addWorkingDays(vehicle.issueDate, 5) : null;
     if (state.mode === 'declaration') {
@@ -4646,7 +4728,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'peni-workday-v32' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'catalog-category-v33' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
