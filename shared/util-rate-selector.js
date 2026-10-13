@@ -44,6 +44,10 @@ export function detectCargoType(text = '') {
 export function selectUtilRate({ category, vehicleType = null, maxMass = null, powertrain = 'combustion', payer = 'commercial', ccm = null, powerKw = null, age, year }) {
   const normalizedCategory = normalCategory(category);
   const selectedYear = rateYear(year);
+  // Light/medium cargo vans use the category's general mass-based cargo row.
+  // The directory's separate van subtype belongs to heavy N3 vehicles only.
+  const selectedVehicleType = vehicleType === 'van' && ['N1', 'N2'].includes(normalizedCategory)
+    ? 'cargo' : vehicleType;
   const matches = directory.records.filter(record => {
     if (record.category !== normalizedCategory || record.coefficients?.[selectedYear]?.[age] == null) return false;
     if (normalizedCategory === 'M1') {
@@ -51,10 +55,10 @@ export function selectUtilRate({ category, vehicleType = null, maxMass = null, p
         inRange(ccm, record.ccm) && inRange(powerKw, record.power);
     }
     return record.powertrain === 'any' && inRange(maxMass, record.mass) &&
-      (!vehicleType || record.vehicleType === vehicleType);
+      (!selectedVehicleType || record.vehicleType === selectedVehicleType);
   });
   if (!matches.length) return null;
-  if (normalizedCategory !== 'M1' && !vehicleType) {
+  if (normalizedCategory !== 'M1' && !selectedVehicleType) {
     const types = [...new Set(matches.map(record => record.vehicleType))];
     if (types.length > 1) return { ambiguous: true, candidates: cargoTypeCandidates({ category, maxMass, year: selectedYear, age }) };
   }

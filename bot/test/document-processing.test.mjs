@@ -17,6 +17,28 @@ function line(y, left, right, rightX = 395) {
   };
 }
 
+test('cargo van description does not prevent N1 util and penalty calculation', () => {
+  const document={text:'Свидетельство о безопасности конструкции транспортного средства\nИсполнение загрузочного пространства: грузовой фургон',pages:[[
+    line(780,'МАРКА','TEST BRAND'),line(760,'КОММЕРЧЕСКОЕ НАИМЕНОВАНИЕ','TEST VAN'),
+    line(740,'ГОД ВЫПУСКА','2020'),line(720,'КАТЕГОРИЯ','N1')
+  ],[
+    line(780,'Технически допустимая максимальная масса','3500'),
+    line(740,'- рабочий объем цилиндров, см³','2143'),
+    line(700,'- максимальная мощность, кВт','105 (3800)')
+  ]]};
+  const vehicle=parseVehicleDocument(document);
+  assert.equal(vehicle.category,'N1');
+  assert.equal(vehicle.maxMass,3500);
+  assert.equal(vehicle.cargoType,'van');
+  const result=calculateUtil(vehicle,new Date('2026-10-13T00:00:00Z'))[0];
+  assert.equal(result.age,'old');
+  assert.equal(result.commercial,1441500);
+  assert.equal(result.utilCoefficient,9.61);
+  assert.equal(result.utilRate.vehicleType,'cargo');
+  const peni=calculatePeni(result.commercial,new Date('2026-10-01T00:00:00Z'),new Date('2026-10-13T00:00:00Z'));
+  assert.ok(peni.total>0);
+});
+
 test('parses an EPTS layout and uses the TR TS category', () => {
   const document = {
     text: 'Выписка\nиз электронного паспорта транспортного средства',

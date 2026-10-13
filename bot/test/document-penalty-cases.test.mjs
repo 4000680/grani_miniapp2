@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { calculatePeniForecast, addWorkingDays, parseFlexibleDate, toIso } from '../src/document-processing.js';
+import { calculateUtil, calculatePeniForecast, addWorkingDays, parseFlexibleDate, toIso } from '../src/document-processing.js';
 
 const source = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
 function extract(name, async = false) {
@@ -43,6 +43,20 @@ test('document penalty cases include both available rates with explicit labels',
     {label:'до 3 лет — льготный утильсбор',sum:3400},
     {label:'до 3 лет — коммерческий утильсбор',sum:800800}
   ]);
+});
+
+test('N1 van result includes mass-based commercial util and both penalty dates', () => {
+  const {context}=runtime();
+  const vehicle={type:'sbkts',brand:'TEST',model:'VAN',year:2020,category:'N1',maxMass:3500,cargoType:'van',ccm:2143,issueDate:date('2026-09-01')};
+  const fees=calculateUtil(vehicle,date('2026-09-30'));
+  const text=context.formatDocumentResult(vehicle,fees,addWorkingDays(vehicle.issueDate,5),date('2026-09-30'));
+  assert.match(text,/N1/);
+  assert.match(text,/3500 кг/);
+  assert.match(text,/9.61/);
+  assert.match(text,/1\s*441\s*500/);
+  assert.match(text,/Сегодня/);
+  assert.match(text,/Следующий рабочий день/);
+  assert.equal(context.peniCases(fees).length,1);
 });
 
 test('commercial-only vehicles and cargo do not duplicate the same rate', () => {

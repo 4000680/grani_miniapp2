@@ -34,3 +34,26 @@ test('selects M1 commercial and personal rows by the requested rate year', () =>
   assert.equal(personal2026.amount, 1010400);
   assert.ok(commercial2027.amount > commercial2026.amount);
 });
+
+test('N1/N1G/N2 vans use their cargo mass bracket, never an N3 van row', () => {
+  for (const [category,maxMass,age,amount] of [
+    ['N1',3500,'old',1441500], ['N1G',3220,'new',990000],
+    ['N2',4500,'new',1036500], ['N2',7000,'old',0]
+  ]) {
+    const input={category,maxMass,age,year:2026};
+    const cargo=selectUtilRate({...input,vehicleType:'cargo'});
+    const van=selectUtilRate({...input,vehicleType:'van'});
+    assert.ok(van,`${category} ${maxMass}`);
+    assert.deepEqual(van,cargo);
+    if(amount)assert.equal(van.amount,amount);
+  }
+  assert.equal(selectUtilRate({category:'N1',maxMass:5000,age:'old',year:2026,vehicleType:'van'}),null);
+});
+
+test('N3 vans retain their separate rate and invalid subtypes do not fall back', () => {
+  const input={category:'N3',maxMass:13000,age:'new',year:2026};
+  const van=selectUtilRate({...input,vehicleType:'van'});
+  assert.equal(van.vehicleType,'van');
+  assert.notEqual(van.vehicleType,selectUtilRate({...input,vehicleType:'cargo'}).vehicleType);
+  assert.equal(selectUtilRate({...input,vehicleType:'unknown'}),null);
+});
