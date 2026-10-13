@@ -732,17 +732,22 @@ async function sendDeclarationVin(env, chatId, vehicle, reply_markup = undefined
 }
 
 function peniCases(util) {
-  return util.map(item => ({ label: ageLabel(item.age), sum: item.personal }));
+  return util.flatMap(item => item.personal !== item.commercial
+    ? [
+        { label: `${ageLabel(item.age)} — льготный утильсбор`, sum: item.personal },
+        { label: `${ageLabel(item.age)} — коммерческий утильсбор`, sum: item.commercial }
+      ]
+    : [{ label: `${ageLabel(item.age)} — коммерческий утильсбор`, sum: item.commercial }]);
 }
 
 function encodeCases(cases) {
-  if (cases.length === 1) return `Сумма утильсбора: ${formatMoney(cases[0].sum)}`;
+  if (cases.length === 1 && !cases[0].label) return `Сумма утильсбора: ${formatMoney(cases[0].sum)}`;
   return cases.map(item => `${item.label}: ${formatMoney(item.sum)}`).join('\n');
 }
 
 function extractCases(text) {
   const result = [];
-  const pattern = /(до 3 лет|старше 3 лет):\s*([\d\s ]+)\s*₽/gi;
+  const pattern = /((?:до 3 лет|старше 3 лет)(?: — (?:льготный|коммерческий) утильсбор)?):\s*([\d\s ]+)\s*₽/gi;
   for (const match of text.matchAll(pattern)) result.push({ label: match[1].toLowerCase(), sum: Number(match[2].replace(/\s| /g, '')) });
   if (result.length) return result;
   const single = text.match(/Сумма утильсбора:\s*([\d\s ]+)\s*₽/i);
@@ -1229,7 +1234,7 @@ async function handleDateReply(env, message) {
   await saveApplication(env, message.from?.id || message.chat.id, {
     source: 'Расчёт пеней', calculationType: 'penalties', brand: vehicle.brand || '', model: vehicle.model || '',
     year: vehicle.year || null, vin: vehicle.vin || '', category: vehicle.category || '',
-    amount: cases.reduce((sum, item) => sum + (Number(item.sum) || 0), 0), amountLabel: 'Пени'
+    amount: cases.length === 1 ? Number(cases[0].sum) : null, amountLabel: 'Пени'
   }, resultText, 'HTML');
   if (state?.utilYearContext) {
     await setCustomsState(env, message.from?.id || message.chat.id, {
@@ -4730,7 +4735,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'catalog-category-v34' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'dual-util-penalties-v35' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
