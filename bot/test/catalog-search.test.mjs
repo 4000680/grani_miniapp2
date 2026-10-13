@@ -43,7 +43,7 @@ test('compound brand normalization is generic and leaves model qualifiers intact
   };
   for (const query of ['Alpha & Beta 900 2026', 'Alpha Beta 900 2026', 'AlphaBeta 900 2026']) {
     const found = listCatalogModifications(fixture, parseCatalogQuery(query));
-    assert.deepEqual(found.map(item => item.model).sort(), ['900', '900 PLUS']);
+    assert.deepEqual(found.map(item => item.model).sort(), ['900']);
     assert.ok(found.every(item => item.brand === 'ALPHA AND BETA'));
   }
   assert.deepEqual(listCatalogModifications(fixture, parseCatalogQuery('Alpha & Beta 900 PLUS 2026')).map(item => item.model), ['900 PLUS']);

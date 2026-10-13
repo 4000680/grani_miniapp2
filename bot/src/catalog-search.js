@@ -13,6 +13,15 @@ let catalogPromise = null;
 let catalogLoadedAt = 0;
 const catalogIndexes = new WeakMap();
 
+function modelTokens(value) {
+  // Split letter-to-number boundaries, but keep leading-number suffixes
+  // together (30d, 4matic). The same rule is used for input and template data.
+  return searchTokens(value).flatMap(token => token.replace(/([a-z])([0-9])/g, '$1 $2').split(' '));
+}
+function compactBrand(parts) {
+  return parts.filter((token,index) => token !== 'and' || index === 0 || index === parts.length-1).join('');
+}
+
 export function normalizeCatalogText(value) { return normalize(value).toUpperCase(); }
 
 export function parseCatalogQuery(text) {
@@ -70,7 +79,7 @@ function catalogIndex(catalog) {
     brands:catalog.brands.map((brand,brandIndex)=>({
       brandIndex,brand:brand||'',brandTokens:searchTokens(brand),brandCanonical:transliterate(brand).replace(/\s/g,'')
     })),
-    entriesByBrand:new Map()
+    entriesByBrand:new Map(), modelVocabularyByBrand:new Map()
   };
   catalogIndexes.set(catalog,result);
   return result;
@@ -83,51 +92,65 @@ function catalogEntriesForBrand(catalog,index,brandIndex) {
   for(let rowIndex=start;rowIndex<end;rowIndex++){
     const row=catalog.rows[rowIndex],key=`${row[1]}:${row[2]}`;
     let entry=entries.get(key);
-    if(!entry){const model=catalog.models[row[1]]||'';entry={key,brandIndex,modelIndex:row[1],brand,model,year:Number(row[2]),rowIndexes:[],brandTokens,modelTokens:searchTokens(model),brandCanonical};entries.set(key,entry);}
+    if(!entry){const model=catalog.models[row[1]]||'';entry={key,brandIndex,modelIndex:row[1],brand,model,year:Number(row[2]),rowIndexes:[],brandTokens,modelTokens:modelTokens(model),brandCanonical};entries.set(key,entry);}
     entry.rowIndexes.push(rowIndex);
   }
-  const result=[...entries.values()];index.entriesByBrand.set(brandIndex,result);return result;
+  const result=[...entries.values()];
+  index.modelVocabularyByBrand.set(brandIndex,new Set(result.flatMap(entry=>entry.modelTokens)));
+  index.entriesByBrand.set(brandIndex,result);return result;
 }
 
 function brandMatch(queryTokens, entry) {
   let best={score:0,start:0,count:1,queryBrand:queryTokens[0]||'',related:false};
-  const count=Math.min(Math.max(1,entry.brandTokens.length),queryTokens.length);
-  for (let start=0; start<=queryTokens.length-count; start++) {
-    const part=queryTokens.slice(start,start+count).join(' '), canonical=transliterate(part).replace(/\s/g,'');
+  const expected=compactBrand(entry.brandTokens);
+  const maximum=Math.min(entry.brandTokens.length+2,queryTokens.length);
+  for (let start=0; start<queryTokens.length; start++) {
+   for(let count=1;count<=maximum && start+count<=queryTokens.length;count++) {
+    const span=queryTokens.slice(start,start+count);
+    // A model number must not be swallowed by a multiword brand typo match.
+    if (!/\d/.test(expected) && span.some(token=>/\d/.test(token))) continue;
+    const part=span.join(' '), canonical=compactBrand(span);
     const related=RELATED_BRANDS[normalizeCatalogText(part)]?.has(normalizeCatalogText(entry.brand))||false;
-    let score=related?1:similarity(canonical,entry.brandCanonical);
-    if (canonical===entry.brandCanonical) score=1;
-    else if (canonical.length>=3 && (canonical.startsWith(entry.brandCanonical)||entry.brandCanonical.startsWith(canonical))) score=Math.max(score,0.88);
-    if (score>best.score) best={score,start,count,queryBrand:part,related};
+    const score=related?1:similarity(canonical,expected);
+    if (score>best.score) best={score,start,count,queryBrand:part,related,confidence:score};
+   }
   }
   return best;
 }
 
-function scoreEntry(parsedQuery, entry, knownBrandMatch=null) {
+function scoreEntry(parsedQuery, entry, knownBrandMatch=null, vocabulary=null) {
   const queryTokens=searchTokens(parsedQuery.vehicleText), brand=knownBrandMatch||brandMatch(queryTokens,entry);
-  const modelQuery=queryTokens.filter((_,index)=>index<brand.start||index>=brand.start+brand.count);
+  const modelQuery=queryTokens.filter((_,index)=>index<brand.start||index>=brand.start+brand.count).flatMap(modelTokens);
   if (!modelQuery.length) return {score:brand.score*0.78,brandScore:brand.score,modelScore:0,exact:false,broad:true,strongMatches:0,relatedBrand:brand.related};
   const queryScores=modelQuery.map(token=>Math.max(0,...entry.modelTokens.map(candidate=>tokenSimilarity(token,candidate))));
   const candidateScores=entry.modelTokens.map(token=>Math.max(0,...modelQuery.map(candidate=>tokenSimilarity(token,candidate))));
   const queryCoverage=queryScores.reduce((s,v)=>s+v,0)/queryScores.length;
   const candidateCoverage=candidateScores.reduce((s,v)=>s+v,0)/Math.max(1,candidateScores.length);
   const strongest=Math.max(0,...queryScores), strongMatches=queryScores.filter(value=>value>=0.78).length;
+  const firstNumberIndex=modelQuery.findIndex(token=>/^\d+$/.test(token));
+  const firstNumber=modelQuery[firstNumberIndex];
+  const candidateNumbers=entry.modelTokens.flatMap(token=>token.match(/^(\d+)(?:[a-z]+)?$/)?.[1] || []);
+  const numericConflict=Boolean(firstNumber &&
+    (firstNumberIndex===0 || firstNumber.length>=2 || candidateNumbers.length) &&
+    !candidateNumbers.includes(firstNumber));
+  const claimedFamily=modelQuery.filter(token=>/^[a-z]{2,}$/.test(token) && vocabulary?.has(token));
+  const familyConflict=claimedFamily.some(token=>!entry.modelTokens.includes(token));
+  const fullModel=modelQuery.join('')===entry.modelTokens.join('') ||
+    [...modelQuery].sort().join(' ')===[...entry.modelTokens].sort().join(' ');
   let modelScore=Math.max(queryCoverage*0.55+candidateCoverage*0.45,strongest*0.8);
   modelScore-=Math.min(0.12,Math.max(0,modelQuery.length-strongMatches)*0.025);
   const directedTokenMatch = queryToken => entry.modelTokens.some(candidateToken => {
     if (queryToken === candidateToken) return true;
     return queryToken.length >= 2 && candidateToken.length >= queryToken.length && candidateToken.includes(queryToken);
   });
-  const exact=brand.score>=0.86 && modelQuery.every(directedTokenMatch);
-  return {score:brand.score*0.4+Math.max(0,modelScore)*0.6,brandScore:brand.score,modelScore:Math.max(0,modelScore),exact,broad:false,strongMatches,relatedBrand:brand.related};
+  if(fullModel)modelScore=1;
+  const exact=brand.score>=0.86 && (fullModel || modelQuery.every(directedTokenMatch));
+  return {score:brand.score*0.4+Math.max(0,modelScore)*0.6,brandScore:brand.score,modelScore:Math.max(0,modelScore),exact,broad:false,strongMatches,fullModel,numericConflict,familyConflict,relatedBrand:brand.related};
 }
 
 function exactBrandMatch(queryTokens,entry) {
   // Conjunctions and spacing belong to the brand, not to the model. Match
   // variable-length spans so a missing AND cannot consume the model number.
-  const compactBrand = parts => parts.filter((token,index) =>
-    token !== 'and' || index === 0 || index === parts.length-1
-  ).join('');
   const expected=compactBrand(entry.brandTokens);
   const maximum=Math.min(queryTokens.length,entry.brandTokens.length+2);
   for(let start=0;start<queryTokens.length;start++){
@@ -156,19 +179,35 @@ function appendRelatedBrands(selected,index,queryTokens) {
 function candidateBrands(catalog,parsedQuery) {
   const index=catalogIndex(catalog),queryTokens=searchTokens(parsedQuery.vehicleText);
   const exact=index.brands.flatMap(entry=>{const match=exactBrandMatch(queryTokens,entry);return match?[{...match,entry}]:[];});
-  if(exact.length)return {index,selected:appendRelatedBrands(exact,index,queryTokens)};
+  if(exact.length)return {index,selected:appendRelatedBrands(exact,index,queryTokens),status:'exact'};
   const ranked=index.brands.map(entry=>({...brandMatch(queryTokens,entry),entry})).sort((a,b)=>b.score-a.score);
   const topScore=ranked[0]?.score||0;
   // Resolve a clear brand typo before comparing models. A model from another
   // brand must not override a confidently recognized brand. Ambiguous brand
   // spellings still produce suggestions rather than an automatic choice.
-  const typoConfidence=ranked[0]?similarity(ranked[0].queryBrand,ranked[0].entry.brandCanonical):0;
+  const typoConfidence=ranked[0]?.confidence||0;
   if(typoConfidence>=0.78 && topScore-(ranked[1]?.score||0)>=0.12) {
-    return {index,selected:appendRelatedBrands([ranked[0]],index,queryTokens)};
+    return {index,selected:appendRelatedBrands([ranked[0]],index,queryTokens),status:'confident'};
   }
   const minimum=topScore===1?0.8:Math.max(0.3,topScore-0.5);
   const selected=ranked.filter(item=>item.score>=minimum).slice(0,24);
-  return {index,selected:appendRelatedBrands(selected,index,queryTokens)};
+  return {index,selected:appendRelatedBrands(selected,index,queryTokens),status:topScore>=0.45?'ambiguous':'none'};
+}
+
+export function resolveCatalogBrand(catalog, parsedQuery) {
+  const {selected,status}=candidateBrands(catalog,parsedQuery);
+  const top=selected[0]?.score||0;
+  const candidates=selected.filter(item=>item.score>=Math.max(0.45,top-0.15)).slice(0,5).map(item=>({
+    brandIndex:item.entry.brandIndex,brand:item.entry.brand,
+    remainingTokens:searchTokens(parsedQuery.vehicleText).filter((_,index)=>index<item.start||index>=item.start+item.count)
+  }));
+  return {status,candidates};
+}
+
+export function selectCatalogBrandQuery(catalog, parsedQuery, brandIndex) {
+  const candidate=resolveCatalogBrand(catalog,parsedQuery).candidates.find(item=>item.brandIndex===Number(brandIndex));
+  if(!candidate)return null;
+  return {...parsedQuery,...parseCatalogQuery([candidate.brand,...candidate.remainingTokens,parsedQuery.year||''].join(' '))};
 }
 
 function rankedEntries(catalog, parsedQuery, mode) {
@@ -178,7 +217,8 @@ function rankedEntries(catalog, parsedQuery, mode) {
   for(const selectedBrand of selected){
     for (const entry of catalogEntriesForBrand(catalog,index,selectedBrand.entry.brandIndex)) {
       if (parsedQuery.year && entry.year!==parsedQuery.year) continue;
-      const rank=scoreEntry(parsedQuery,entry,selectedBrand);
+      const rank=scoreEntry(parsedQuery,entry,selectedBrand,index.modelVocabularyByBrand.get(entry.brandIndex));
+      if(rank.numericConflict || rank.familyConflict)continue;
       if (mode==='exact') { if (!rank.exact) continue; }
       else {
         if (rank.brandScore<0.35 && !rank.strongMatches) continue;
@@ -202,7 +242,11 @@ export function listCatalogSuggestions(catalog, parsedQuery, limit=26) {
   return safeRanked.slice(0,Math.max(1,Number(limit)||26))
     .map(item=>({...item,relatedBrand:Boolean(item.relatedBrand&&normalizeCatalogText(item.brand)!==normalizeCatalogText(parsedQuery.tokens?.[0]))}));
 }
-export function listCatalogModifications(catalog, parsedQuery) { return rankedEntries(catalog,parsedQuery,'exact'); }
+export function listCatalogModifications(catalog, parsedQuery) {
+  const ranked=rankedEntries(catalog,parsedQuery,'exact');
+  const full=ranked.filter(item=>item.fullModel);
+  return full.length?full:ranked;
+}
 
 export function listCatalogNeighborYears(catalog, parsedQuery) {
   if (!parsedQuery?.year || listCatalogModifications(catalog, parsedQuery).length) return [];

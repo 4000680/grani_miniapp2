@@ -11,6 +11,8 @@ import {
   paginateCatalogVariants,
   parseCatalogQuery,
   parseCatalogWeight,
+  resolveCatalogBrand,
+  selectCatalogBrandQuery,
   searchCatalog
 } from './catalog-search.js';
 import {
@@ -2932,6 +2934,27 @@ async function runCatalogTextSearch(env, message, parsed) {
   await trackTemporaryMessage(env, userId, status.message_id);
   try {
     const catalog = await loadCatalog(env.CATALOG_URL);
+    const brandResolution = resolveCatalogBrand(catalog, parsed);
+    if (brandResolution.status === 'ambiguous') {
+      await telegram(env, 'editMessageText', {
+        chat_id: message.chat.id, message_id: status.message_id,
+        text: 'Уточните марку автомобиля. Модель и год повторно вводить не нужно.\n\n' + catalogNavigationLine(parsed),
+        parse_mode: 'HTML',
+        reply_markup: {inline_keyboard: [
+          ...brandResolution.candidates.map(item => [{text:item.brand, callback_data:`catalog:brand:${item.brandIndex}`}]),
+          ...catalogSearchKeyboard().inline_keyboard
+        ]}
+      });
+      return true;
+    }
+    if (brandResolution.status === 'none') {
+      await telegram(env, 'editMessageText', {
+        chat_id:message.chat.id, message_id:status.message_id,
+        text:'Не удалось определить марку автомобиля. Уточните марку, модель и год выпуска.',
+        reply_markup:catalogSearchKeyboard()
+      });
+      return true;
+    }
     const modifications = listCatalogModifications(catalog, parsed);
     if (!modifications.length) {
       const neighbors = listCatalogNeighborYears(catalog, parsed);
@@ -3050,6 +3073,14 @@ async function handleCatalogCallback(env, query) {
   const state = await getCustomsState(env, query.from?.id || message.chat.id);
   const sourceParsed = withCustomsState(catalogQueryFromNavigationMessage(message), state);
   if (query.data === 'catalog:noop') return;
+  const brandChoice = query.data.match(/^catalog:brand:(\d+)$/);
+  if (brandChoice) {
+    const catalog = await loadCatalog(env.CATALOG_URL);
+    const parsed = sourceParsed && selectCatalogBrandQuery(catalog, sourceParsed, Number(brandChoice[1]));
+    if (!parsed) throw new Error('Не удалось восстановить выбранную марку. Повторите поиск.');
+    await runCatalogTextSearch(env, {chat:message.chat, from:query.from, text:parsed.vehicleText}, parsed);
+    return;
+  }
   const neighbor = query.data.match(/^catalog:neighbor:(\d+):(\d+):(\d{4}):(\d{4})$/);
   if (neighbor) {
     const catalog = await loadCatalog(env.CATALOG_URL);
@@ -4735,7 +4766,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'dual-util-penalties-v35' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'catalog-brand-stages-v36' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
