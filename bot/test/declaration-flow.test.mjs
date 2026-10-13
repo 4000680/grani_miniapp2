@@ -172,3 +172,55 @@ test('foreign duty overpayment never reduces declaration total or other payments
   assert.equal(less.util[0].dutyDifference, 249888);
   assert.equal(less.util[0].total, result.util[0].total + 249888);
 });
+
+test('VAT overpayment from the reported declaration is zero and cannot reduce excise or util', () => {
+  const result = calculateDeclarationPayment({
+    priceRub: 1187080, paidDutyRub: 254513, paidVatRub: 311845, calculationYear: 2026,
+    vehicle: { category: 'M1', year: 2026, totalKw: 110, ccm: 2000, hybridType: 'combustion' }
+  });
+  assert.equal(result.duty, 178062);
+  assert.equal(result.vat, 302396);
+  assert.equal(result.excise, 9387);
+  assert.equal(result.util[0].amount, 800800);
+  assert.equal(result.util[0].dutyDifference, 0);
+  assert.equal(result.util[0].vatDifference, 0);
+  assert.equal(result.util[0].total, 810187);
+  const workerSource = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+  const formatter = workerSource.slice(workerSource.indexOf('function declarationResultText('), workerSource.indexOf('async function sendDeclarationStart('));
+  const context = vm.createContext({
+    DECLARATION_COUNTRIES: { KZ: { label: 'Казахстан', currency: 'KZT' } },
+    declarationVehicleLines: () => [], escapeHtml: value => value,
+    formatMoney: value => `${value} ₽`, formatCurrencyAmount: value => String(value),
+    ageLabel: () => 'до 3 лет'
+  });
+  vm.runInContext(formatter, context);
+  const text = context.declarationResultText({country:'KZ', vehicle:{}, ftsName:'TEST', currencyRate:{code:'RUB'}}, result);
+  assert.match(text, /Доплата НДС: 0 ₽/);
+  assert.match(text, /Итого к оплате: 810187 ₽/);
+  assert.doesNotMatch(text, /Доплата[^\n]*-\d/);
+});
+
+test('duty and VAT differences are independently floored at zero for passenger and cargo declarations', () => {
+  for (const category of ['M1', 'M1G', 'N1', 'N2']) {
+    const input = {
+      priceRub: 1000000, calculationYear: 2026,
+      vehicle: { category, year: 2026, totalKw: 100, ccm: 2000,
+        maxMass: category === 'N2' ? 6000 : 3000, hybridType: 'combustion' }
+    };
+    const base = calculateDeclarationPayment(input);
+    for (const [paidDutyRub, paidVatRub, dutyDiff, vatDiff] of [
+      [base.duty, base.vat, 0, 0],
+      [base.duty + 1000000, base.vat + 1000000, 0, 0],
+      [base.duty + 1000000, base.vat - 10000, 0, 10000],
+      [base.duty - 10000, base.vat + 1000000, 10000, 0],
+      [base.duty - 10000, base.vat - 20000, 10000, 20000]
+    ]) {
+      const result = calculateDeclarationPayment({ ...input, paidDutyRub, paidVatRub });
+      for (const item of result.util) {
+        assert.equal(item.dutyDifference, dutyDiff, category);
+        assert.equal(item.vatDifference, vatDiff, category);
+        assert.equal(item.total, dutyDiff + vatDiff + result.excise + item.amount, category);
+      }
+    }
+  }
+});
