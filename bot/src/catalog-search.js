@@ -67,29 +67,30 @@ export function getCatalogCandidate(catalog, rowIndex) {
   return row ? candidateFromRow(catalog, row, Number(rowIndex)) : null;
 }
 
-function lowerBoundBrand(rows, brandIndex) {
-  let left=0,right=rows.length;
-  while(left<right){const middle=(left+right)>>1;if(Number(rows[middle][0])<brandIndex)left=middle+1;else right=middle;}
-  return left;
-}
-
 function catalogIndex(catalog) {
   if (catalogIndexes.has(catalog)) return catalogIndexes.get(catalog);
   const result={
     brands:catalog.brands.map((brand,brandIndex)=>({
       brandIndex,brand:brand||'',brandTokens:searchTokens(brand),brandCanonical:transliterate(brand).replace(/\s/g,'')
     })),
-    entriesByBrand:new Map(), modelVocabularyByBrand:new Map()
+    rowsByBrand:new Map(), entriesByBrand:new Map(), modelVocabularyByBrand:new Map()
   };
+  // Imported rows need not be sorted by brand. Keep their original positions:
+  // Telegram callbacks use rowIndex to retrieve the selected power and mass.
+  for(let rowIndex=0;rowIndex<catalog.rows.length;rowIndex++){
+    const brandIndex=Number(catalog.rows[rowIndex][0]);
+    if(!result.rowsByBrand.has(brandIndex))result.rowsByBrand.set(brandIndex,[]);
+    result.rowsByBrand.get(brandIndex).push(rowIndex);
+  }
   catalogIndexes.set(catalog,result);
   return result;
 }
 
 function catalogEntriesForBrand(catalog,index,brandIndex) {
   if(index.entriesByBrand.has(brandIndex))return index.entriesByBrand.get(brandIndex);
-  const entries=new Map(),start=lowerBoundBrand(catalog.rows,brandIndex),end=lowerBoundBrand(catalog.rows,brandIndex+1);
+  const entries=new Map();
   const brand=catalog.brands[brandIndex]||'',brandTokens=searchTokens(brand),brandCanonical=transliterate(brand).replace(/\s/g,'');
-  for(let rowIndex=start;rowIndex<end;rowIndex++){
+  for(const rowIndex of index.rowsByBrand.get(brandIndex)||[]){
     const row=catalog.rows[rowIndex],key=`${row[1]}:${row[2]}`;
     let entry=entries.get(key);
     if(!entry){const model=catalog.models[row[1]]||'';entry={key,brandIndex,modelIndex:row[1],brand,model,year:Number(row[2]),rowIndexes:[],brandTokens,modelTokens:modelTokens(model),brandCanonical};entries.set(key,entry);}
