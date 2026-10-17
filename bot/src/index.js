@@ -63,6 +63,7 @@ import {
 import { formatUtilYearReference } from './util-rate-reference.js';
 import { categoryConfirmationReason, vehicleCategoryOptions, cargoCategoryForMass } from '../../shared/vehicle-category.js';
 import { takeAdminSession, sendDirectMessage, receiveCrmReply, listCrmMessages, getCrmMessage } from './crm-messaging.js';
+import { openSupport, handleSupportMessage, clearSupportSession, retrySupportNotifications, supportErrorKeyboard } from './support-flow.js';
 import organizationsCatalog from './organizations-catalog.json' with { type: 'json' };
 import organizationsGeo from './organizations-geo.json' with { type: 'json' };
 import {
@@ -208,17 +209,25 @@ function menuKeyboard(env) {
       [{ text: '🚗 Таможенное оформление', callback_data: 'customs:start' }],
       [{ text: '🛞 Рассчитать утильсбор', callback_data: 'menu:util' }],
       [{ text: '🧾 Утильсбор по декларации', callback_data: 'menu:declaration' }],
-      [{ text: '🧪 Испытательные лаборатории', callback_data: 'org:home' }],
+      [{ text: '🧰 Документы и услуги', callback_data: 'menu:services' }],
+      [
+        { text: '☎️ Техподдержка', callback_data: 'info:contact' },
+        { text: '❤️ Задонатить', callback_data: 'info:donate' }
+      ]
+    ]
+  };
+}
+
+function servicesKeyboard() {
+  return {
+    inline_keyboard: [
       [{ text: '💳 Реквизиты', callback_data: 'info:payment' }],
       [
         { text: '📄 Получить ЭПТС', callback_data: 'info:epts' },
         { text: '🔎 Скрин СБКТС', callback_data: 'info:sbkts' }
       ],
       [{ text: '👤 Собственник ЭПТС', callback_data: 'info:owner' }],
-      [
-        { text: '☎️ Техподдержка', callback_data: 'info:contact' },
-        { text: '❤️ Задонатить', callback_data: 'info:donate' }
-      ]
+      [{ text: '⬅️ Назад', callback_data: 'menu' }, { text: '🏠 Главное меню', callback_data: 'menu' }]
     ]
   };
 }
@@ -238,9 +247,13 @@ function infoKeyboard(section, env) {
     }]);
   }
   if (section === 'payment_details' || section === 'payment_qr') {
-    rows.push([{ text: '‹ Вернуться к способам оплаты', callback_data: 'info:payment' }]);
+    rows.push([{ text: '‹ Вернуться к способам оплаты', callback_data: 'info:payment' },
+      { text: '🏠 Главное меню', callback_data: 'menu' }]);
   } else {
-    rows.push([{ text: '‹ Вернуться в меню', callback_data: 'menu' }]);
+    rows.push([
+      { text: '⬅️ Назад', callback_data: ['payment','epts','sbkts','owner'].includes(section) ? 'menu:services' : 'menu' },
+      { text: '🏠 Главное меню', callback_data: 'menu' }
+    ]);
   }
   return { inline_keyboard: rows };
 }
@@ -1036,6 +1049,7 @@ async function handleMiniAppProfile(request, env) {
 }
 
 async function sendInfoMessage(env, chatId, section) {
+  if (section === 'contact') return openSupport(env, {chat:{id:chatId,type:'private'}}, telegram);
   const info = INFO[section];
   if (!info) throw new Error('Раздел пока недоступен.');
   const text = typeof info.text === 'function' ? info.text(env) : info.text;
@@ -1143,7 +1157,7 @@ function calculationResultKeyboard(allow2027 = false) {
 
 function calculationWorkKeyboard() {
   return {
-    inline_keyboard: [[
+    inline_keyboard: [[{text:'☎️ Техническая поддержка',callback_data:'support:start'}], [
       { text: '🔄 Новый расчёт', callback_data: 'calc:new' },
       { text: '🏠 Главное меню', callback_data: 'calc:menu' }
     ]]
@@ -1162,6 +1176,7 @@ function calculationNavigationKeyboard(back = 'calc:menu') {
 function documentErrorKeyboard() {
   return {
     inline_keyboard: [
+      [{ text: '☎️ Техническая поддержка', callback_data: 'support:start' }],
       [{ text: '📎 Загрузить документ заново', callback_data: 'calc:retry:document' }],
       [
         { text: '⬅️ Назад', callback_data: 'calc:back:document' },
@@ -2950,8 +2965,8 @@ async function runCatalogTextSearch(env, message, parsed) {
     if (brandResolution.status === 'none') {
       await telegram(env, 'editMessageText', {
         chat_id:message.chat.id, message_id:status.message_id,
-        text:'Не удалось определить марку автомобиля. Уточните марку, модель и год выпуска.',
-        reply_markup:catalogSearchKeyboard()
+        text:'Не удалось определить марку автомобиля. Уточните марку, модель и год выпуска. Если поиск не работает, напишите в поддержку и приложите скриншот ошибки.',
+        reply_markup:supportErrorKeyboard(catalogSearchKeyboard())
       });
       return true;
     }
@@ -2987,7 +3002,9 @@ async function runCatalogTextSearch(env, message, parsed) {
       await telegram(env, 'editMessageText', {
         chat_id: message.chat.id,
         message_id: status.message_id,
-        text: 'Не нашёл автомобиль в шаблоне СЭП. Проверьте марку, модель и год выпуска.',
+        text: 'Не нашёл автомобиль в шаблоне СЭП. Проверьте марку, модель и год выпуска.\nЗапрос: ' +
+          [parsed.vehicleText,parsed.year].filter(Boolean).join(' ') +
+          '\n\nНе получается выполнить поиск? Напишите в поддержку и приложите скриншот ошибки.',
         reply_markup: calculationWorkKeyboard()
       });
       return true;
@@ -3023,7 +3040,8 @@ async function runCatalogTextSearch(env, message, parsed) {
       chat_id: message.chat.id,
       message_id: status.message_id,
       text: 'Не удалось выполнить поиск: ' + escapeHtml(error.message || error) + '. Попробуйте ещё раз немного позже.',
-      parse_mode: 'HTML'
+      parse_mode: 'HTML',
+      reply_markup: calculationWorkKeyboard()
     });
   }
   return true;
@@ -3538,6 +3556,7 @@ async function handleGroupCalculation(env, query) {
 }
 
 async function sendMenu(env, chatId, text = MENU_TEXT) {
+  await clearSupportSession(env, chatId);
   await clearOrganizationCatalogState(env, chatId);
   await resetCustomsFlowForMainMenu(env, chatId);
   await cleanupCustomsMessages(env, chatId, chatId);
@@ -3553,6 +3572,7 @@ async function sendMenu(env, chatId, text = MENU_TEXT) {
 }
 
 async function editMenu(env, message) {
+  await clearSupportSession(env, message.chat.id);
   await clearOrganizationCatalogState(env, message.chat.id);
   await resetCustomsFlowForMainMenu(env, message.chat.id);
   await cleanupCustomsMessages(env, message.chat.id, message.chat.id, message.message_id);
@@ -3809,6 +3829,7 @@ async function handleOrganizationCatalogCallback(env, query) {
 }
 
 async function showInfo(env, message, section) {
+  if (section === 'contact') return openSupport(env, message, telegram);
   const info = INFO[section];
   if (!info) return;
   const text = typeof info.text === 'function' ? info.text(env) : info.text;
@@ -3821,6 +3842,18 @@ async function showInfo(env, message, section) {
     reply_markup: infoKeyboard(section, env)
   });
   await trackTemporaryMessage(env, message.chat.id, message.message_id);
+  return edited;
+}
+
+async function showServices(env, message) {
+  await clearSupportSession(env, message.chat.id);
+  await resetCustomsFlowForMainMenu(env, message.chat.id);
+  const edited=await telegram(env,'editMessageText',{
+    chat_id:message.chat.id,message_id:message.message_id,
+    text:'🧰 <b>Документы и услуги</b>\n\nВыберите нужную услугу.',
+    parse_mode:'HTML',reply_markup:servicesKeyboard()
+  });
+  await trackTemporaryMessage(env,message.chat.id,message.message_id);
   return edited;
 }
 
@@ -4642,6 +4675,7 @@ async function handleUpdate(env, update) {
     }
   }
   const adminId = String(env.ADMIN_ID || env.ADMIN_TELEGRAM_ID || '');
+  if (update.message && await handleSupportMessage(env, update.message, telegram)) return;
   if (env.ANALYTICS_DB && adminId && update.message?.chat?.type === 'private') {
     try {
       if (await receiveCrmReply(env.ANALYTICS_DB, update.message, async (incoming, parent, original) => {
@@ -4710,6 +4744,19 @@ async function handleUpdate(env, update) {
   }
   await telegram(env, 'answerCallbackQuery', { callback_query_id: query.id });
   if (!query.message) return;
+  if (query.data === 'support:start') {
+    await openSupport(env, query.message, telegram);
+    return;
+  }
+  await clearSupportSession(env, query.from?.id || query.message.chat.id);
+  if (query.data === 'support:back') {
+    await telegram(env, 'deleteMessage', {chat_id:query.message.chat.id,message_id:query.message.message_id});
+    return;
+  }
+  if (query.data === 'support:done') {
+    await sendMenu(env, query.message.chat.id);
+    return;
+  }
   if (query.data?.startsWith('analytics:')) await handleAnalyticsCallback(env, query);
   else if (query.data?.startsWith('org:')) await handleOrganizationCatalogCallback(env, query);
   else if (query.data?.startsWith('catalog:')) await handleCatalogCallback(env, query);
@@ -4717,6 +4764,7 @@ async function handleUpdate(env, update) {
   else if (query.data?.startsWith('declaration:')) await handleDeclarationCallback(env, query);
   else if (query.data?.startsWith('calc:')) await handleCalculationCallback(env, query);
   else if (query.data === 'menu') await editMenu(env, query.message);
+  else if (query.data === 'menu:services') await showServices(env, query.message);
   else if (query.data === 'menu:util') await showUtilStart(env, query.message);
   else if (query.data === 'menu:declaration') await sendDeclarationStart(env, query.message.chat.id, query.from?.id || query.message.chat.id);
   else if (query.data?.startsWith('info:')) await showInfo(env, query.message, query.data.slice(5));
@@ -4749,6 +4797,7 @@ async function setupBot(request, env) {
 export default {
   async scheduled(controller, env, ctx) {
     if (!env.ANALYTICS_DB) return;
+    ctx.waitUntil(retrySupportNotifications(env, telegram).catch(error => console.error('Support delivery retry failed', error)));
     ctx.waitUntil(processCampaignBatch(env.ANALYTICS_DB, (chatId, text) =>
       telegram(env, 'sendMessage', { chat_id: chatId, text })
     ).catch(error => console.error('Analytics campaign batch failed', error)));
@@ -4766,14 +4815,23 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'cargo-van-rate-v37' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'compact-menu-support-v39' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
         return new Response('Forbidden', { status: 403 });
       }
       const update = await request.json();
-      ctx.waitUntil(handleUpdate(env, update).catch(error => console.error(error)));
+      ctx.waitUntil(handleUpdate(env, update).catch(async error => {
+        console.error('Update handling failed',error);
+        const message=update.message || update.callback_query?.message;
+        if(message?.chat?.type==='private') {
+          await telegram(env,'sendMessage',{chat_id:message.chat.id,
+            text:'Не удалось выполнить действие. Попробуйте ещё раз или напишите в поддержку, приложив скриншот ошибки.',
+            reply_markup:supportErrorKeyboard({inline_keyboard:[[{text:'🏠 Главное меню',callback_data:'menu'}]]})
+          }).catch(failure=>console.error('Error notice failed',failure.message));
+        }
+      }));
       return new Response('OK');
     } catch (error) {
       console.error(error);

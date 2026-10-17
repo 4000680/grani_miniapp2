@@ -89,14 +89,8 @@ export async function receiveCrmReply(db, message, notify) {
   const parent = await db.prepare('SELECT * FROM crm_messages WHERE user_id=? AND telegram_message_id=? ORDER BY id DESC LIMIT 1')
     .bind(userId, message.reply_to_message.message_id).first();
   if (!parent) return false;
-  const text = message.text || message.caption || (message.document ? `[Документ: ${message.document.file_name || 'файл'}]`
-    : message.photo ? '[Фото]' : message.voice ? '[Голосовое сообщение]' : '[Сообщение с вложением]');
-  const result = await db.prepare(`INSERT OR IGNORE INTO crm_messages
-    (user_id,direction,message_text,telegram_message_id,reply_to_id,created_at) VALUES(?,'in',?,?,?,?)`)
-    .bind(userId, text, message.message_id, parent.id, new Date().toISOString()).run();
-  const incoming = await db.prepare("SELECT * FROM crm_messages WHERE user_id=? AND direction='in' AND telegram_message_id=?")
-    .bind(userId, message.message_id).first();
-  if (result.meta?.changes || !incoming.admin_notification_id) {
+  const incoming = await recordIncomingMessage(db, message, parent.id);
+  if (!incoming.admin_notification_id) {
     try {
       const notification = await notify(incoming, parent, message);
       if (notification?.message_id) await db.prepare('UPDATE crm_messages SET admin_notification_id=? WHERE id=?')
@@ -107,6 +101,18 @@ export async function receiveCrmReply(db, message, notify) {
     }
   }
   return true;
+}
+
+export async function recordIncomingMessage(db, message, parentId = null, context = '') {
+  await ensureMessagingSchema(db);
+  const text = message.text || message.caption || (message.document ? `[Документ: ${message.document.file_name || 'файл'}]`
+    : message.photo ? '[Фото]' : message.voice ? '[Голосовое сообщение]' : '[Сообщение с вложением]');
+  await db.prepare(`INSERT OR IGNORE INTO crm_messages
+    (user_id,direction,message_text,telegram_message_id,reply_to_id,created_at) VALUES(?,'in',?,?,?,?)`)
+    .bind(String(message.from.id), context ? `Контекст обращения:\n${context}\n\n${text}` : text,
+      message.message_id, parentId, new Date().toISOString()).run();
+  return db.prepare("SELECT * FROM crm_messages WHERE user_id=? AND direction='in' AND telegram_message_id=?")
+    .bind(String(message.from.id), message.message_id).first();
 }
 
 export async function listCrmMessages(db, userId, offset = 0) {

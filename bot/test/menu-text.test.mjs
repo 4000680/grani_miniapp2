@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
 
 const source = await readFile(new URL('../src/index.js', import.meta.url), 'utf8');
 
@@ -15,12 +16,12 @@ test('первый запуск показывает полное приветс
 test('главное меню разделяет расчёты и отдельно открывает Mini App', () => {
   assert.match(source, /text: '🛞 Рассчитать утильсбор', callback_data: 'menu:util'/);
   assert.match(source, /text: '🧾 Утильсбор по декларации', callback_data: 'menu:declaration'/);
-  assert.match(source, /text: '🧪 Испытательные лаборатории', callback_data: 'org:home'/);
+  assert.match(source, /text: '🧰 Документы и услуги', callback_data: 'menu:services'/);
   assert.match(source, /text: '💳 Реквизиты', callback_data: 'info:payment'/);
   assert.match(source, /text: '📄 Получить ЭПТС', callback_data: 'info:epts'/);
   assert.match(source, /text: '🔎 Скрин СБКТС', callback_data: 'info:sbkts'/);
   assert.match(source, /text: '👤 Собственник ЭПТС', callback_data: 'info:owner'/);
-  assert.match(source, /\[\{ text: '🧪 Испытательные лаборатории', callback_data: 'org:home' \}\]/);
+  assert.doesNotMatch(source, /text: '🧪 Испытательные лаборатории', callback_data: 'org:home'/);
   assert.match(source, /\[\s*\{ text: '📄 Получить ЭПТС',[\s\S]*?\{ text: '🔎 Скрин СБКТС'/);
   assert.doesNotMatch(source, /text: '📅 Рассчитать пени'/);
   assert.doesNotMatch(source, /text: '📟 Рассчитать по СБКТС или ЭПТС'/);
@@ -30,6 +31,26 @@ test('главное меню разделяет расчёты и отдель�
   assert.match(source, /const UTIL_START_TEXT = \[/);
   assert.match(source, /Для расчёта утильсбора отправьте PDF-файл СБКТС или выписку ЭПТС/);
   assert.match(source, /Для поиска по шаблону СЭП напишите марку, модель и год выпуска/);
+});
+
+test('services leave the main menu compact and remain reachable with correct back actions', () => {
+  function extract(name) {
+    const start=source.indexOf('function '+name+'(');
+    return source.slice(start,source.indexOf('\n}',start)+2);
+  }
+  const context=vm.createContext({});
+  vm.runInContext(['menuKeyboard','servicesKeyboard','infoKeyboard'].map(extract).join('\n'),context);
+  const main=context.menuKeyboard({MINI_APP_URL:'https://example.test'}).inline_keyboard.flat();
+  assert.equal(main.length,7);
+  assert.ok(main.some(b=>b.callback_data==='menu:services'));
+  assert.ok(!main.some(b=>/^info:(payment|epts|sbkts|owner)$/.test(b.callback_data)));
+  const services=context.servicesKeyboard().inline_keyboard.flat();
+  for(const action of ['payment','epts','sbkts','owner']) {
+    assert.ok(services.some(b=>b.callback_data==='info:'+action));
+    const back=context.infoKeyboard(action,{}).inline_keyboard.flat();
+    assert.ok(back.some(b=>b.callback_data==='menu:services'));
+    assert.ok(back.some(b=>b.callback_data==='menu'));
+  }
 });
 
 test('старт расчёта по декларации просит документ или поиск СЭП без кнопок выбора', () => {
