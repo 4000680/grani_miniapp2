@@ -18,11 +18,11 @@ test('главное меню разделяет расчёты и отдель�
   assert.match(source, /text: '🧾 Утильсбор по декларации', callback_data: 'menu:declaration'/);
   assert.match(source, /text: '🧰 Документы и услуги', callback_data: 'menu:services'/);
   assert.match(source, /text: '💳 Реквизиты', callback_data: 'info:payment'/);
-  assert.match(source, /text: '📄 Получить ЭПТС', callback_data: 'info:epts'/);
+  assert.match(source, /text: '📄 Выгрузить ЭПТС', callback_data: 'info:epts'/);
   assert.match(source, /text: '🔎 Скрин СБКТС', callback_data: 'info:sbkts'/);
   assert.match(source, /text: '👤 Собственник ЭПТС', callback_data: 'info:owner'/);
   assert.doesNotMatch(source, /text: '🧪 Испытательные лаборатории', callback_data: 'org:home'/);
-  assert.match(source, /\[\s*\{ text: '📄 Получить ЭПТС',[\s\S]*?\{ text: '🔎 Скрин СБКТС'/);
+  assert.match(source, /\[\s*\{ text: '📄 Выгрузить ЭПТС',[\s\S]*?\{ text: '🔎 Скрин СБКТС'/);
   assert.doesNotMatch(source, /text: '📅 Рассчитать пени'/);
   assert.doesNotMatch(source, /text: '📟 Рассчитать по СБКТС или ЭПТС'/);
   assert.match(source, /function menuKeyboard\(env\)[\s\S]*?web_app: \{ url: env\.MINI_APP_URL \}/);

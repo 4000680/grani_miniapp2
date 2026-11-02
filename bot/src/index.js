@@ -1,3 +1,4 @@
+import { SERVICES, openService, handleServiceMessage, handleServiceCallback, clearServiceSession } from './service-requests.js';
 import { PAYMENT_QR_PNG } from './payment-qr.js';
 import {
   calculationPower,
@@ -155,30 +156,9 @@ const INFO = {
     title: '📷 <b>QR-код</b>',
     text: 'Укажите сумму и <b>ИНН заявителя — плательщика утилизационного сбора</b>. В случае ошибки деньги будет сложно вернуть.'
   },
-  sbkts: {
-    title: '🔎 <b>Запросить скрин СБКТС</b>',
-    text: [
-      'Поможем проверить исходные данные автомобиля и сопроводим оформление СБКТС.',
-      '',
-      'Для предварительной проверки подготовьте VIN и имеющиеся документы на автомобиль. Точный перечень документов, стоимость и срок сообщит специалист.'
-    ].join('\n')
-  },
-  epts: {
-    title: '📄 <b>Получить ЭПТС по VIN</b>',
-    text: [
-      'Отправьте специалисту VIN автомобиля. Мы проверим наличие электронного паспорта и сообщим результат.',
-      '',
-      '<i>VIN обычно содержит 17 символов. Проверьте его перед отправкой.</i>'
-    ].join('\n')
-  },
-  owner: {
-    title: '👤 <b>Внести собственника в ЭПТС</b>',
-    text: [
-      'Поможем проверить статус электронного паспорта и внести сведения о собственнике.',
-      '',
-      'Для предварительной проверки понадобятся VIN и номер ЭПТС. Остальной перечень документов специалист уточнит для вашей ситуации.'
-    ].join('\n')
-  },
+  sbkts: {title: '🔎 <b>Скрин СБКТС</b>', text: SERVICES.sbkts.text},
+  epts: {title: '📄 <b>Выгрузить ЭПТС</b>', text: SERVICES.epts.text},
+  owner: {title: '👤 <b>Внести собственника в ЭПТС</b>', text: SERVICES.owner.text},
   contact: {
     title: '☎️ <b>Техподдержка</b>',
     text: 'Если у вас остались вопросы, напишите нам: @grani_broker'
@@ -226,7 +206,7 @@ function servicesKeyboard() {
     inline_keyboard: [
       [{ text: '💳 Реквизиты', callback_data: 'info:payment' }],
       [
-        { text: '📄 Получить ЭПТС', callback_data: 'info:epts' },
+        { text: '📄 Выгрузить ЭПТС', callback_data: 'info:epts' },
         { text: '🔎 Скрин СБКТС', callback_data: 'info:sbkts' }
       ],
       [{ text: '👤 Собственник ЭПТС', callback_data: 'info:owner' }],
@@ -1053,6 +1033,7 @@ async function handleMiniAppProfile(request, env) {
 }
 
 async function sendInfoMessage(env, chatId, section) {
+  if (SERVICES[section]) return openService(env, {chat:{id:chatId,type:'private'}}, section, telegram);
   if (section === 'contact') return openSupport(env, {chat:{id:chatId,type:'private'}}, telegram);
   const info = INFO[section];
   if (!info) throw new Error('Раздел пока недоступен.');
@@ -3871,6 +3852,7 @@ async function handleOrganizationCatalogCallback(env, query) {
 }
 
 async function showInfo(env, message, section) {
+  if (SERVICES[section]) return openService(env, message, section, telegram);
   if (section === 'contact') return openSupport(env, message, telegram);
   if (section === 'payment_copy') {
     const form = new FormData();
@@ -4796,6 +4778,7 @@ async function handleUpdate(env, update) {
     }
   }
   const adminId = String(env.ADMIN_ID || env.ADMIN_TELEGRAM_ID || '');
+  if (update.message && await handleServiceMessage(env, update.message, telegram)) return;
   if (update.message && await handleSupportMessage(env, update.message, telegram)) return;
   if (env.ANALYTICS_DB && adminId && update.message?.chat?.type === 'private') {
     try {
@@ -4865,6 +4848,8 @@ async function handleUpdate(env, update) {
   }
   await telegram(env, 'answerCallbackQuery', { callback_query_id: query.id });
   if (!query.message) return;
+  if (await handleServiceCallback(env, query, telegram)) return;
+  await clearServiceSession(env, query.from?.id || query.message.chat.id);
   if (query.data === 'support:start') {
     await openSupport(env, query.message, telegram);
     return;

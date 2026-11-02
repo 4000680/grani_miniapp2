@@ -6,7 +6,7 @@ import {PAYMENT_QR_PAYLOAD,PAYMENT_QR_PNG} from '../src/payment-qr.js';
 const source=fs.readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
 test('payment QR sends the supplied image with payer instructions and keeps the menu available',async()=>{
  const calls=[];
- const context=vm.createContext({FormData,Blob,Uint8Array,atob,PAYMENT_QR_PNG,
+ const context=vm.createContext({SERVICES:{},FormData,Blob,Uint8Array,atob,PAYMENT_QR_PNG,
  INFO:{payment_qr:{text:'Укажите сумму и ИНН заявителя'}},
  telegram:async(_env,method,data)=>{calls.push({method,data});return {message_id:2}},
  trackTemporaryMessage:async()=>{}});
@@ -31,7 +31,7 @@ test('requisites export is readable UTF-8 text with full details and safe docume
  const block=source.slice(source.indexOf('  payment_details: {'),source.indexOf('  payment_qr: {'));
  const text=JSON.parse(block.match(/text: ("[^\n]+")/)[1]);
  const calls=[];
- const context=vm.createContext({FormData,Blob,INFO:{payment_details:{text}},
+ const context=vm.createContext({SERVICES:{},FormData,Blob,INFO:{payment_details:{text}},
  telegram:async(_env,method,data)=>{calls.push({method,data});return {message_id:3}},trackTemporaryMessage:async()=>{}});
  vm.runInContext(source.slice(source.indexOf('async function showInfo('),source.indexOf('async function showServices(')),context);
  await context.showInfo({}, {chat:{id:1},message_id:2},'payment_copy');
