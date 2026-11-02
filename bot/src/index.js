@@ -3,6 +3,8 @@ import {
   getCatalogCandidate,
   getCatalogVariants,
   listCatalogModifications,
+  listCatalogBaseModels,
+  listCatalogBrandModels,
   listCatalogNeighborYears,
   applyCatalogTemplateChoice,
   listCatalogSuggestions,
@@ -2491,6 +2493,12 @@ function catalogModificationKeyboard(modifications, page = 0) {
 }
 
 function catalogSuggestionsText(suggestions, parsed) {
+  if (suggestions.some(item=>item.baseModel)) return [
+    'Точного совпадения полного наименования в шаблоне СЭП нет. Найдена базовая модель:',
+    ...suggestions.map(item=>escapeHtml(`${item.brand} ${item.model}, ${item.year}`)),
+    'Базовая модель не подтверждает вашу комплектацию. Откройте варианты и сверьте мощность и технически допустимую массу. Расчёт будет предварительным.',
+    catalogNavigationLine(parsed)
+  ].join('\n\n');
   if (suggestions.some(item => item.neighborYear)) return [
     '📅 <b>Автомобиль найден в шаблоне СЭП другого года</b>',
     `За ${parsed.year} год точного шаблона нет. Ниже — та же модификация за соседние годы.`,
@@ -2520,6 +2528,10 @@ function catalogSuggestionsKeyboard(suggestions) {
           ? `catalog:neighbor:${item.brandIndex}:${item.modelIndex}:${item.year}:${item.vehicleYear}`
           : `catalog:model:${item.brandIndex}:${item.modelIndex}:${item.year}:0`
       }]),
+      ...(suggestions.some(item=>item.baseModel) ? [
+        [{text:'Выбрать другую модель этой марки',callback_data:'catalog:brandmodels:0'}],
+        [{text:'Загрузить СБКТС / ЭПТС',callback_data:'catalog:upload'}]
+      ] : []),
       [
         { text: '✏️ Изменить запрос', callback_data: 'catalog:back:search' },
         { text: '🏠 Главное меню', callback_data: 'calc:menu' }
@@ -2788,7 +2800,9 @@ async function showCatalogModification(env, message, brandIndex, modelIndex, yea
   const parsed = parseCatalogQuery(first.brand + ' ' + first.model + ' ' + first.year);
   const source = sourceParsed || parsed;
   const templateNotice = source.year && source.year !== year
-    ? `⚠️ Шаблон СЭП за ${year} год; автомобиль — ${source.year} года. Сверьте мощность и массу. Расчёт предварительный.` : '';
+    ? `⚠️ Шаблон СЭП за ${year} год; автомобиль — ${source.year} года. Сверьте мощность и массу. Расчёт предварительный.`
+    : sourceParsed && !listCatalogModifications(catalog,sourceParsed).some(item=>item.brandIndex===Number(brandIndex)&&item.modelIndex===Number(modelIndex))
+      ? '⚠️ Полное наименование отличается от запроса. Сверьте мощность и технически допустимую массу. Расчёт предварительный.' : '';
   const pagination = paginateCatalogVariants(variants, page);
   if (!pagination.total) {
     await telegram(env, 'editMessageText', {
@@ -2973,9 +2987,10 @@ async function runCatalogTextSearch(env, message, parsed) {
     const modifications = listCatalogModifications(catalog, parsed);
     if (!modifications.length) {
       const neighbors = listCatalogNeighborYears(catalog, parsed);
+      const bases = listCatalogBaseModels(catalog, parsed).map(item=>({...item,baseModel:true}));
       const suggestions = neighbors.length
         ? neighbors.map(item => ({...item, neighborYear:true, vehicleYear:parsed.year}))
-        : listCatalogSuggestions(catalog, parsed);
+        : bases.length ? bases : listCatalogSuggestions(catalog, parsed);
       if (suggestions.length) {
         if (suggestions.length > 25) {
           await telegram(env, 'editMessageText', {
@@ -3065,6 +3080,12 @@ async function showCatalogModificationsPage(env, message, sourceParsed, page = 0
         text:catalogSuggestionsText(neighbors, sourceParsed), parse_mode:'HTML', reply_markup:catalogSuggestionsKeyboard(neighbors)});
       return;
     }
+    const bases = listCatalogBaseModels(catalog, sourceParsed).map(item=>({...item,baseModel:true}));
+    if (bases.length && bases.length <= 25) {
+      await telegram(env,'editMessageText',{chat_id:message.chat.id,message_id:message.message_id,
+        text:catalogSuggestionsText(bases,sourceParsed),parse_mode:'HTML',reply_markup:catalogSuggestionsKeyboard(bases)});
+      return;
+    }
   }
   if (!modifications.length || modifications.length > 25) {
     await telegram(env, 'editMessageText', {
@@ -3091,6 +3112,25 @@ async function handleCatalogCallback(env, query) {
   const state = await getCustomsState(env, query.from?.id || message.chat.id);
   const sourceParsed = withCustomsState(catalogQueryFromNavigationMessage(message), state);
   if (query.data === 'catalog:noop') return;
+  if (query.data === 'catalog:upload') {
+    await telegram(env,'editMessageText',{chat_id:message.chat.id,message_id:message.message_id,
+      text:'Загрузите PDF-файл СБКТС или выписку ЭПТС.\n\n'+catalogNavigationLine(sourceParsed),parse_mode:'HTML',reply_markup:catalogSearchKeyboard()});
+    return;
+  }
+  const brandModels=query.data.match(/^catalog:brandmodels:(\d+)$/);
+  if (brandModels && sourceParsed) {
+    const catalog=await loadCatalog(env.CATALOG_URL);
+    const models=listCatalogBrandModels(catalog,sourceParsed);
+    const page=paginateCatalogModifications(models,Number(brandModels[1]));
+    await telegram(env,'editMessageText',{chat_id:message.chat.id,message_id:message.message_id,
+      text:['Выберите модель той же марки. Год из запроса сохранён.',`Страница ${page.currentPage+1}/${page.pageCount}`,catalogNavigationLine(sourceParsed)].join('\n\n'),parse_mode:'HTML',
+      reply_markup:{inline_keyboard:[
+        ...page.items.map(item=>[{text:compactButtonText(`${item.brand} ${item.model}, ${item.year}`),callback_data:`catalog:model:${item.brandIndex}:${item.modelIndex}:${item.year}:0`}]),
+        ...(page.pageCount>1?[[{text:'‹',callback_data:`catalog:brandmodels:${Math.max(0,page.currentPage-1)}`},{text:'›',callback_data:`catalog:brandmodels:${Math.min(page.pageCount-1,page.currentPage+1)}`}]]:[]),
+        [{text:'← Назад',callback_data:'catalog:back:search'},{text:'🏠 Главное меню',callback_data:'calc:menu'}]
+      ]}});
+    return;
+  }
   const brandChoice = query.data.match(/^catalog:brand:(\d+)$/);
   if (brandChoice) {
     const catalog = await loadCatalog(env.CATALOG_URL);
@@ -3896,6 +3936,26 @@ function declarationAssemblyLabel(country) {
   return { KZ: 'Казахская сборка', BY: 'Белорусская сборка' }[country] || null;
 }
 
+const DECLARATION_NAME_WARNING = 'Наименование отличается от документа или шаблона СЭП. Для оформления необходимо письмо лаборатории с уточнением полного наименования и модификации. Выбор варианта используется для предварительного расчёта и не подтверждает совпадение наименований.';
+
+function declarationPriceChoices(state, page = 0) {
+  const items = state.closest || [], size = 8;
+  const pages = Math.max(1, Math.ceil(items.length / size));
+  const current = Math.min(Math.max(0, Number(page) || 0), pages - 1);
+  const selected = items.slice(current * size, (current + 1) * size);
+  return {
+    text: ['Точного наименования в перечне не найдено. Выберите подходящую модификацию.',
+      DECLARATION_NAME_WARNING,
+      ...selected.map((item, index) => `${current * size + index + 1}. <b>${escapeHtml(item.name)}</b> — ${formatMoney(item.price)}`),
+      `Страница ${current + 1}/${pages}`].join('\n\n'),
+    parse_mode: 'HTML',
+    reply_markup: declarationKeyboard([
+      ...selected.map((item, index) => [{text: `${current * size + index + 1}. ${item.name}`.slice(0,60), callback_data: `declaration:price:${current * size + index}`}]),
+      ...(pages > 1 ? [[{text:'‹',callback_data:`declaration:prices:${Math.max(0,current-1)}`},{text:'›',callback_data:`declaration:prices:${Math.min(pages-1,current+1)}`}]] : [])
+    ], 'declaration:back:fts')
+  };
+}
+
 function declarationPaidKeyboard(country) {
   const label = declarationAssemblyLabel(country);
   return declarationKeyboard(label ? [[{ text: label, callback_data: `declaration:assembly:${country}` }]] : [], 'declaration:back:country');
@@ -3953,6 +4013,8 @@ function declarationResultText(state, payment) {
     ...declarationVehicleLines(state.vehicle),
     `<b>${state.ftsNameSource === 'document' ? 'Наименование подтверждено пользователем' : 'Наименование ФТС'}:</b> ${escapeHtml(state.ftsName)}`,
     `<b>Стоимость по перечню:</b> ${formatMoney(payment.price, true)}`,
+    ...(state.priceName ? [`<b>Выбранное наименование в перечне:</b> ${escapeHtml(state.priceName)}`] : []),
+    ...(state.nameClarificationRequired ? [DECLARATION_NAME_WARNING] : []),
     '',
     '<b>Российские платежи</b>',
     `Таможенная пошлина 15%: ${formatMoney(payment.duty)}`,
@@ -4085,14 +4147,16 @@ async function handleDeclarationReply(env, message) {
   if (state.stage === 'fts-name' || state.stage === 'price-choice') {
     const found = findDeclarationPrice(message.text);
     if (found.exact) {
-      await setCustomsState(env, userId, { ...state, stage: 'country', ftsName: message.text.trim(), ftsNameSource: message.declarationNameSource || 'fts', priceName: found.exact.name, priceRub: found.exact.price });
-      const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: `✅ <b>Точное совпадение найдено</b>\n\n<b>Наименование:</b> ${escapeHtml(found.exact.name)}\n<b>Стоимость:</b> ${formatMoney(found.exact.price, true)}\n\nВыберите страну, в которой выдана декларация:`, parse_mode: 'HTML', reply_markup: declarationCountryKeyboard() });
+      const documentName = [state.vehicle?.brand, state.vehicle?.model].filter(Boolean).join(' ');
+      const nameClarificationRequired = Boolean(documentName && findDeclarationPrice(documentName).exact?.name !== found.exact.name);
+      await setCustomsState(env, userId, { ...state, stage: 'country', ftsName: message.text.trim(), ftsNameSource: message.declarationNameSource || 'fts', priceName: found.exact.name, priceRub: found.exact.price, nameClarificationRequired });
+      const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: `✅ <b>${nameClarificationRequired ? 'Наименование найдено в перечне; требуется уточнение документа' : 'Точное совпадение найдено'}</b>\n\n<b>Наименование:</b> ${escapeHtml(found.exact.name)}\n<b>Стоимость:</b> ${formatMoney(found.exact.price, true)}\n\n${nameClarificationRequired ? DECLARATION_NAME_WARNING + '\n\n' : ''}Выберите страну, в которой выдана декларация:`, parse_mode: 'HTML', reply_markup: declarationCountryKeyboard() });
       await trackTemporaryMessage(env, userId, sent.message_id);
       return true;
     }
-    const rows = found.closest.map((item, index) => [{ text: `${item.name} — ${formatMoney(item.price)}`.slice(0, 60), callback_data: `declaration:price:${index}` }]);
-    await setCustomsState(env, userId, { ...state, stage: 'price-choice', ftsName: message.text.trim(), ftsNameSource: message.declarationNameSource || 'fts', closest: found.closest });
-    const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Точного наименования в перечне не найдено. Ниже — ближайшие варианты. Для таможни наименование должно совпадать один в один.', parse_mode: 'HTML', reply_markup: declarationKeyboard(rows, 'declaration:back:fts') });
+    const next = { ...state, stage: 'price-choice', ftsName: message.text.trim(), ftsNameSource: message.declarationNameSource || 'fts', closest: found.closest, nameClarificationRequired: true };
+    await setCustomsState(env, userId, next);
+    const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id, ...declarationPriceChoices(next) });
     await trackTemporaryMessage(env, userId, sent.message_id);
     return true;
   }
@@ -4196,11 +4260,17 @@ async function handleDeclarationCallback(env, query) {
     return;
   }
   const price = query.data.match(/^declaration:price:(\d+)$/);
+  const pricePage = query.data.match(/^declaration:prices:(\d+)$/);
+  if (pricePage && state.stage === 'price-choice') {
+    await telegram(env, 'editMessageText', {chat_id:message.chat.id, message_id:message.message_id, ...declarationPriceChoices(state, Number(pricePage[1]))});
+    return;
+  }
   if (price) {
+    if (state.stage !== 'price-choice') return;
     const item = state.closest?.[Number(price[1])];
     if (!item) return;
-    await setCustomsState(env, userId, { ...state, stage: 'country', priceName: item.name, priceRub: item.price });
-    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: `Выбран ближайший вариант:\n<b>${escapeHtml(item.name)}</b>\nСтоимость: <b>${formatMoney(item.price, true)}</b>\n\nВыберите страну декларации:`, parse_mode: 'HTML', reply_markup: declarationCountryKeyboard() });
+    await setCustomsState(env, userId, { ...state, stage: 'country', priceName: item.name, priceRub: item.price, nameClarificationRequired: true });
+    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: `Выбрано для предварительного расчёта:\n<b>${escapeHtml(item.name)}</b>\nСтоимость: <b>${formatMoney(item.price, true)}</b>\n\n${DECLARATION_NAME_WARNING}\n\nВыберите страну декларации:`, parse_mode: 'HTML', reply_markup: declarationCountryKeyboard() });
     return;
   }
   const category = query.data.match(/^declaration:category:(passenger|cargo|N1|N2|N3)$/);

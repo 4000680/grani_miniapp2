@@ -37,7 +37,16 @@ export function findDeclarationPrice(name, priceList = DECLARATION_PRICE_LIST) {
   const matches = literalMatches.length ? literalMatches
     : priceList.filter(item => normalized(item.name).replace(/ /g, '') === compactQuery);
   const exact = matches.length === 1 ? matches[0] : null;
-  if (matches.length > 1) return { exact: null, closest: matches.slice(0, 5) };
+  if (matches.length > 1) return { exact: null, closest: matches };
+  // A base name with several coded modifications is not an exact match.
+  // Preserve every such modification for explicit paginated selection.
+  if (!exact) {
+    const family = priceList.filter(item => {
+      const words = normalized(item.name).split(' ');
+      return words.some((_, index) => index < words.length - 1 && words.slice(0, index + 1).join('') === compactQuery);
+    });
+    if (family.length) return { exact: null, closest: family };
+  }
   const closest = priceList
     .map(item => ({ ...item, score: score(name, item.name) }))
     .filter(item => item.score > 0)

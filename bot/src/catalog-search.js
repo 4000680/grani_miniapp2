@@ -249,6 +249,27 @@ export function listCatalogModifications(catalog, parsedQuery) {
   return full.length?full:ranked;
 }
 
+export function listCatalogBrandModels(catalog, parsedQuery) {
+  if (!parsedQuery) return [];
+  const {index,selected,status}=candidateBrands(catalog,parsedQuery);
+  if (!['exact','confident'].includes(status)) return [];
+  return selected.flatMap(brand=>catalogEntriesForBrand(catalog,index,brand.entry.brandIndex))
+    .filter(entry=>!parsedQuery.year || entry.year===parsedQuery.year)
+    .sort((a,b)=>a.model.localeCompare(b.model,'ru') || b.year-a.year);
+}
+
+export function listCatalogBaseModels(catalog, parsedQuery) {
+  if (!parsedQuery || listCatalogModifications(catalog,parsedQuery).length) return [];
+  const resolution=resolveCatalogBrand(catalog,parsedQuery);
+  return listCatalogBrandModels(catalog,parsedQuery).filter(entry=>{
+    const brand=resolution.candidates.find(item=>item.brandIndex===entry.brandIndex);
+    const query=brand?.remainingTokens.flatMap(modelTokens) || [];
+    return entry.modelTokens.length>0 && entry.modelTokens.length<query.length &&
+      entry.modelTokens.every((token,index)=>token===query[index]) &&
+      !query.slice(entry.modelTokens.length).some(token=>/\d/.test(token));
+  });
+}
+
 export function listCatalogNeighborYears(catalog, parsedQuery) {
   if (!parsedQuery?.year || listCatalogModifications(catalog, parsedQuery).length) return [];
   return rankedEntries(catalog, {...parsedQuery, year:null}, 'exact')
