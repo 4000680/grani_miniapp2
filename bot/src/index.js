@@ -140,20 +140,20 @@ const INFO = {
   payment: {
     title: '💳 <b>Реквизиты для оплаты утильсбора</b>',
     text: [
-      'Оплатить можно в мобильном приложении, отделении банка или через <a href="https://edata.customs.ru/FtsPersonalCabinetWeb/Mobile">личный кабинет ФТС</a>. Возможна комиссия банка или платёжного сервиса.',
+      'Оплатить можно в мобильном приложении, отделении банка или через <a href="https://edata.customs.ru/FtsPersonalCabinetWeb/Mobile">личный кабинет ФТС</a> — с комиссией платёжного сервиса.',
       '',
-      '<b>Укажите ИНН заявителя</b> — человека, на которого подаются документы для списания утильсбора. По этому ИНН платёж учитывается на его лицевом счёте в ФТС.',
+      '<b>Важно указать ИНН заявителя — плательщика утилизационного сбора.</b> В случае ошибки деньги будет сложно вернуть.',
       '',
       'Выберите нужный вариант 👇'
     ].join('\n')
   },
   payment_details: {
     title: '💳 <b>Реквизиты</b>',
-    text: "<b>Укажите ИНН заявителя</b> — человека, на которого подаются документы для списания утильсбора. По ИНН платёж учитывается на его лицевом счёте в ФТС.\n\nПолучатель: Межрегиональное операционное УФК (ФТС России)\nИНН получателя: 7730176610\nКПП получателя: 773001001\nКазначейский счёт: 03100643000000019502\nБанк получателя: Операционный департамент Банка России//Межрегиональное операционное УФК г. Москва\nБИК: 024501901\nЕдиный казначейский счёт: 40102810045370000002\nКБК: 15301061301010000510\nОКТМО: 45328000\nСтатус плательщика: 16\nКод таможенного органа (поле 107): 10000010\nОснование платежа: 00\nНомер документа: 0\nДата документа: 0\nНазначение платежа: Внесение авансовых платежей\n\nСумму и ИНН заявителя укажите самостоятельно: в QR-коде их нет."
+    text: "Укажите сумму и <b>ИНН заявителя — плательщика утилизационного сбора</b>. В случае ошибки деньги будет сложно вернуть.\n\nПолучатель: Межрегиональное операционное УФК (ФТС России)\nИНН получателя: 7730176610\nКПП получателя: 773001001\nКазначейский счёт: 03100643000000019502\nБанк получателя: Операционный департамент Банка России//Межрегиональное операционное УФК г. Москва\nБИК: 024501901\nЕдиный казначейский счёт: 40102810045370000002\nКБК: 15301061301010000510\nОКТМО: 45328000\nСтатус плательщика: 16\nКод таможенного органа (поле 107): 10000010\nНазначение платежа: Внесение авансовых платежей"
   },
   payment_qr: {
     title: '📷 <b>QR-код</b>',
-    text: 'Укажите сумму и ИНН заявителя — человека, на которого подаются документы для списания утильсбора.'
+    text: 'Укажите сумму и <b>ИНН заявителя — плательщика утилизационного сбора</b>. В случае ошибки деньги будет сложно вернуть.'
   },
   sbkts: {
     title: '🔎 <b>Запросить скрин СБКТС</b>',
@@ -243,6 +243,7 @@ function infoKeyboard(section, env) {
       { text: '📷 QR-код', callback_data: 'info:payment_qr' }
     ]);
   }
+  if (section === 'payment_details') rows.push([{text:'📋 Скопировать реквизиты',callback_data:'info:payment_copy'}]);
   if (section === 'contact') {
     rows.push([{
       text: '☎️ Написать @grani_broker',
@@ -250,7 +251,7 @@ function infoKeyboard(section, env) {
     }]);
   }
   if (section === 'payment_details' || section === 'payment_qr') {
-    rows.push([{ text: '‹ Вернуться к способам оплаты', callback_data: 'info:payment' },
+    rows.push([{ text: '⬅️ Назад', callback_data: 'info:payment' },
       { text: '🏠 Главное меню', callback_data: 'menu' }]);
   } else {
     rows.push([
@@ -3871,11 +3872,23 @@ async function handleOrganizationCatalogCallback(env, query) {
 
 async function showInfo(env, message, section) {
   if (section === 'contact') return openSupport(env, message, telegram);
+  if (section === 'payment_copy') {
+    const form = new FormData();
+    form.set('chat_id', String(message.chat.id));
+    form.set('document', new Blob([INFO.payment_details.text.replace(/<[^>]+>/g, '')], {type:'text/plain;charset=utf-8'}), 'rekvizity-fts.txt');
+    form.set('caption', 'Реквизиты ФТС. Файл можно переслать или открыть и скопировать текст целиком.');
+    form.set('reply_markup', JSON.stringify({inline_keyboard:[[{text:'⬅️ Назад',callback_data:'paymentnav:details'},{text:'🏠 Главное меню',callback_data:'paymentnav:menu'}]]}));
+    const sent = await telegram(env, 'sendDocument', form);
+    await trackTemporaryMessage(env, message.chat.id, sent.message_id);
+    return sent;
+  }
   if (section === 'payment_qr') {
     const form = new FormData();
     form.set('chat_id', String(message.chat.id));
     form.set('photo', new Blob([Uint8Array.from(atob(PAYMENT_QR_PNG), c => c.charCodeAt(0))], {type:'image/png'}), 'qr-fts.png');
     form.set('caption', INFO.payment_qr.text);
+    form.set('parse_mode', 'HTML');
+    form.set('reply_markup', JSON.stringify({inline_keyboard:[[{text:'⬅️ Назад',callback_data:'paymentnav:back'},{text:'🏠 Главное меню',callback_data:'paymentnav:menu'}]]}));
     const sent = await telegram(env, 'sendPhoto', form);
     await trackTemporaryMessage(env, message.chat.id, sent.message_id);
     return sent;
@@ -4871,6 +4884,10 @@ async function handleUpdate(env, update) {
   else if (query.data?.startsWith('customs:')) await handleCustomsCallback(env, query);
   else if (query.data?.startsWith('declaration:')) await handleDeclarationCallback(env, query);
   else if (query.data?.startsWith('calc:')) await handleCalculationCallback(env, query);
+  else if (query.data?.startsWith('paymentnav:')) {
+    if (query.data === 'paymentnav:menu') await sendMenu(env, query.message.chat.id);
+    else await sendInfoMessage(env, query.message.chat.id, query.data === 'paymentnav:details' ? 'payment_details' : 'payment');
+  }
   else if (query.data === 'menu') await editMenu(env, query.message);
   else if (query.data === 'menu:services') await showServices(env, query.message);
   else if (query.data === 'menu:util') await showUtilStart(env, query.message);
