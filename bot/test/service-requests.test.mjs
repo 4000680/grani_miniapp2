@@ -40,3 +40,17 @@ test('commands and groups do not enter the service upload flow',async t=>{
  assert.equal(await handleServiceMessage(f.env,f.msg({text:'/start'}),f.send),false);
  assert.equal(await handleServiceMessage(f.env,f.msg({document:{file_id:'calculation'}}),f.send),false);
 });
+
+test('five simultaneous owner uploads are silent and one original button submits the entire batch',async t=>{
+ const f=fixture(t);await openService(f.env,f.msg(),'owner',f.send);
+ const opening=f.calls[0];assert.match(opening.data.text,/СНИЛС/);assert.match(opening.data.text,/зарегистрирован/);
+ assert.match(opening.data.text,/https:\/\/dp\.elpts\.ru\//);assert.doesNotMatch(opening.data.text,/СТС пришлите именно/);
+ assert.equal(opening.data.reply_markup.inline_keyboard.flat().filter(x=>x.callback_data==='service:send').length,1);
+ const files=Array.from({length:5},(_,i)=>f.msg({document:{file_id:'batch-'+i},media_group_id:'album'}));
+ await Promise.all(files.map(m=>handleServiceMessage(f.env,m,f.send)));
+ assert.equal(f.calls.length,1,'no replies, new buttons or admin notifications while uploading');
+ assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM service_files').get().n,5);
+ await handleServiceCallback(f.env,{data:'service:send',from:{id:200},message:f.msg()},f.send);
+ assert.equal(f.calls.filter(c=>c.method==='copyMessage').length,5);
+ assert.equal(f.calls.filter(c=>c.data.text?.includes('Заявка принята')).length,1);
+});

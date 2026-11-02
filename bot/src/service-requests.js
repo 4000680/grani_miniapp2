@@ -4,7 +4,7 @@ const admin=env=>String(env.ADMIN_ID||env.ADMIN_TELEGRAM_ID||'');
 export const SERVICES={
  epts:{title:'Выгрузить ЭПТС',price:4000,text:'Выгрузим полный электронный ПТС по VIN-номеру. Выписка будет содержать все данные.\n\nСтоимость — 4 000 ₽.\n\nОтправьте VIN-номер автомобиля.'},
  sbkts:{title:'Скрин СБКТС',price:1000,text:'Предоставим скрин СБКТС с необходимыми данными по автомобилю.\n\nСтоимость — 1 000 ₽.\n\nОтправьте VIN-номер автомобиля.'},
- owner:{title:'Внести собственника в ЭПТС',price:4000,text:'Внесение собственника возможно, только если автомобиль стоит на учёте в ГАИ РФ.\n\nНеобходимые документы:\n• СТС — обязательно скан;\n• ДКП;\n• паспорт и страница с регистрацией;\n• ЭПТС.\n\nСтоимость — 4 000 ₽.\n\nЗагрузите все документы файлами или фотографиями, затем нажмите «Отправить». СТС пришлите именно сканом.'}
+ owner:{title:'Внести собственника в ЭПТС',price:4000,text:'Внесение собственника возможно, только если автомобиль стоит на учёте в ГАИ РФ.\n\nНеобходимые документы:\n• СТС — обязательно скан;\n• ДКП;\n• паспорт и страница с регистрацией;\n• СНИЛС;\n• ЭПТС.\n\nСтоимость — 4 000 ₽.\n\nЗаявитель должен быть зарегистрирован в системе электронных паспортов: https://dp.elpts.ru/\n\nЗагрузите все документы файлами. Когда загрузка завершится, нажмите «Отправить» под этим сообщением — один раз для всего комплекта.'}
 };
 function keys(kind,submit=false){return {inline_keyboard:[...(submit?[[{text:'📨 Отправить',callback_data:'service:send'}]]:[]),[{text:'⬅️ Назад',callback_data:'menu:services'},{text:'🏠 Главное меню',callback_data:'menu'}]]};}
 async function schema(db){
@@ -28,7 +28,7 @@ async function submit(env,r,send){
  const db=env.ANALYTICS_DB;
  if(r.status==='sent')return send(env,'sendMessage',{chat_id:r.user_id,text:'Эта заявка уже отправлена. Менеджер свяжется с вами.',reply_markup:keys(r.kind)});
  const files=(await db.prepare('SELECT * FROM service_files WHERE request_id=? ORDER BY message_id').bind(r.id).all()).results||[];
- if(r.kind==='owner'&&!files.length)return send(env,'sendMessage',{chat_id:r.user_id,text:'Сначала загрузите документы: скан СТС, ДКП, паспорт с регистрацией и ЭПТС.',reply_markup:keys(r.kind,true)});
+ if(r.kind==='owner'&&!files.length)return send(env,'sendMessage',{chat_id:r.user_id,text:'Сначала загрузите документы: скан СТС, ДКП, паспорт с регистрацией, СНИЛС и ЭПТС.',reply_markup:keys(r.kind,true)});
  const now=Date.now();const claim=await db.prepare("UPDATE service_requests SET locked_until=? WHERE id=? AND status!='sent' AND locked_until<?").bind(now+120000,r.id,now).run();if(!claim.meta?.changes)return;
  try{
   if(!r.admin_message){const p=JSON.parse(r.profile),label=[p.first_name,p.last_name,p.username?'@'+p.username:'',`ID ${r.user_id}`].filter(Boolean).join(' ');
@@ -56,6 +56,6 @@ export async function handleServiceMessage(env,message,send){
  const count=await env.ANALYTICS_DB.prepare('SELECT COUNT(*) AS n FROM service_files WHERE request_id=?').bind(r.id).first();
  if(count.n>=30){await send(env,'sendMessage',{chat_id:message.chat.id,text:'Можно приложить до 30 файлов. Отправьте готовый комплект.',reply_markup:keys(r.kind,true)});return true;}
  await env.ANALYTICS_DB.prepare('INSERT OR IGNORE INTO service_files(request_id,message_id) VALUES(?,?)').bind(r.id,message.message_id).run();
- await send(env,'sendMessage',{chat_id:message.chat.id,text:'Документ добавлен. Проверьте комплект: скан СТС, ДКП, паспорт с регистрацией и ЭПТС. Загрузите остальные документы или нажмите «Отправить».',reply_markup:keys(r.kind,true)});return true;
+ return true;
 }
 export async function handleServiceCallback(env,query,send){if(query.data!=='service:send')return false;if(!env.ANALYTICS_DB)return true;const r=await current(env,query.from?.id||query.message.chat.id);if(r)await submit(env,r,send);else await send(env,'sendMessage',{chat_id:query.message.chat.id,text:'Откройте услугу заново: активной заявки нет.',reply_markup:keys('owner')});return true;}
