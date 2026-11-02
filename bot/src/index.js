@@ -1,3 +1,4 @@
+import { PAYMENT_QR_PNG } from './payment-qr.js';
 import {
   calculationPower,
   getCatalogCandidate,
@@ -139,20 +140,20 @@ const INFO = {
   payment: {
     title: '💳 <b>Реквизиты для оплаты утильсбора</b>',
     text: [
-      'Оплатить пошлину можно в любом отделении банка или в мобильном приложении банка.',
+      'Оплатить можно в мобильном приложении, отделении банка или через <a href="https://edata.customs.ru/FtsPersonalCabinetWeb/Mobile">личный кабинет ФТС</a>. Возможна комиссия банка или платёжного сервиса.',
       '',
-      'Также для моментального зачисления платежа можно воспользоваться <a href="https://edata.customs.ru/FtsPersonalCabinetWeb/Mobile">личным кабинетом ФТС</a>. При оплате взимается комиссия.',
+      '<b>Укажите ИНН заявителя</b> — человека, на которого подаются документы для списания утильсбора. По этому ИНН платёж учитывается на его лицевом счёте в ФТС.',
       '',
       'Выберите нужный вариант 👇'
     ].join('\n')
   },
   payment_details: {
     title: '💳 <b>Реквизиты</b>',
-    text: 'Реквизиты будут добавлены чуть позже.'
+    text: "<b>Укажите ИНН заявителя</b> — человека, на которого подаются документы для списания утильсбора. По ИНН платёж учитывается на его лицевом счёте в ФТС.\n\nПолучатель: Межрегиональное операционное УФК (ФТС России)\nИНН получателя: 7730176610\nКПП получателя: 773001001\nКазначейский счёт: 03100643000000019502\nБанк получателя: Операционный департамент Банка России//Межрегиональное операционное УФК г. Москва\nБИК: 024501901\nЕдиный казначейский счёт: 40102810045370000002\nКБК: 15301061301010000510\nОКТМО: 45328000\nСтатус плательщика: 16\nКод таможенного органа (поле 107): 10000010\nОснование платежа: 00\nНомер документа: 0\nДата документа: 0\nНазначение платежа: Внесение авансовых платежей\n\nСумму и ИНН заявителя укажите самостоятельно: в QR-коде их нет."
   },
   payment_qr: {
     title: '📷 <b>QR-код</b>',
-    text: 'QR-код будет добавлен чуть позже.'
+    text: 'Укажите сумму и ИНН заявителя — человека, на которого подаются документы для списания утильсбора.'
   },
   sbkts: {
     title: '🔎 <b>Запросить скрин СБКТС</b>',
@@ -264,8 +265,8 @@ async function telegram(env, method, data) {
   if (!env.BOT_TOKEN) throw new Error('BOT_TOKEN is not configured');
   const response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(data)
+    headers: data instanceof FormData ? undefined : { 'content-type': 'application/json' },
+    body: data instanceof FormData ? data : JSON.stringify(data)
   });
   const result = await response.json();
   if (!result.ok) {
@@ -3870,6 +3871,15 @@ async function handleOrganizationCatalogCallback(env, query) {
 
 async function showInfo(env, message, section) {
   if (section === 'contact') return openSupport(env, message, telegram);
+  if (section === 'payment_qr') {
+    const form = new FormData();
+    form.set('chat_id', String(message.chat.id));
+    form.set('photo', new Blob([Uint8Array.from(atob(PAYMENT_QR_PNG), c => c.charCodeAt(0))], {type:'image/png'}), 'qr-fts.png');
+    form.set('caption', INFO.payment_qr.text);
+    const sent = await telegram(env, 'sendPhoto', form);
+    await trackTemporaryMessage(env, message.chat.id, sent.message_id);
+    return sent;
+  }
   const info = INFO[section];
   if (!info) return;
   const text = typeof info.text === 'function' ? info.text(env) : info.text;
