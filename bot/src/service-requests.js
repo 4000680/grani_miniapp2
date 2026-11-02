@@ -3,10 +3,12 @@ const ready=new WeakMap();
 const admin=env=>String(env.ADMIN_ID||env.ADMIN_TELEGRAM_ID||'');
 export const SERVICES={
  epts:{title:'Выгрузить ЭПТС',price:4000,text:'Выгрузим полный электронный ПТС по VIN-номеру. Выписка будет содержать все данные.\n\nСтоимость — 4 000 ₽.\n\nОтправьте VIN-номер автомобиля.'},
+ sbkts_full:{title:'Выгрузить СБКТС',price:4000,text:'Выгрузим СБКТС по VIN-номеру автомобиля.\n\nСтоимость — 4 000 ₽.\n\nОтправьте VIN-номер автомобиля.'},
+ documents_set:{title:'Комплект ЭПТС + СБКТС',price:6000,text:'Выгрузим полный ЭПТС и СБКТС по VIN-номеру автомобиля.\n\nСтоимость комплекта — 6 000 ₽.\n\nОтправьте VIN-номер автомобиля.'},
  sbkts:{title:'Скрин СБКТС',price:1000,text:'Предоставим скрин СБКТС с необходимыми данными по автомобилю.\n\nСтоимость — 1 000 ₽.\n\nОтправьте VIN-номер автомобиля.'},
  owner:{title:'Внести собственника в ЭПТС',price:4000,text:'Внесение собственника возможно, только если автомобиль стоит на учёте в ГАИ РФ.\n\nНеобходимые документы:\n• СТС — обязательно скан;\n• ДКП;\n• паспорт и страница с регистрацией;\n• СНИЛС;\n• ЭПТС.\n\nСтоимость — 4 000 ₽.\n\nЗаявитель должен быть зарегистрирован в системе электронных паспортов: https://dp.elpts.ru/\n\nЗагрузите все документы файлами. Когда загрузка завершится, нажмите «Отправить» под этим сообщением — один раз для всего комплекта.'}
 };
-function keys(kind,submit=false){return {inline_keyboard:[...(submit?[[{text:'📨 Отправить',callback_data:'service:send'}]]:[]),[{text:'⬅️ Назад',callback_data:'menu:services'},{text:'🏠 Главное меню',callback_data:'menu'}]]};}
+function keys(kind,submit=false){return {inline_keyboard:[...(submit?[[{text:'📨 Отправить',callback_data:'service:send'}]]:[]),[{text:'⬅️ Назад',callback_data:['epts','sbkts_full','documents_set'].includes(kind)?'info:epts':'menu:services'},{text:'🏠 Главное меню',callback_data:'menu'}]]};}
 async function schema(db){
  if(!ready.has(db))ready.set(db,(async()=>{
   await db.prepare('CREATE TABLE IF NOT EXISTS service_requests(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,kind TEXT NOT NULL,status TEXT NOT NULL,vin TEXT,profile TEXT NOT NULL,admin_message INTEGER,locked_until INTEGER NOT NULL DEFAULT 0)').run();
@@ -16,9 +18,19 @@ async function schema(db){
 }
 export async function clearServiceSession(env,id){if(!env.ANALYTICS_DB)return;await schema(env.ANALYTICS_DB);await env.ANALYTICS_DB.prepare('DELETE FROM service_sessions WHERE user_id=?').bind(String(id)).run();}
 async function current(env,id){await schema(env.ANALYTICS_DB);return env.ANALYTICS_DB.prepare('SELECT r.* FROM service_requests r JOIN service_sessions s ON s.request_id=r.id WHERE s.user_id=?').bind(String(id)).first();}
-export async function openService(env,message,kind,send){
+export async function openService(env,message,kind,send,selected=false){
  const item=SERVICES[kind];if(!item||message.chat?.type==='group'||message.chat?.type==='supergroup')return;
  if(!env.ANALYTICS_DB||!admin(env))return send(env,'sendMessage',{chat_id:message.chat.id,text:'Приём заявок временно недоступен. Напишите менеджеру.',reply_markup:{inline_keyboard:[[{text:'Написать менеджеру',url:env.CONTACT_URL||'https://t.me/grani_broker'}],...keys(kind).inline_keyboard]}});
+ if(kind==='epts'&&!selected){
+  await clearServiceSession(env,message.chat.id);
+  return send(env,'sendMessage',{chat_id:message.chat.id,
+   text:'📄 Выгрузить ЭПТС / СБКТС\n\nВыгрузим полный ЭПТС, СБКТС или оба документа по VIN-номеру автомобиля.\n\nЭПТС — 4 000 ₽\nСБКТС — 4 000 ₽\nКомплект ЭПТС + СБКТС — 6 000 ₽\n\nВыберите нужный вариант:',
+   reply_markup:{inline_keyboard:[
+    [{text:'📄 ЭПТС · 4 000 ₽',callback_data:'service:choose:epts'},{text:'📋 СБКТС · 4 000 ₽',callback_data:'service:choose:sbkts_full'}],
+    [{text:'📑 Комплект · 6 000 ₽',callback_data:'service:choose:documents_set'}],
+    [{text:'⬅️ Назад',callback_data:'menu:services'},{text:'🏠 Главное меню',callback_data:'menu'}]
+   ]}});
+ }
  const db=env.ANALYTICS_DB;await schema(db);const id=crypto.randomUUID(),user=String(message.chat.id);
  await db.prepare('INSERT INTO service_requests(id,user_id,kind,status,profile) VALUES(?,?,?,?,?)').bind(id,user,kind,'draft',JSON.stringify(message.from||{})).run();
  await db.prepare('INSERT INTO service_sessions(user_id,request_id) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET request_id=excluded.request_id').bind(user,id).run();
@@ -58,4 +70,7 @@ export async function handleServiceMessage(env,message,send){
  await env.ANALYTICS_DB.prepare('INSERT OR IGNORE INTO service_files(request_id,message_id) VALUES(?,?)').bind(r.id,message.message_id).run();
  return true;
 }
-export async function handleServiceCallback(env,query,send){if(query.data!=='service:send')return false;if(!env.ANALYTICS_DB)return true;const r=await current(env,query.from?.id||query.message.chat.id);if(r)await submit(env,r,send);else await send(env,'sendMessage',{chat_id:query.message.chat.id,text:'Откройте услугу заново: активной заявки нет.',reply_markup:keys('owner')});return true;}
+export async function handleServiceCallback(env,query,send){
+ const choice=query.data?.match(/^service:choose:(epts|sbkts_full|documents_set)$/);
+ if(choice){await openService(env,{...query.message,from:query.from},choice[1],send,true);return true;}
+if(query.data!=='service:send')return false;if(!env.ANALYTICS_DB)return true;const r=await current(env,query.from?.id||query.message.chat.id);if(r)await submit(env,r,send);else await send(env,'sendMessage',{chat_id:query.message.chat.id,text:'Откройте услугу заново: активной заявки нет.',reply_markup:keys('owner')});return true;}

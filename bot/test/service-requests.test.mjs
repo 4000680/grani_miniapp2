@@ -7,8 +7,8 @@ function fixture(t){const sqlite=new DatabaseSync(':memory:');t.after(()=>sqlite
  const msg=x=>({message_id:++id,from:{id:200,username:'client',first_name:'Client'},chat:{id:200,type:'private'},...x});
  return {env,calls,send,msg,sqlite,fail(){failCopy=true}};
 }
-for(const kind of ['epts','sbkts'])test(kind+' validates VIN and notifies only configured administrator',async t=>{
- const f=fixture(t);await openService(f.env,f.msg(),kind,f.send);
+for(const kind of ['epts','sbkts','sbkts_full','documents_set'])test(kind+' validates VIN and notifies only configured administrator',async t=>{
+ const f=fixture(t);await openService(f.env,f.msg(),kind,f.send,true);
  assert.equal(await handleServiceMessage(f.env,f.msg({text:'bad'}),f.send),true);
  assert.equal(f.calls.filter(x=>x.data.chat_id==='100').length,0);
  await handleServiceMessage(f.env,f.msg({text:'WBAJB9C50KB287123'}),f.send);
@@ -53,4 +53,18 @@ test('five simultaneous owner uploads are silent and one original button submits
  await handleServiceCallback(f.env,{data:'service:send',from:{id:200},message:f.msg()},f.send);
  assert.equal(f.calls.filter(c=>c.method==='copyMessage').length,5);
  assert.equal(f.calls.filter(c=>c.data.text?.includes('Заявка принята')).length,1);
+});
+
+test('document chooser shows three prices and selected package reaches administrator',async t=>{
+ const f=fixture(t);await openService(f.env,f.msg(),'epts',f.send);
+ const picker=f.calls.at(-1).data;const buttons=picker.reply_markup.inline_keyboard.flat();
+ assert.equal(buttons.filter(b=>b.callback_data.startsWith('service:choose:')).length,3);
+ assert.match(picker.text,/Комплект ЭПТС \+ СБКТС — 6 000 ₽/);
+ assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM service_sessions').get().n,0);
+ await handleServiceCallback(f.env,{data:'service:choose:documents_set',from:{id:200,username:'client'},message:f.msg()},f.send);
+ assert.match(f.calls.at(-1).data.text,/VIN/);
+ await handleServiceMessage(f.env,f.msg({text:'WBAJB9C50KB287123'}),f.send);
+ const notice=f.calls.find(c=>c.data.chat_id==='100');
+ assert.match(notice.data.text,/Комплект ЭПТС \+ СБКТС/);assert.match(notice.data.text,/6.000 ₽/);
+ assert.equal(SERVICES.sbkts.price,1000);
 });
