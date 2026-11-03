@@ -8,3 +8,5 @@ All photographs are provided under the Unsplash License.
 - `electric-car.jpg` — Christian Rebero Twahirwa, “Electric car charging at a modern home”: https://unsplash.com/photos/electric-car-charging-at-a-modern-home-Ch3ik-Edrro
 
 - `hero-reference.jpg` — generated for the owner’s reference theme, 03.11.2026. Prompt: graphite BMW SUV in front three-quarter view on a bright alpine road, large car below pale blue sky, no interface or text.
+
+- `reference-original.jpg` — exact design reference uploaded by the owner. Hero and service icons use the original pixels via SVG viewBox cropping; no generated replacement.
