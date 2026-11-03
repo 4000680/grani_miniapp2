@@ -220,3 +220,19 @@ test('accepts common Russian date formats', () => {
   }
   assert.equal(parseFlexibleDate('31.02.2026'), null);
 });
+
+test('SBKTS engine volume below the label baseline is recovered without an electric fallback',()=>{
+ const document={text:'Свидетельство о безопасности конструкции транспортного средства\nДвигатель внутреннего сгорания\n- максимальная мощность, кВт 184 (5500)',pages:[[
+ line(780,'МАРКА','TEST BRAND',206),line(760,'ГОД ВЫПУСКА','2025',206),line(740,'КАТЕГОРИЯ','M1G',206)
+ ],[line(566.88,'Технически допустимая','2550',206),line(366.8472,'- рабочий объем цилиндров,','',207),
+ {y:364.32,text:'1997',items:[{x:207,str:'1997'}]},line(345,'см³','',207),line(325,'- степень сжатия','10.5',207)]]};
+ const vehicle=parseVehicleDocument(document);
+ assert.equal(vehicle.ccm,1997);assert.equal(vehicle.hybridType,'combustion');assert.equal(vehicle.totalKw,184);
+ assert.equal(calculateUtil(vehicle,new Date('2026-11-03'))[0].commercial,1142400);
+ const absent={...document,pages:[document.pages[0],document.pages[1].filter(x=>x.text!=='1997')]};
+ assert.throws(()=>calculateUtil(parseVehicleDocument(absent),new Date('2026-11-03')),e=>e.code==='ENGINE_VOLUME_NOT_DETECTED');
+});
+test('missing combustion volume cannot select electric rates in either document type',()=>{
+ for(const type of ['sbkts','epts'])assert.throws(()=>calculateUtil({type,category:'M1',year:2025,totalKw:184,ccm:null,hybridType:'combustion'},new Date('2026-11-03')),e=>e.code==='ENGINE_VOLUME_NOT_DETECTED');
+ for(const hybridType of ['ev','series'])assert.ok(calculateUtil({type:'sbkts',category:'M1',year:2025,totalKw:70,ccm:null,hybridType},new Date('2026-11-03'))[0].commercial>0);
+});

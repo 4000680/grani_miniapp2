@@ -164,6 +164,26 @@ function monthNumber(word) {
   return null;
 }
 
+function sbktsEngineVolume(lines) {
+  const label = /рабочий объ[её]м цилиндров/i;
+  const index = lines.findIndex(line => label.test(line.text));
+  if (index < 0) return null;
+  const inline = numberValue([lines[index]], label, 180);
+  if (inline >= 50 && inline <= 20000) return inline;
+  // Some PDFs place the right-hand cell a few points below its label,
+  // outside groupLines' baseline tolerance. Do not cross into the next field.
+  for (let i = index + 1; i < lines.length; i++) {
+    if (lines[index].y - lines[i].y > 8) break;
+    const value = lines[i].items.find(item => item.x >= 180 && /^\d{2,5}(?:[.,]\d+)?$/.test(item.str));
+    if (value) {
+      const volume = Number(value.str.replace(',', '.'));
+      if (volume >= 50 && volume <= 20000) return volume;
+    }
+    if (lines[i].items.some(item => item.x < 180 && /степень|мощность|топливо/i.test(item.str))) break;
+  }
+  return null;
+}
+
 function parseSbkts(document) {
   const first = document.pages[0] || [];
   const second = document.pages[1] || [];
@@ -174,7 +194,7 @@ function parseSbkts(document) {
   const year = numberValue(first, /^ГОД ВЫПУСКА(?:\s|$)/i, 180);
   const manufactureMonth = parseSbktsManufactureMonth(document.text);
   const category = vehicleCategory(pageValue(first, /^КАТЕГОРИЯ(?:\s|$)/i, 180));
-  const ccm = numberValue(second, /рабочий объем цилиндров/i, 180);
+  const ccm = sbktsEngineVolume(second);
   const maxMass = numberValue(second, /Технически допустимая/i, 180);
   const parsedPower = parseSbktsPowerData(document.text);
   const combustionKw = parsedPower.engineMaxKw;
@@ -292,7 +312,11 @@ export function calculateUtil(vehicle, now = new Date(), calculationYear = now.g
   if (vehicle.category !== 'M1') throw new Error(`Категория ${vehicle.category || 'не определена'} пока не поддерживается`);
   if (vehicle.powerError) throw new DocumentProcessingError(vehicle.powerErrorCode || 'CALCULATION_ERROR', vehicle.powerError);
   if (!vehicle.year || !vehicle.totalKw) throw new Error('Не удалось определить год или расчётную мощность');
-  const calculationCcm = ['series', 'ev'].includes(vehicle.hybridType) ? null : vehicle.ccm;
+  const electricPowertrain = ['series', 'ev'].includes(vehicle.hybridType);
+  if (['sbkts', 'epts'].includes(vehicle.type) && !electricPowertrain && !(vehicle.ccm > 0)) {
+    throw new DocumentProcessingError('ENGINE_VOLUME_NOT_DETECTED', 'Не удалось определить рабочий объём ДВС. Проверьте документ: расчёт без объёма невозможен');
+  }
+  const calculationCcm = electricPowertrain ? null : vehicle.ccm;
   const powertrain = calculationCcm ? 'combustion' : 'electric';
   const commercial = selectUtilRate({ category: 'M1', powertrain, payer: 'commercial', ccm: calculationCcm, powerKw: vehicle.totalKw, age: 'new', year: calculationYear });
   const personal = selectUtilRate({ category: 'M1', powertrain, payer: 'personal', ccm: calculationCcm, powerKw: vehicle.totalKw, age: 'new', year: calculationYear });
