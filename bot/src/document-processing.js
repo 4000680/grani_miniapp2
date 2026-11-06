@@ -42,7 +42,24 @@ function normalize(value) {
   return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function groupLines(items) {
+function joinNumericFragments(items) {
+  const result = [];
+  for (const item of items) {
+    const previous = result.at(-1);
+    // PDF generators may split a single number into touching glyph runs.
+    // Use geometry, never strip whitespace between unrelated numeric values.
+    const gap = previous ? item.x - (previous.x + previous.width) : Infinity;
+    if (previous && Number.isFinite(previous.width) && Number.isFinite(item.width)
+      && gap >= -0.5 && gap <= 0.5
+      && /^[\d.,()]+$/.test(previous.str) && /^[\d.,()]+$/.test(item.str)) {
+      previous.str += item.str;
+      previous.width = item.x + item.width - previous.x;
+    } else result.push({ ...item });
+  }
+  return result;
+}
+
+function groupLines(items, reconstructNumbers = false) {
   const lines = [];
   for (const item of items.filter(item => normalize(item.str))) {
     let line = lines.find(candidate => Math.abs(candidate.y - item.y) <= 2);
@@ -50,22 +67,27 @@ function groupLines(items) {
       line = { y: item.y, items: [] };
       lines.push(line);
     }
-    line.items.push({ x: item.x, str: normalize(item.str) });
+    line.items.push({ ...item, str: reconstructNumbers ? item.str : normalize(item.str) });
   }
   return lines
     .sort((a, b) => b.y - a.y)
-    .map(line => ({
-      ...line,
-      items: line.items.sort((a, b) => a.x - b.x),
-      text: normalize(line.items.sort((a, b) => a.x - b.x).map(item => item.str).join(' '))
-    }));
+    .map(line => {
+      const sorted = line.items.sort((a, b) => a.x - b.x);
+      const values = (reconstructNumbers ? joinNumericFragments(sorted) : sorted)
+        .map(item => ({ x: item.x, str: normalize(item.str) }));
+      return { ...line, items: values, text: normalize(values.map(item => item.str).join(' ')) };
+    });
 }
 
 export async function readPdf(bytes) {
   const data = bytes?.constructor === Uint8Array ? bytes : new Uint8Array(bytes);
   const pdf = await getDocumentProxy(data);
   const { items } = await extractTextItems(pdf);
-  const pages = items.map(groupLines);
+  let pages = items.map(page => groupLines(page));
+  // Keep EPTS extraction unchanged; repair numeric runs only in SBKTS PDFs.
+  if (/СВИДЕТЕЛЬСТВО О БЕЗОПАСНОСТИ КОНСТРУКЦИИ/i.test(normalize(pages.flat().map(line => line.text).join(' ')))) {
+    pages = items.map(page => groupLines(page, true));
+  }
   return { pages, text: pages.flat().map(line => line.text).join('\n') };
 }
 
@@ -314,7 +336,7 @@ export function calculateUtil(vehicle, now = new Date(), calculationYear = now.g
   if (!vehicle.year || !vehicle.totalKw) throw new Error('Не удалось определить год или расчётную мощность');
   const electricPowertrain = ['series', 'ev'].includes(vehicle.hybridType);
   if (['sbkts', 'epts'].includes(vehicle.type) && !electricPowertrain && !(vehicle.ccm > 0)) {
-    throw new DocumentProcessingError('ENGINE_VOLUME_NOT_DETECTED', 'Не удалось определить рабочий объём ДВС. Проверьте документ: расчёт без объёма невозможен');
+    throw new DocumentProcessingError('ENGINE_VOLUME_NOT_DETECTED', 'Не удалось определить рабочий объём ДВС. Проверьте документ: расчёт без объёма невозможен', null, { vehicle });
   }
   const calculationCcm = electricPowertrain ? null : vehicle.ccm;
   const powertrain = calculationCcm ? 'combustion' : 'electric';

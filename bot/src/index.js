@@ -661,7 +661,7 @@ function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(
   if (!isCargo && vehicle.hybridType && vehicle.hybridType !== 'combustion') {
     lines.push(`<b>Тип гибрида:</b> ${escapeHtml(hybridTypeLabel(vehicle.hybridType))}`);
   }
-  lines.push('', `<b>Объём двигателя:</b> ${vehicle.ccm ? `${vehicle.ccm} см³` : 'не используется'}`);
+  lines.push('', `<b>Объём двигателя:</b> ${vehicle.ccm ? `${vehicle.ccm} см³${vehicle.ccmSource === 'user' ? ' (указан вручную)' : ''}` : 'не используется'}`);
   if (isCargo) {
     lines.push(`<b>Технически допустимая максимальная масса:</b> ${vehicle.maxMass ? `${vehicle.maxMass} кг` : 'не определена'}`);
   }
@@ -3398,6 +3398,87 @@ async function completeCatalogUtil(env, query, candidate, vehicle, sourceParsed 
   if (customs) await clearCustomsState(env, query.from?.id || message.chat.id);
 }
 
+function parseDocumentEngineVolume(input) {
+  const value = String(input || '').trim().replace(/\s*см(?:³|3|\^3)\s*$/i, '').trim();
+  if (!/^(?:\d{2,5}|\d{1,2}[ \u00a0\u202f]\d{3})$/.test(value)) return null;
+  const ccm = Number(value.replace(/\s/g, ''));
+  return Number.isInteger(ccm) && ccm >= 50 && ccm <= 20000 ? ccm : null;
+}
+
+function documentVolumePrompt(vehicle, invalid = false) {
+  const lines = [
+    '<b>📄 СБКТС распознан частично</b>', '',
+    `Автомобиль: ${escapeHtml([vehicle.brand, vehicle.model].filter(Boolean).join(' '))}`,
+    `Год выпуска: ${vehicle.year}`,
+    `Категория: ${escapeHtml(vehicle.category)}`,
+    `Мощность ДВС: ${formatKw(vehicle.combustionKw)}`
+  ];
+  if (vehicle.electricKw?.length) lines.push(`30-минутная мощность электромоторов: ${vehicle.electricKw.map(formatKw).join(' + ')}`);
+  lines.push(`Расчётная мощность: ${formatPower(vehicle.totalKw)}`, '',
+    invalid ? 'Введите точный объём целым числом в см³, например: 1997.' : 'Не удалось прочитать объём двигателя. Введите точный объём из СБКТС в см³, например: 1997.',
+    'Остальные данные сохранены.');
+  return lines.join('\n');
+}
+
+async function handleDocumentVolumeReply(env, message) {
+  const userId = message.from?.id || message.chat.id;
+  const state = await getCustomsState(env, userId);
+  if (state?.stage !== 'document-volume' || state.vehicle?.type !== 'sbkts') return false;
+  const ccm = parseDocumentEngineVolume(message.text);
+  if (ccm === null) {
+    await cleanupTemporaryMessages(env, userId, message.chat.id);
+    const sent = await telegram(env, 'sendMessage', { chat_id: message.chat.id,
+      text: documentVolumePrompt(state.vehicle, true), parse_mode: 'HTML', reply_markup: documentUploadKeyboard() });
+    await trackTemporaryMessage(env, userId, sent.message_id);
+    return true;
+  }
+  const vehicle = { ...state.vehicle, ccm, ccmSource: 'user',
+    issueDate: state.vehicle.issueDate ? new Date(state.vehicle.issueDate) : null };
+  const util = calculateUtil(vehicle);
+  const deadline = vehicle.issueDate ? addWorkingDays(vehicle.issueDate, 5) : null;
+  await cleanupTemporaryMessages(env, userId, message.chat.id);
+  const status = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: '📄 Рассчитываю с указанным объёмом…' });
+  await trackTemporaryMessage(env, userId, status.message_id);
+  await clearCustomsState(env, userId);
+  await finishDocumentCalculation(env, { ...message, message_id: state.sourceMessageId || message.message_id }, status, state, vehicle, util, deadline);
+  return true;
+}
+
+async function finishDocumentCalculation(env, message, status, declarationState, vehicle, util, deadline) {
+  const userId = message.from?.id || message.chat.id;
+  if (env.ANALYTICS_DB) {
+    try { await recordDocumentType(env.ANALYTICS_DB, message.from?.id, vehicle.type === 'sbkts' ? 'sbkts' : 'epts'); }
+    catch (error) { console.error('Analytics document tracking failed', error); }
+  }
+  if (declarationState?.mode === 'declaration') {
+    if (util.length > 1) {
+      await setCustomsState(env, userId, {
+        ...declarationState, mode: 'declaration', stage: 'document-age', vehicle,
+        previousStage: 'document', backCallback: 'declaration:back:start',
+        deadline: deadline?.toISOString?.() || null
+      });
+      await telegram(env, 'editMessageText', {
+        chat_id: message.chat.id, message_id: status.message_id,
+        text: documentAgePrompt(vehicle), parse_mode: 'HTML',
+        reply_markup: documentAgeKeyboard()
+      });
+      return;
+    }
+    await continueDeclarationAfterDocument(env, message.chat.id, userId, declarationState, vehicle, util, deadline, status);
+    return;
+  }
+  if (declarationState?.stage === 'document-volume') await clearCustomsState(env, userId);
+  const cases = peniCases(util);
+  const result = formatDocumentResult(vehicle, util, deadline);
+  await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: status.message_id,
+    text: result, parse_mode: 'HTML', reply_markup: calculationResultKeyboard(todayUtc().getUTCFullYear() < 2027) });
+  await saveApplication(env, message.from?.id, applicationFromVehicle(vehicle, util), result, 'HTML');
+  await sendDocumentIdentity(env, message.chat.id, vehicle, message.message_id).catch(() => null);
+  await releaseTemporaryMessage(env, userId, status.message_id);
+  if (!vehicle.issueDate) await sendIssueDatePrompt(env, message.chat.id, cases);
+  await saveUtilYearContext(env, userId, vehicle, deadline);
+}
+
 async function handleDocument(env, message) {
   const document = message.document;
   const isPdf = document.mime_type === 'application/pdf' || /\.pdf$/i.test(document.file_name || '');
@@ -3434,38 +3515,22 @@ async function handleDocument(env, message) {
     const response = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`);
     if (!response.ok) throw new Error('Telegram не отдал файл для скачивания');
     const { vehicle, util, deadline } = await processVehicleDocument(new Uint8Array(await response.arrayBuffer()));
-    if (env.ANALYTICS_DB) {
-      try { await recordDocumentType(env.ANALYTICS_DB, message.from?.id, vehicle.type === 'sbkts' ? 'sbkts' : 'epts'); }
-      catch (error) { console.error('Analytics document tracking failed', error); }
-    }
-    if (declarationState?.mode === 'declaration') {
-      if (util.length > 1) {
-        await setCustomsState(env, userId, {
-          ...declarationState, mode: 'declaration', stage: 'document-age', vehicle,
-          previousStage: 'document', backCallback: 'declaration:back:start',
-          deadline: deadline?.toISOString?.() || null
-        });
-        await telegram(env, 'editMessageText', {
-          chat_id: message.chat.id, message_id: status.message_id,
-          text: documentAgePrompt(vehicle), parse_mode: 'HTML',
-          reply_markup: documentAgeKeyboard()
-        });
-        return;
-      }
-      await continueDeclarationAfterDocument(env, message.chat.id, userId, declarationState, vehicle, util, deadline, status);
-      return;
-    }
-    const cases = peniCases(util);
-    const result = formatDocumentResult(vehicle, util, deadline);
-    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: status.message_id,
-      text: result, parse_mode: 'HTML', reply_markup: calculationResultKeyboard(todayUtc().getUTCFullYear() < 2027) });
-    await saveApplication(env, message.from?.id, applicationFromVehicle(vehicle, util), result, 'HTML');
-    await sendDocumentIdentity(env, message.chat.id, vehicle, message.message_id).catch(() => null);
-    await releaseTemporaryMessage(env, userId, status.message_id);
-    if (!vehicle.issueDate) await sendIssueDatePrompt(env, message.chat.id, cases);
-    await saveUtilYearContext(env, userId, vehicle, deadline);
+    await finishDocumentCalculation(env, message, status, declarationState, vehicle, util, deadline);
   } catch (error) {
     const controlled = controlledDocumentError(error);
+    if (controlled.code === 'ENGINE_VOLUME_NOT_DETECTED' && controlled.details?.vehicle?.type === 'sbkts') {
+      await setCustomsState(env, userId, {
+        ...(declarationState?.mode === 'declaration' ? declarationState : { mode: 'util' }),
+        stage: 'document-volume', vehicle: controlled.details.vehicle,
+        sourceMessageId: message.message_id
+      });
+      await telegram(env, 'editMessageText', {
+        chat_id: message.chat.id, message_id: status.message_id,
+        text: documentVolumePrompt(controlled.details.vehicle), parse_mode: 'HTML',
+        reply_markup: documentUploadKeyboard()
+      });
+      return;
+    }
     if (controlled.code === 'CARGO_TYPE_REQUIRED' && controlled.details?.vehicle && controlled.details?.candidates?.length) {
       const vehicle = controlled.details.vehicle;
       const mode = declarationState?.mode === 'declaration' ? 'declaration' : 'util';
@@ -4327,6 +4392,10 @@ async function sendCalculationStart(env, chatId, userId = chatId) {
 async function handleCalculationCallback(env, query) {
   const message = query.message;
   const userId = query.from?.id || message.chat.id;
+  if (['calc:back:document', 'calc:retry:document', 'calc:new', 'calc:result:new'].includes(query.data)) {
+    const state = await getCustomsState(env, userId);
+    if (state?.stage === 'document-volume') await clearCustomsState(env, userId);
+  }
   if (query.data === 'calc:result:menu' || (query.data === 'calc:menu' && isPermanentResultText(message.text))) {
     await sendMenu(env, message.chat.id);
     return;
@@ -4833,6 +4902,7 @@ async function handleUpdate(env, update) {
       await sendMenu(env, update.message.chat.id);
       return;
     }
+    if (await handleDocumentVolumeReply(env, update.message)) return;
     if (await handleDateReply(env, update.message)) return;
     if (await handleCustomsReply(env, update.message)) return;
     if (await handleDeclarationReply(env, update.message)) return;
