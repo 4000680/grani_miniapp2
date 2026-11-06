@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { calculateUtil, calculatePeniForecast, addWorkingDays, parseFlexibleDate, toIso } from '../src/document-processing.js';
+import { calculateUtil, calculatePeni, calculatePeniForecast, addWorkingDays, parseFlexibleDate, toIso } from '../src/document-processing.js';
 
 const source = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
 function extract(name, async = false) {
@@ -20,7 +20,7 @@ function runtime() {
   const context = vm.createContext({
     ageLabel: age => age === 'new' ? 'до 3 лет' : 'старше 3 лет',
     formatMoney: n => `${n.toFixed(2)} ₽`, formatDate: toIso,
-    calculatePeniForecast, addWorkingDays, parseFlexibleDate,
+    calculatePeni, calculatePeniForecast, addWorkingDays, parseFlexibleDate,
     todayUtc: () => date('2026-09-30'), nextDay: d => new Date(d.getTime()+86400000),
     getCustomsState: async()=>state, setCustomsState:async(_env,_id,next)=>{state=next;},
     clearCustomsState:async()=>{state=null;}, cleanupTemporaryMessages:async()=>{},
@@ -54,8 +54,8 @@ test('N1 van result includes mass-based commercial util and both penalty dates',
   assert.match(text,/3500 кг/);
   assert.match(text,/9.61/);
   assert.match(text,/1\s*441\s*500/);
-  assert.match(text,/Сегодня/);
-  assert.match(text,/Следующий рабочий день/);
+  assert.match(text,/Пени сегодня/);
+  assert.match(text,/Пени завтра/);
   assert.equal(context.peniCases(fees).length,1);
 });
 
@@ -96,11 +96,11 @@ test('automatic penalties show both rates for today and the next working day', (
     assert.ok(text.includes(item.label));
     for(const result of calculatePeniForecast(item.sum,date('2026-09-11'),date('2026-09-30'))) {
       assert.ok(text.includes(result.total.toFixed(2)));
-      assert.ok(text.includes((item.sum+result.total).toFixed(2)));
+      assert.ok(!text.includes((item.sum+result.total).toFixed(2)));
     }
   }
-  assert.equal((text.match(/Сегодня,/g)||[]).length,2);
-  assert.equal((text.match(/Следующий рабочий день,/g)||[]).length,2);
+  assert.equal((text.match(/Пени сегодня:/g)||[]).length,2);
+  assert.equal((text.match(/Пени завтра:/g)||[]).length,2);
 });
 
 test('SBKTS and EPTS result cards with a known date include both rate forecasts', () => {
@@ -111,8 +111,8 @@ test('SBKTS and EPTS result cards with a known date include both rate forecasts'
     const text=context.formatDocumentResult(vehicle,util,date('2026-09-11'),date('2026-09-30'));
     assert.match(text,/льготный утильсбор/);
     assert.match(text,/коммерческий утильсбор/);
-    assert.equal((text.match(/Сегодня,/g)||[]).length,2);
-    assert.equal((text.match(/Следующий рабочий день,/g)||[]).length,2);
+    assert.equal((text.match(/Пени сегодня:/g)||[]).length,2);
+    assert.equal((text.match(/Пени завтра:/g)||[]).length,2);
   }
 });
 
@@ -127,7 +127,7 @@ test('EPTS date entry flow calculates and saves both rates, not their combined d
     const text=sent.at(-1).payload.text;
     assert.match(text,/льготный утильсбор/);
     assert.match(text,/коммерческий утильсбор/);
-    assert.equal((text.match(/Сегодня,/g)||[]).length,2);
+    assert.equal((text.match(/Пени сегодня:/g)||[]).length,2);
     assert.equal(saved[0].app.amount,null);
   }
 });

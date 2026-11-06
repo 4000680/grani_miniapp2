@@ -22,7 +22,6 @@ import {
 import {
   addWorkingDays,
   calculatePeni,
-  calculatePeniForecast,
   calculateUtil,
   DocumentProcessingError,
   parseFlexibleDate,
@@ -594,12 +593,15 @@ function formatPeniCompact(cases, deadline, target) {
   const lines = [];
   for (const item of cases) {
     if (cases.length > 1) lines.push(`<b>${item.label}</b>`);
-    for (const [index, result] of calculatePeniForecast(item.sum, deadline, target).entries()) {
-      const label = index === 0 ? 'Сегодня' : 'Следующий рабочий день';
-      lines.push(`${label}, ${formatDate(result.date)} — пени (${result.days} дн.): <b>${formatMoney(result.total, true)}</b>; итого: <b>${formatMoney(item.sum + result.total, true)}</b>.`);
+    const today = calculatePeni(item.sum, deadline, target).total;
+    const tomorrow = calculatePeni(item.sum, deadline, nextDay(target)).total;
+    if (today === 0 && tomorrow === 0) {
+      lines.push('Пени отсутствуют.');
+    } else {
+      lines.push(`Пени сегодня: ${today ? `<b>${formatMoney(today, true)}</b>` : 'отсутствуют'}.`);
+      lines.push(`Пени завтра: ${tomorrow ? `<b>${formatMoney(tomorrow, true)}</b>` : 'отсутствуют'}.`);
     }
   }
-  if (target <= deadline) lines.push(`Пени начнут начисляться с <b>${formatDate(nextDay(deadline))}</b>.`);
   return lines.join('\n');
 }
 
@@ -703,8 +705,8 @@ function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(
     lines.push(
       '',
       `<b>Дата оформления СБКТС:</b> ${formatDate(vehicle.issueDate)}`,
-      'Срок подачи документов и уплаты: <b>5 рабочих дней</b> с даты оформления СБКТС (праздники РФ учтены).',
-      `<b>Крайний срок уплаты: ${formatDate(deadline)}</b>`,
+      'Срок подачи документов: <b>5 рабочих дней с даты СБКТС</b>.',
+      `<b>Крайний срок: ${formatDate(deadline)}</b>`,
       formatPeniCompact(peniCases(util), deadline, target)
     );
   }
@@ -1230,7 +1232,7 @@ async function handleDateReply(env, message) {
   }
   await cleanupTemporaryMessages(env, message.from?.id || message.chat.id, message.chat.id);
   const deadline = addWorkingDays(date, 5);
-  const resultText = [`<b>Крайний срок уплаты: ${formatDate(deadline)}</b>`, formatPeniCompact(cases, deadline, todayUtc())].join('\n');
+  const resultText = [`<b>Крайний срок: ${formatDate(deadline)}</b>`, formatPeniCompact(cases, deadline, todayUtc())].join('\n');
   await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: resultText, parse_mode: 'HTML', reply_markup: calculationResultKeyboard() });
   const vehicle = state?.utilYearContext?.vehicle || {};
   await saveApplication(env, message.from?.id || message.chat.id, {
