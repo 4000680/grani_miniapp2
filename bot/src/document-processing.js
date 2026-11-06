@@ -148,6 +148,18 @@ function vehicleCategory(value) {
   return normalize(value)?.match(/N1G|[A-ZА-Я]\d/i)?.[0]?.toUpperCase() || null;
 }
 
+function eptsVehicleCategory(value) {
+  // Some EPTS fonts map the visible digit 1 to l/I in the PDF text layer.
+  // Normalize only a complete technical-category cell, never document prose.
+  const text = normalize(value).toUpperCase().replace(/^М/, 'M');
+  const match = text.match(/^([MN])\s*([123LIІ])\s*(G)?$/);
+  if (match) {
+    const digit = /^[123]$/.test(match[2]) ? match[2] : '1';
+    return vehicleCategory(`${match[1]}${digit}${match[3] || ''}`);
+  }
+  return /^[A-ZА-Я]\dG?$/.test(text) ? vehicleCategory(text) : null;
+}
+
 function isCargoCategory(category) {
   return ['N1', 'N1G', 'N2', 'N3'].includes(category);
 }
@@ -264,7 +276,7 @@ function parseEpts(document) {
   const yearText = pageValue(first, /^Месяц и год изготовления(?:\s|$)/i, 350);
   const year = Number(yearText?.match(/\b(19|20)\d{2}\b/)?.[0]) || null;
   const manufactureMonth = parseManufactureMonth(yearText);
-  const category = vehicleCategory(pageValue(first, /^Категория в соответствии с ТР ТС/i, 350));
+  const category = eptsVehicleCategory(pageValue(first, /^Категория в соответствии с ТР ТС/i, 350));
   const ccm = numberValueFromDocument(document.pages, /рабочий объем цилиндров/i, 350);
   const combustionKw = numberValueFromDocument(document.pages, /максимальная мощность \(кВт\)/i, 350);
   const maxMass = numberValueFromDocument(document.pages, /Технически допустимая максимальная масса/i, 350);
