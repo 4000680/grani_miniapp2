@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "asn1js": "^4.0.0",
+    "node-gost-crypto": "^1.0.2",
     "pdf-lib": "^1.17.1",
     "pkijs": "^4.0.1",
     "unpdf": "^1.8.1"

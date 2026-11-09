@@ -18,5 +18,5 @@ test('unknown and missing signature cannot produce matching results',async()=>{
 test('green labels explicitly describe only identity and unsigned additions, never authenticity',()=>{
  const text=screeningStatusText({screening:true,presence:'present',identity:'match',additions:'absent'});
  assert.match(text,/ФИО совпадает/);assert.match(text,/дополнения.*не обнаружены/);
- assert.match(text,/целостность и подлинность документа не проверялись/);
+ assert.match(text,/Доверие к сертификату и полномочия подписанта не проверялись/);
 });

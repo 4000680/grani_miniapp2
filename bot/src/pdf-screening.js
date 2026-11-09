@@ -1,3 +1,4 @@
+import { verifyCmsIntegrity } from './cms-integrity.js';
 import { PDFDocument, PDFSignature, PDFName, PDFArray, PDFHexString } from 'pdf-lib';
 import { fromBER } from 'asn1js';
 import { ContentInfo, SignedData } from 'pkijs';
@@ -32,7 +33,7 @@ export function comparePrintedSigner(name, text) {
 }
 
 export async function inspectPdfScreening(input, text = '') {
-  const result = { screening: true, presence: 'unknown', identity: 'unknown', additions: 'unknown' };
+  const result = { screening: true, presence: 'unknown', identity: 'unknown', additions: 'unknown', integrity: 'unknown' };
   try {
     const bytes = new Uint8Array(input);
     const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
@@ -41,7 +42,8 @@ export async function inspectPdfScreening(input, text = '') {
     if (!signatures.length) return { ...result, presence: 'absent' };
     result.presence = 'present';
     if (signatures.length > 12) return result;
-    const identities = [], ends = [];
+    const identities = [], ends = [], integrity = [];
+    let selfIssued = false;
     let unknownRange = false;
     for (const signature of signatures) {
       const range = signature.lookup(PDFName.of('ByteRange'));
@@ -57,13 +59,19 @@ export async function inspectPdfScreening(input, text = '') {
         const info=new ContentInfo({schema:fromBER(contents.asBytes()).result});
         if(info.contentType!=='1.2.840.113549.1.7.2') {identities.push('unknown');continue;}
         const cms=new SignedData({schema:info.content});
+        const data=new Uint8Array(length+rest);
+        data.set(bytes.subarray(0,length));data.set(bytes.subarray(second,second+rest),length);
+        const checked=await verifyCmsIntegrity(cms,data);
+        integrity.push(checked.status);selfIssued ||= checked.selfIssued || false;
         for(const signer of cms.signerInfos) {
           const cert=cms.certificates?.find(c=>c.serialNumber?.isEqual(signer.sid.serialNumber) && c.issuer?.isEqual(signer.sid.issuer));
           const name=cert?.subject.typesAndValues.find(x=>x.type==='2.5.4.3')?.value.valueBlock.value;
           identities.push(comparePrintedSigner(name,text));
         }
-      } catch {identities.push('unknown');}
+      } catch {identities.push('unknown');integrity.push('unsupported');}
     }
+    result.integrity=integrity.includes('invalid')?'invalid':!unknownRange && integrity.length===signatures.length && integrity.every(s=>s==='valid')?'valid':'unknown';
+    result.selfIssued=selfIssued;
     result.identity=identities.includes('mismatch')?'mismatch':identities.length && identities.every(x=>x==='match')?'match':'unknown';
     // This only checks ByteRange coverage, NOT cryptographic integrity or allowed change types.
     result.additions=unknownRange || !ends.length?'unknown':ends.some(end=>end<bytes.length)?'present':'absent';
@@ -74,6 +82,8 @@ export async function inspectPdfScreening(input, text = '') {
 export function screeningStatusText(check) {
   if(check.presence!=='present') return '❌ Проверка подписи: '+(check.presence==='absent'?'встроенная подпись не найдена.':'наличие подписи определить не удалось.');
   const identity=check.identity==='match'?'🟢 Подпись: напечатанное ФИО совпадает с сертификатом.':check.identity==='mismatch'?'❌ Подпись: напечатанное ФИО не совпадает с сертификатом.':'❌ Подпись: ФИО сопоставить не удалось — нужна ручная проверка.';
-  const additions=check.additions==='absent'?'🟢 Неподписанные дополнения после подписи не обнаружены.':check.additions==='present'?'❌ После подписи есть неподписанные дополнения — нужна ручная проверка.':'❌ Дополнения после подписи проверить не удалось.';
-  return identity+'\n'+additions+'\nКриптографическая целостность и подлинность документа не проверялись.';
+  const additions=check.additions==='absent'?'Неподписанные дополнения после подписи не обнаружены.':check.additions==='present'?'❌ После подписи есть неподписанные дополнения — нужна ручная проверка.':'❌ Дополнения после подписи проверить не удалось.';
+  const crypto=check.integrity==='valid'?'🟢 Криптопроверка: подписанные данные целы.':check.integrity==='invalid'?'❌ Криптопроверка: целостность подписи или подписанных данных нарушена.':'❌ Криптопроверка: выполнить не удалось — нужна ручная проверка.';
+  const certificate=check.selfIssued?'\n❌ Сертификат самовыданный — требуется ручная проверка.':'';
+  return identity+'\n'+crypto+'\n'+additions+certificate+'\nДоверие к сертификату и полномочия подписанта не проверялись.';
 }
