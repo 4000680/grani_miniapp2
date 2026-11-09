@@ -1,5 +1,6 @@
 import { SERVICES, openService, handleServiceMessage, handleServiceCallback, clearServiceSession } from './service-requests.js';
 import { PAYMENT_QR_PNG } from './payment-qr.js';
+import { signatureStatusText } from './pdf-signature.js';
 import {
   calculationPower,
   getCatalogCandidate,
@@ -608,6 +609,7 @@ function formatPeniCompact(cases, deadline, target) {
 function documentAgePrompt(vehicle) {
   return [
     '📅 <b>Уточните возраст автомобиля</b>',
+    ...(vehicle.signatureCheck ? [signatureStatusText(vehicle.signatureCheck)] : []),
     '',
     `<b>Год выпуска:</b> ${vehicle.year}`,
     'Возраст автомобиля для расчёта определяется по месяцу выпуска. В документе месяц не указан, поэтому я не могу точно определить возраст.',
@@ -658,6 +660,8 @@ function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(
     `<b>Категория:</b> ${escapeHtml(vehicle.category)}`,
     `<b>Год ставок:</b> ${calculationYear}`,
   ];
+  if (vehicle.signatureCheck) lines.push('', signatureStatusText(vehicle.signatureCheck));
+  if (vehicle.textLayerRepaired) lines.push('⚠️ Обнаружены особенности текстового слоя. Данные восстановлены — требуется сверка с оригиналом.');
   if (!isCargo && vehicle.hybridType && vehicle.hybridType !== 'combustion') {
     lines.push(`<b>Тип гибрида:</b> ${escapeHtml(hybridTypeLabel(vehicle.hybridType))}`);
   }
@@ -1184,12 +1188,13 @@ function documentUploadKeyboard() {
 
 function controlledDocumentError(error) {
   if (error instanceof DocumentProcessingError) return error;
-  return new DocumentProcessingError('CALCULATION_ERROR', error?.message || String(error), error);
+  return new DocumentProcessingError('CALCULATION_ERROR', error?.message || String(error), error, error?.details);
 }
 
 function documentErrorText(error) {
   const controlled = controlledDocumentError(error);
-  return `Не удалось обработать документ: ${escapeHtml(controlled.message)}.`;
+  const signature = controlled.details?.signatureCheck;
+  return `Не удалось обработать документ: ${escapeHtml(controlled.message)}.${signature ? `\n\n${signatureStatusText(signature)}` : ''}`;
 }
 
 async function sendIssueDatePrompt(env, chatId, cases, notice = '') {
@@ -3413,6 +3418,7 @@ function documentVolumePrompt(vehicle, invalid = false) {
     `Категория: ${escapeHtml(vehicle.category)}`,
     `Мощность ДВС: ${formatKw(vehicle.combustionKw)}`
   ];
+  if (vehicle.signatureCheck) lines.push('', signatureStatusText(vehicle.signatureCheck));
   if (vehicle.electricKw?.length) lines.push(`30-минутная мощность электромоторов: ${vehicle.electricKw.map(formatKw).join(' + ')}`);
   lines.push(`Расчётная мощность: ${formatPower(vehicle.totalKw)}`, '',
     invalid ? 'Введите точный объём целым числом в см³, например: 1997.' : 'Не удалось прочитать объём двигателя. Введите точный объём из СБКТС в см³, например: 1997.',
@@ -4069,6 +4075,8 @@ function declarationYearReferenceKeyboard() {
 function declarationVehicleLines(vehicle) {
   const maxMass = Number(vehicle.maxMass);
   return [
+    ...(vehicle.signatureCheck ? [signatureStatusText(vehicle.signatureCheck)] : []),
+    ...(vehicle.textLayerRepaired ? ['⚠️ Данные восстановлены из текстового слоя — требуется сверка с оригиналом.'] : []),
     `<b>Автомобиль:</b> ${escapeHtml([vehicle.brand, vehicle.model].filter(Boolean).join(' ') || '—')}`,
     `<b>Год выпуска:</b> ${vehicle.year || '—'}`,
     `<b>Категория:</b> ${escapeHtml(vehicle.categoryLabel || vehicle.category || '—')}`,

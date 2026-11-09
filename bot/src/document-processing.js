@@ -1,4 +1,5 @@
 import { extractTextItems, getDocumentProxy } from 'unpdf';
+import { inspectPdfSignature } from './pdf-signature.js';
 import { cargoTypeCandidates, detectCargoType, selectUtilRate } from '../../shared/util-rate-selector.js';
 import '../../shared/vehicle-power.js';
 import '../../shared/sbkts-power-parser.js';
@@ -84,11 +85,14 @@ export async function readPdf(bytes) {
   const pdf = await getDocumentProxy(data);
   const { items } = await extractTextItems(pdf);
   let pages = items.map(page => groupLines(page));
+  let reconstructedNumbers = false;
   // Keep EPTS extraction unchanged; repair numeric runs only in SBKTS PDFs.
   if (/СВИДЕТЕЛЬСТВО О БЕЗОПАСНОСТИ КОНСТРУКЦИИ/i.test(normalize(pages.flat().map(line => line.text).join(' ')))) {
-    pages = items.map(page => groupLines(page, true));
+    const repaired = items.map(page => groupLines(page, true));
+    reconstructedNumbers = repaired.flat().map(line => line.text).join('\n') !== pages.flat().map(line => line.text).join('\n');
+    pages = repaired;
   }
-  return { pages, text: pages.flat().map(line => line.text).join('\n') };
+  return { pages, text: pages.flat().map(line => line.text).join('\n'), reconstructedNumbers };
 }
 
 function pageValue(lines, label, minX) {
@@ -293,6 +297,7 @@ function parseEpts(document) {
   });
   return {
     type: 'epts', brand, model, vin, surname: owner?.split(/\s+/)[0] || null, year, manufactureMonth, yearText, category, ccm, combustionKw,
+    categoryGlyphRepaired: /^[MМN]\s*[lIІ]\s*G?$/i.test(normalize(pageValue(first, /^Категория в соответствии с ТР ТС/i, 350))),
     engineKw: combustionKw, electricKw, electric30MinKwList: electricKw, electric30MinKw,
     totalKw: power.calculatedKw,
     maxMass, cargoType: detectCargoType(document.text), issueDate: null,
@@ -363,14 +368,22 @@ export function calculateUtil(vehicle, now = new Date(), calculationYear = now.g
 }
 
 export async function processVehicleDocument(bytes, now = new Date()) {
-  const document = await readPdf(bytes);
-  if (document.text.replace(/\s/g, '').length < 40) {
-    throw new DocumentProcessingError('PDF_NO_TEXT', 'В PDF нет текстового слоя');
+  const signatureCheck = await inspectPdfSignature(bytes);
+  try {
+    const document = await readPdf(bytes);
+    if (document.text.replace(/\s/g, '').length < 40) {
+      throw new DocumentProcessingError('PDF_NO_TEXT', 'В PDF нет текстового слоя');
+    }
+    const vehicle = parseVehicleDocument(document);
+    vehicle.signatureCheck = signatureCheck;
+    vehicle.textLayerRepaired = !!(document.reconstructedNumbers || vehicle.categoryGlyphRepaired);
+    const util = calculateUtil(vehicle, now);
+    const deadline = vehicle.issueDate ? addWorkingDays(vehicle.issueDate, 5) : null;
+    return { document, vehicle, util, deadline };
+  } catch (error) {
+    error.details = { ...error.details, signatureCheck };
+    throw error;
   }
-  const vehicle = parseVehicleDocument(document);
-  const util = calculateUtil(vehicle, now);
-  const deadline = vehicle.issueDate ? addWorkingDays(vehicle.issueDate, 5) : null;
-  return { document, vehicle, util, deadline };
 }
 
 export function parseFlexibleDate(input) {
