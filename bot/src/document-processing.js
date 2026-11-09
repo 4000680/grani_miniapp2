@@ -453,5 +453,15 @@ export function calculatePeniForecast(sum, deadline, today = todayUtc()) {
   }));
 }
 
+export function calculatePeniDailySummary(sum, deadline, target = todayUtc()) {
+  // Inclusive: a working target stays unchanged; a holiday/weekend moves forward.
+  const date = addWorkingDays(new Date(target.getTime() - DAY), 1);
+  return {
+    date,
+    total: calculatePeni(sum, deadline, date).total,
+    daily: calculatePeni(sum, new Date(date.getTime() - DAY), date).total
+  };
+}
+
 export function toIso(date) { return date.toISOString().slice(0, 10); }
 export function todayUtc(now = new Date()) { return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())); }

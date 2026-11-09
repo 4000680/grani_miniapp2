@@ -23,6 +23,7 @@ import {
 import {
   addWorkingDays,
   calculatePeni,
+  calculatePeniDailySummary,
   calculateUtil,
   DocumentProcessingError,
   parseFlexibleDate,
@@ -586,22 +587,14 @@ function ageLabel(age) {
   return age === 'new' ? 'до 3 лет' : 'старше 3 лет';
 }
 
-function nextDay(date) {
-  return new Date(date.getTime() + 24 * 60 * 60 * 1000);
-}
-
 function formatPeniCompact(cases, deadline, target) {
   const lines = [];
   for (const item of cases) {
     if (cases.length > 1) lines.push(`<b>${item.label}</b>`);
-    const today = calculatePeni(item.sum, deadline, target).total;
-    const tomorrow = calculatePeni(item.sum, deadline, nextDay(target)).total;
-    if (today === 0 && tomorrow === 0) {
-      lines.push('Пени отсутствуют.');
-    } else {
-      lines.push(`Пени сегодня: ${today ? `<b>${formatMoney(today, true)}</b>` : 'отсутствуют'}.`);
-      lines.push(`Пени завтра: ${tomorrow ? `<b>${formatMoney(tomorrow, true)}</b>` : 'отсутствуют'}.`);
-    }
+    const summary = calculatePeniDailySummary(item.sum, deadline, target);
+    const label = summary.date.getTime() === target.getTime() ? 'Пени сегодня' : `Пени на ${formatDate(summary.date)}`;
+    lines.push(summary.total ? `${label}: <b>${formatMoney(summary.total, true)}</b>.` : `${label}: отсутствуют.`);
+    lines.push(`За день просрочки: <b>${formatMoney(summary.daily, true)}</b>.`);
   }
   return lines.join('\n');
 }
@@ -708,8 +701,7 @@ function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(
   if (deadline) {
     lines.push(
       '',
-      `<b>Дата оформления СБКТС:</b> ${formatDate(vehicle.issueDate)}`,
-      'Срок подачи документов: <b>5 рабочих дней с даты СБКТС</b>.',
+      `СБКТС: <b>${formatDate(vehicle.issueDate)}</b>. Срок: 5 рабочих дней.`,
       `<b>Крайний срок: ${formatDate(deadline)}</b>`,
       formatPeniCompact(peniCases(util), deadline, target)
     );
