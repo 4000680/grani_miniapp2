@@ -81,3 +81,11 @@ test('signature status is separate from recognition in both document result form
     assert.match(context.documentAgePrompt(v),/Электронная подпись/);
   }
 });
+
+test('screening reads CMS identity without requiring crypto verification',async()=>{
+ const {inspectPdfScreening}=await import('../src/pdf-screening.js');
+ const check=await inspectPdfScreening(await signedFixture(),'Кому выдан: Synthetic test signer');
+ assert.equal(check.presence,'present');assert.equal(check.identity,'match');assert.equal(check.additions,'absent');
+ const changed=await inspectPdfScreening(Buffer.concat([await signedFixture(),Buffer.from('\n% unsigned revision\n')]),'Кому выдан: Synthetic test signer');
+ assert.equal(changed.additions,'present');
+});

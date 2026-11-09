@@ -1,3 +1,4 @@
+import { screeningStatusText } from './pdf-screening.js';
 import { PDFDocument, PDFName, PDFDict, PDFArray, PDFHexString, PDFSignature } from 'pdf-lib';
 import { fromBER } from 'asn1js';
 import { ContentInfo, SignedData } from 'pkijs';
@@ -62,6 +63,7 @@ async function inspectSignature(dictionary, bytes) {
 }
 
 export function signatureStatusText(check) {
+  if (check?.screening) return screeningStatusText(check);
   switch (check?.status) {
     case 'absent': return '⚠️ Электронная подпись: встроенная подпись не найдена. Запросите подписанный оригинал (и файл подписи, если она отдельная).';
     case 'invalid': return '❌ Электронная подпись: проверка целостности не пройдена. Требуется проверка оригинала.';

@@ -1,5 +1,5 @@
 import { extractTextItems, getDocumentProxy } from 'unpdf';
-import { inspectPdfSignature } from './pdf-signature.js';
+import { inspectPdfScreening } from './pdf-screening.js';
 import { cargoTypeCandidates, detectCargoType, selectUtilRate } from '../../shared/util-rate-selector.js';
 import '../../shared/vehicle-power.js';
 import '../../shared/sbkts-power-parser.js';
@@ -368,9 +368,10 @@ export function calculateUtil(vehicle, now = new Date(), calculationYear = now.g
 }
 
 export async function processVehicleDocument(bytes, now = new Date()) {
-  const signatureCheck = await inspectPdfSignature(bytes);
+  let signatureCheck;
   try {
     const document = await readPdf(bytes);
+    signatureCheck = await inspectPdfScreening(bytes, document.text);
     if (document.text.replace(/\s/g, '').length < 40) {
       throw new DocumentProcessingError('PDF_NO_TEXT', 'В PDF нет текстового слоя');
     }
@@ -381,7 +382,7 @@ export async function processVehicleDocument(bytes, now = new Date()) {
     const deadline = vehicle.issueDate ? addWorkingDays(vehicle.issueDate, 5) : null;
     return { document, vehicle, util, deadline };
   } catch (error) {
-    error.details = { ...error.details, signatureCheck };
+    error.details = { ...error.details, signatureCheck: signatureCheck || await inspectPdfScreening(bytes) };
     throw error;
   }
 }
