@@ -81,7 +81,9 @@ function groupLines(items, reconstructNumbers = false) {
 }
 
 export async function readPdf(bytes) {
-  const data = bytes?.constructor === Uint8Array ? bytes : new Uint8Array(bytes);
+  // PDF.js may transfer/detach its input buffer. Preserve the original bytes
+  // for subsequent signature inspection, including Telegram Uint8Array input.
+  const data = new Uint8Array(bytes);
   const pdf = await getDocumentProxy(data);
   const { items } = await extractTextItems(pdf);
   let pages = items.map(page => groupLines(page));

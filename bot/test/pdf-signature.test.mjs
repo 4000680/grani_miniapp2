@@ -89,3 +89,18 @@ test('screening reads CMS identity without requiring crypto verification',async(
  const changed=await inspectPdfScreening(Buffer.concat([await signedFixture(),Buffer.from('\n% unsigned revision\n')]),'Кому выдан: Synthetic test signer');
  assert.equal(changed.additions,'present');
 });
+
+test('PDF text extraction preserves incoming Telegram Uint8Array for signature screening',async()=>{
+ const {readPdf}=await import('../src/document-processing.js');
+ const {inspectPdfScreening}=await import('../src/pdf-screening.js');
+ // Telegram fetch uses Uint8Array, unlike a Node Buffer loaded from disk.
+ const bytes=new Uint8Array(await signedFixture());
+ const original=bytes.slice();
+ assert.equal((await inspectPdfScreening(bytes)).presence,'present');
+ const document=await readPdf(bytes);
+ assert.ok(document.text.includes('TEST DOCUMENT'));
+ assert.equal(bytes.byteLength,original.byteLength);
+ assert.deepEqual(bytes,original);
+ const check=await inspectPdfScreening(bytes,'Кому выдан: Synthetic test signer');
+ assert.equal(check.presence,'present');assert.equal(check.identity,'match');assert.equal(check.additions,'absent');
+});
