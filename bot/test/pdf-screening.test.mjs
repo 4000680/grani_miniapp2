@@ -15,8 +15,30 @@ test('unknown and missing signature cannot produce matching results',async()=>{
  assert.doesNotMatch(screeningStatusText(absent),/🟢/);
  assert.equal((await inspectPdfScreening(new Uint8Array())).presence,'unknown');
 });
-test('green labels explicitly describe only identity and unsigned additions, never authenticity',()=>{
- const text=screeningStatusText({screening:true,presence:'present',identity:'match',additions:'absent'});
- assert.match(text,/ФИО совпадает/);assert.match(text,/дополнения.*не обнаружены/);
- assert.match(text,/Доверие к сертификату и полномочия подписанта не проверялись/);
+const passed = { screening:true, presence:'present', identity:'match', integrity:'valid', additions:'absent', selfIssued:false };
+test('successful screening is compact and states its limited scope',()=>{
+ const text=screeningStatusText(passed);
+ assert.equal(text,'🟢 Подпись: ФИО совпадает, целостность подтверждена.\nДоверие к сертификату и полномочия не проверялись.');
+});
+test('every failed or incomplete check removes the green status and keeps its reason',()=>{
+ for(const [change,reason] of [
+  [{presence:'absent'},/подпись не найдена/],
+  [{presence:'unknown'},/наличие подписи не определено/],
+  [{identity:'mismatch'},/ФИО не совпадает/],
+  [{identity:'unknown'},/ФИО не сверено/],
+  [{integrity:'invalid'},/нарушена целостность/],
+  [{integrity:'unknown'},/целостность не проверена/],
+  [{additions:'present'},/есть неподписанные дополнения/],
+  [{additions:'unknown'},/дополнения не проверены/],
+  [{selfIssued:true},/самовыданный сертификат/]
+ ]) {
+  const text=screeningStatusText({...passed,...change});
+  assert.match(text,/^❌/);assert.doesNotMatch(text,/🟢/);assert.match(text,reason);
+ }
+});
+test('multiple problems are retained in one warning, with no successful-check clutter',()=>{
+ const text=screeningStatusText({...passed,identity:'unknown',integrity:'invalid',selfIssued:true});
+ assert.match(text,/ФИО не сверено; нарушена целостность; самовыданный сертификат/);
+ assert.equal(text.split('❌').length,2);
+ assert.doesNotMatch(text,/подтверждена|не обнаружены/);
 });

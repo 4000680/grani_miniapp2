@@ -80,10 +80,14 @@ export async function inspectPdfScreening(input, text = '') {
 }
 
 export function screeningStatusText(check) {
-  if(check.presence!=='present') return '❌ Проверка подписи: '+(check.presence==='absent'?'встроенная подпись не найдена.':'наличие подписи определить не удалось.');
-  const identity=check.identity==='match'?'🟢 Подпись: напечатанное ФИО совпадает с сертификатом.':check.identity==='mismatch'?'❌ Подпись: напечатанное ФИО не совпадает с сертификатом.':'❌ Подпись: ФИО сопоставить не удалось — нужна ручная проверка.';
-  const additions=check.additions==='absent'?'Неподписанные дополнения после подписи не обнаружены.':check.additions==='present'?'❌ После подписи есть неподписанные дополнения — нужна ручная проверка.':'❌ Дополнения после подписи проверить не удалось.';
-  const crypto=check.integrity==='valid'?'🟢 Криптопроверка: подписанные данные целы.':check.integrity==='invalid'?'❌ Криптопроверка: целостность подписи или подписанных данных нарушена.':'❌ Криптопроверка: выполнить не удалось — нужна ручная проверка.';
-  const certificate=check.selfIssued?'\n❌ Сертификат самовыданный — требуется ручная проверка.':'';
-  return identity+'\n'+crypto+'\n'+additions+certificate+'\nДоверие к сертификату и полномочия подписанта не проверялись.';
+  if(check.presence!=='present') return '❌ Подпись: '+(check.presence==='absent'?'встроенная подпись не найдена.':'наличие подписи не определено.');
+  const issues=[];
+  if(check.identity!=='match') issues.push(check.identity==='mismatch'?'ФИО не совпадает':'ФИО не сверено');
+  if(check.integrity!=='valid') issues.push(check.integrity==='invalid'?'нарушена целостность':'целостность не проверена');
+  if(check.additions!=='absent') issues.push(check.additions==='present'?'есть неподписанные дополнения':'дополнения не проверены');
+  if(check.selfIssued) issues.push('самовыданный сертификат');
+  const status=issues.length
+    ? '❌ Подпись: '+issues.join('; ')+'. Нужна ручная проверка.'
+    : '🟢 Подпись: ФИО совпадает, целостность подтверждена.';
+  return status+'\nДоверие к сертификату и полномочия не проверялись.';
 }
