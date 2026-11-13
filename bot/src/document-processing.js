@@ -369,22 +369,22 @@ export function calculateUtil(vehicle, now = new Date(), calculationYear = now.g
   }));
 }
 
-export async function processVehicleDocument(bytes, now = new Date()) {
+export async function processVehicleDocument(bytes, now = new Date(), { checkSignature = false } = {}) {
   let signatureCheck;
   try {
     const document = await readPdf(bytes);
-    signatureCheck = await inspectPdfScreening(bytes, document.text);
+    if (checkSignature) signatureCheck = await inspectPdfScreening(bytes, document.text);
     if (document.text.replace(/\s/g, '').length < 40) {
       throw new DocumentProcessingError('PDF_NO_TEXT', 'В PDF нет текстового слоя');
     }
     const vehicle = parseVehicleDocument(document);
-    vehicle.signatureCheck = signatureCheck;
+    if (signatureCheck) vehicle.signatureCheck = signatureCheck;
     vehicle.textLayerRepaired = !!(document.reconstructedNumbers || vehicle.categoryGlyphRepaired);
     const util = calculateUtil(vehicle, now);
     const deadline = vehicle.issueDate ? addWorkingDays(vehicle.issueDate, 5) : null;
     return { document, vehicle, util, deadline };
   } catch (error) {
-    error.details = { ...error.details, signatureCheck: signatureCheck || await inspectPdfScreening(bytes) };
+    if (checkSignature) error.details = { ...error.details, signatureCheck: signatureCheck || await inspectPdfScreening(bytes) };
     throw error;
   }
 }

@@ -1,3 +1,4 @@
+import { canCheckSignature, setSignatureAccess, filterSignatureState } from './signature-access.js';
 import { SERVICES, openService, handleServiceMessage, handleServiceCallback, clearServiceSession } from './service-requests.js';
 import { PAYMENT_QR_PNG } from './payment-qr.js';
 import { signatureStatusText } from './pdf-signature.js';
@@ -796,7 +797,7 @@ function applicationsStub(env, userId) {
 
 async function getCustomsState(env, userId) {
   const stub = applicationsStub(env, userId);
-  return stub ? stub.getCustomsState() : null;
+  return stub ? filterSignatureState(env, userId, await stub.getCustomsState()) : null;
 }
 
 async function setCustomsState(env, userId, state) {
@@ -3512,7 +3513,8 @@ async function handleDocument(env, message) {
     const file = await telegram(env, 'getFile', { file_id: document.file_id });
     const response = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`);
     if (!response.ok) throw new Error('Telegram не отдал файл для скачивания');
-    const { vehicle, util, deadline } = await processVehicleDocument(new Uint8Array(await response.arrayBuffer()));
+    const checkSignature = message.chat.type === 'private' && await canCheckSignature(env, message.from?.id);
+    const { vehicle, util, deadline } = await processVehicleDocument(new Uint8Array(await response.arrayBuffer()), new Date(), { checkSignature });
     await finishDocumentCalculation(env, message, status, declarationState, vehicle, util, deadline);
   } catch (error) {
     const controlled = controlledDocumentError(error);
@@ -4612,13 +4614,15 @@ async function showAnalyticsUser(env, message, userId) {
     await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: 'Пользователь не найден.', reply_markup: analyticsBackKeyboard('users') });
     return;
   }
+  const signatureEnabled = await canCheckSignature(env, user.user_id);
   const username = user.username ? `@${escapeHtml(user.username)}` : 'не указан';
   const name = [user.first_name, user.last_name].filter(Boolean).map(escapeHtml).join(' ') || 'не указано';
   const profile = user.username ? `\n<a href="https://t.me/${encodeURIComponent(user.username)}">Открыть профиль Telegram</a>` : '';
-  const text = `👤 <b>Карточка пользователя</b>\n\nИмя: ${name}\nUsername: ${username}\nID: <code>${escapeHtml(user.user_id)}</code>\nПервый запуск: ${escapeHtml(user.first_seen_at)}\nПоследняя активность: ${escapeHtml(user.last_seen_at)}\nАктивных дней: ${user.active_days}\nДействий: ${user.actions}\nРасчётов: ${user.calculations}\nДоставка сообщений: ${user.chat_available ? 'доступна' : 'недоступна'}${profile}`;
+  const text = `👤 <b>Карточка пользователя</b>\n\nИмя: ${name}\nUsername: ${username}\nID: <code>${escapeHtml(user.user_id)}</code>\nПервый запуск: ${escapeHtml(user.first_seen_at)}\nПоследняя активность: ${escapeHtml(user.last_seen_at)}\nАктивных дней: ${user.active_days}\nДействий: ${user.actions}\nРасчётов: ${user.calculations}\nДоставка сообщений: ${user.chat_available ? 'доступна' : 'недоступна'}${profile}\nПроверка подписи: <b>${signatureEnabled ? 'включена' : 'выключена'}</b>`;
   await telegram(env, 'editMessageText', {
     chat_id: message.chat.id, message_id: message.message_id, text, parse_mode: 'HTML',
     reply_markup: { inline_keyboard: [
+      [{ text: signatureEnabled ? '🔐 Отключить проверку подписи' : '🔓 Включить проверку подписи', callback_data: `analytics:signature:${user.user_id}:${signatureEnabled ? 'off' : 'on'}` }],
       [{ text: '✉️ Написать', callback_data: `analytics:write:${user.user_id}` }],
       [{ text: '💬 Переписка', callback_data: `analytics:conversation:${user.user_id}:0` }],
       [{ text: '📜 История', callback_data: `analytics:history:${user.user_id}:0` }],
@@ -4702,6 +4706,18 @@ async function handleAnalyticsCallback(env, query) {
   } else if (data.startsWith('analytics:segment:')) {
     const [, , segment, offset] = data.split(':');
     await showAnalyticsUsers(env, message, segment, Math.max(0, Number(offset) || 0));
+  } else if (data.startsWith('analytics:signature:')) {
+    const match = data.match(/^analytics:signature:([1-9]\d{0,15}):(on|off)$/);
+    if (!match) return true;
+    const [, userId, action] = match;
+    if (!await getAnalyticsUser(env.ANALYTICS_DB, userId)) return true;
+    try {
+      await setSignatureAccess(env, query.from.id, userId, action === 'on');
+    } catch {
+      await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Не удалось сохранить доступ. Попробуйте ещё раз.' });
+      return true;
+    }
+    await showAnalyticsUser(env, message, userId);
   } else if (data.startsWith('analytics:user:')) {
     await showAnalyticsUser(env, message, data.split(':')[2]);
   } else if (data.startsWith('analytics:history:')) {

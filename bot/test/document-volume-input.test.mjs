@@ -17,6 +17,7 @@ function runtime(initial) {
   const sent = [], completed = [];
   const context = vm.createContext({
     Date, Uint8Array, DocumentProcessingError, calculateUtil, addWorkingDays,
+    canCheckSignature:async()=>false,
     getCustomsState:async()=>state, setCustomsState:async(_env,_id,next)=>{state=next;},
     clearCustomsState:async()=>{state=null;},
     telegram:async(_env,method,payload)=>{sent.push({method,payload});return {message_id:90};},
