@@ -232,7 +232,7 @@ test('replayed click stops at unchanged keyboard without a second waiting messag
   assert.deepEqual(calls, ['editMessageReplyMarkup']);
 });
 
-test('VIN messages in regular and declaration flows get the button without an extra offer message', async t => {
+test('regular VIN gets FTS action; declaration VIN keeps only manual confirmation', async t => {
   const env = fixture(t), calls = [];
   await setFtsAccess(env, 100, 200, true);
   env.APPLICATIONS = { getByName: () => ({ saveFtsContext: async () => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }) };
@@ -247,9 +247,10 @@ test('VIN messages in regular and declaration flows get the button without an ex
   calls.length = 0;
   await context.sendDeclarationVin(env, 200, { ...vehicle, type: 'epts' },
     { inline_keyboard: [[{ text: 'Confirm', callback_data: 'declaration:fts:confirm' }]] });
-  assert.deepEqual(calls.map(c => c.method), ['sendMessage', 'editMessageReplyMarkup']);
+  assert.deepEqual(calls.map(c => c.method), ['sendMessage']);
   assert.equal(calls[0].data.text, vin);
-  assert.equal(calls[1].data.reply_markup.inline_keyboard.length, 2);
+  assert.equal(calls[0].data.reply_markup.inline_keyboard.length, 1);
+  assert.equal(calls[0].data.reply_markup.inline_keyboard[0][0].callback_data, 'declaration:fts:confirm');
   calls.length = 0;
   await context.sendDocumentIdentity(env, -200, vehicle);
   assert.deepEqual(calls.map(c => c.method), ['sendMessage']);
@@ -323,4 +324,72 @@ test('administrator card grants and revokes FTS independently; ordinary and grou
   await context.handleAnalyticsCallback(env, query); assert.equal(await canCheckFts(env, 200), true);
   assert.equal(calls.at(-1).reply_markup.inline_keyboard.flat().find(b => b.callback_data.startsWith('analytics:fts:')).callback_data, 'analytics:fts:200:off');
   await context.handleAnalyticsCallback(env, { ...query, data: 'analytics:fts:200:off' }); assert.equal(await canCheckFts(env, 200), false);
+});
+
+test('Mercedes-Benz ACTROS matches regardless of case; ACTORS remains a real spelling difference', () => {
+  const report = model => ftsResultMessages({ found: true, records: [{ vin, model }] },
+    { vin, type: 'sbkts', model: 'Mercedes-Benz ACTROS' })[0];
+  assert.equal(ftsNameSimilarity('Mercedes-Benz ACTROS', 'MERCEDES-BENZ ACTROS'), 100);
+  assert.equal(ftsNameDifference('Mercedes-Benz ACTROS', 'MERCEDES-BENZ ACTROS').kind, 'same');
+  assert.match(report('MERCEDES-BENZ ACTROS'), /✅ Данные совпадают — 100%/);
+  assert.equal(ftsNameSimilarity('Mercedes-Benz ACTROS', 'MERCEDES-BENZ ACTORS'), 90);
+  assert.equal(ftsNameDifference('Mercedes-Benz ACTROS', 'MERCEDES-BENZ ACTORS').kind, 'conflicting');
+  assert.match(report('MERCEDES-BENZ ACTORS'), /🔴 Разные слова или обозначения — 90%/);
+});
+
+test('declaration FTS action attaches to the name comparison step, with manual confirmation retained', async t => {
+  const env = fixture(t), calls = [], states = [];
+  await setFtsAccess(env, 100, 200, true);
+  env.APPLICATIONS = { getByName: () => ({ saveFtsContext: async () => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }) };
+  const source = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+  const extract = name => { const i = source.indexOf('async function ' + name + '('); return source.slice(i, source.indexOf('\n}', i) + 2); };
+  const context = vm.createContext({ console, offerFtsCheck, escapeHtml: String,
+    setCustomsState: async (_env, _id, state) => states.push(state),
+    findDeclarationPrice: () => ({ exact: null }), declarationVehicleLines: () => [],
+    declarationKeyboard: rows => ({ inline_keyboard: [...rows, [{ text: 'Назад', callback_data: 'declaration:back:start' }, { text: 'Главное меню', callback_data: 'menu' }]] }),
+    trackTemporaryMessage: async () => {},
+    telegram: async (_env, method, data) => { calls.push({ method, data }); return { message_id: 40 + calls.filter(c => c.method === 'sendMessage').length }; }
+  });
+  vm.runInContext(extract('sendDeclarationVin') + '\n' + extract('promptDeclarationFtsName'), context);
+  await context.promptDeclarationFtsName(env, 200, 200, { vehicle, util: [] });
+  assert.equal(calls.filter(c => c.method === 'sendMessage').length, 2);
+  assert.match(calls[0].data.text, /Проверьте сведения об автомобиле/);
+  assert.equal(calls[1].data.text, vin);
+  assert.equal(calls[1].data.reply_markup.inline_keyboard.flat().filter(b => b.callback_data === 'declaration:fts:confirm').length, 1);
+  assert.equal(calls[1].data.reply_markup.inline_keyboard.flat().some(b => b.callback_data.startsWith('fts:')), false);
+  const attached = calls.find(c => c.method === 'editMessageReplyMarkup');
+  assert.equal(attached.data.message_id, 41);
+  assert.equal(attached.data.reply_markup.inline_keyboard.flat().find(b => b.callback_data.startsWith('fts:')).text, '🔎 Сверить с ФТС');
+  assert.equal(states.length, 1);
+  assert.equal(states[0].stage, 'fts-name');
+  // No automatic name acceptance or advance to country selection.
+  assert.equal(states[0].ftsName, undefined);
+});
+
+test('cargo clarification does not offer FTS early in declaration mode; regular document retains its VIN button', async t => {
+  const env = fixture(t), identities = [];
+  const source = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+  const i = source.indexOf('async function handleDocument(');
+  const code = source.slice(i, source.indexOf('\n}', i) + 2);
+  let mode = 'declaration';
+  const context = vm.createContext({ console, Date, Uint8Array,
+    getCustomsState: async () => ({ mode }),
+    cleanupTemporaryMessages: async () => {}, trackTemporaryMessage: async () => {},
+    telegram: async (_env, method) => method === 'getFile' ? { file_path: 'synthetic.pdf' } : { message_id: 51 },
+    fetch: async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(0) }),
+    canCheckSignature: async () => false,
+    processVehicleDocument: async () => { throw { code: 'CARGO_TYPE_REQUIRED', details: { vehicle, candidates: [{ id: 'truck' }] } }; },
+    controlledDocumentError: error => error,
+    setCustomsState: async () => {},
+    cargoTypePrompt: () => ({ text: 'Cargo type', reply_markup: { inline_keyboard: [] } }),
+    sendDocumentIdentity: async (...args) => identities.push(args)
+  });
+  vm.runInContext(code, context);
+  const message = { from: { id: 200 }, chat: { id: 200, type: 'private' },
+    document: { mime_type: 'application/pdf', file_id: 'synthetic' } };
+  await context.handleDocument(env, message);
+  assert.equal(identities.length, 0);
+  mode = 'util';
+  await context.handleDocument(env, message);
+  assert.equal(identities.length, 1);
 });

@@ -734,10 +734,6 @@ async function sendDocumentIdentity(env, chatId, vehicle, replyToMessageId = nul
 async function sendDeclarationVin(env, chatId, vehicle, reply_markup = undefined) {
   const text = vehicle.vin || 'VIN не найден';
   const sent = await telegram(env, 'sendMessage', { chat_id: chatId, text, reply_markup });
-  if (env.APPLICATIONS) await offerFtsCheck(env, {
-    from: { id: chatId }, chat: { id: chatId, type: Number(chatId) > 0 ? 'private' : 'group' },
-    message_id: sent.message_id, reply_markup
-  }, vehicle, telegram).catch(() => console.error('FTS button could not be attached'));
   return sent;
 }
 
@@ -3558,7 +3554,7 @@ async function handleDocument(env, message) {
         parse_mode: 'HTML',
         reply_markup: prompt.reply_markup
       });
-      await sendDocumentIdentity(env, message.chat.id, vehicle, message.message_id).catch(() => null);
+      if (mode !== 'declaration') await sendDocumentIdentity(env, message.chat.id, vehicle, message.message_id).catch(() => null);
       return;
     }
     console.error('document_processing_error', JSON.stringify({
@@ -4189,14 +4185,21 @@ async function promptDeclarationFtsName(env, chatId, userId, state, workingMessa
     'Проверьте сведения об автомобиле на сайте <a href="https://customs.gov.ru/">ФТС</a>. Если сведения совпадают, нажмите «✅ Подтверждаю наименование». Если наименование отличается, пришлите сюда <b>точное наименование</b> с сайта ФТС.',
     '<i>Для таможенного органа наименование должно совпадать один в один.</i>'
   ].join('\n');
+  let ftsPromptMessage;
   if (workingMessage?.from?.is_bot) {
     await telegram(env, 'editMessageText', { chat_id: chatId, message_id: workingMessage.message_id, text, parse_mode: 'HTML', reply_markup });
     await trackTemporaryMessage(env, userId, workingMessage.message_id);
+    ftsPromptMessage = workingMessage;
   } else {
     const sent = await telegram(env, 'sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', reply_markup });
     await trackTemporaryMessage(env, userId, sent.message_id);
+    ftsPromptMessage = sent;
   }
   if (next.vehicle.vin) await sendDeclarationVin(env, chatId, next.vehicle, confirmationKeyboard);
+  if (env.APPLICATIONS) await offerFtsCheck(env, {
+    from: { id: userId }, chat: { id: chatId, type: Number(chatId) > 0 ? 'private' : 'group' },
+    message_id: ftsPromptMessage.message_id, reply_markup
+  }, next.vehicle, telegram, { declaration: true }).catch(() => console.error('Declaration FTS button could not be attached'));
 }
 
 async function continueDeclarationAfterDocument(env, chatId, userId, state, vehicle, util, deadline, workingMessage = null) {
@@ -5041,7 +5044,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'fts-vin-word-check-v42' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'fts-declaration-stage-v43' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
