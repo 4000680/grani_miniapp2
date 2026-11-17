@@ -21,6 +21,23 @@ export function ftsNameSimilarity(first, second) {
   return Math.floor(100 * (1 - row[b.length] / Math.max(a.length, b.length)));
 }
 
+// Compare token multisets, including every numeric designation. A missing
+// token on one side differs from two competing words/codes on opposite sides.
+export function ftsNameDifference(documentName, ftsName) {
+  const tokens = value => comparisonName(value).match(/\p{L}+|\p{N}+/gu) || [];
+  const left = tokens(documentName), right = tokens(ftsName);
+  if (!left.length || !right.length) return { kind: 'unavailable', onlyDocument: [], onlyFts: [] };
+  const remaining = [...right], onlyDocument = [];
+  for (const word of left) {
+    const index = remaining.indexOf(word);
+    if (index < 0) onlyDocument.push(word);
+    else remaining.splice(index, 1);
+  }
+  const kind = onlyDocument.length && remaining.length ? 'conflicting'
+    : onlyDocument.length || remaining.length ? 'missing-words' : 'same';
+  return { kind, onlyDocument, onlyFts: remaining };
+}
+
 function ftsDate(value) {
   const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T|\s)/);
   return match ? `${match[3]}.${match[2]}.${match[1]}` : 'не указана';
@@ -41,20 +58,17 @@ export async function offerFtsCheck(env, message, vehicle, send) {
   const userId = message.from?.id;
   if (message.chat?.type !== 'private' || String(message.chat.id) !== String(userId) ||
       !env.APPLICATIONS || !await canCheckFts(env, userId)) return;
-  if (!env.AVC_TOKEN) return; // No paid action until the runtime secret is configured.
+  if (!env.AVC_TOKEN || !message.message_id) return;
   const search = ftsSearch(vehicle);
-  if (!search) {
-    await send(env, 'sendMessage', { chat_id: userId, text: 'Проверка ФТС: в документе не распознан корректный VIN. Проверьте номер в исходном документе.' });
-    return;
-  }
+  if (!search) return;
   const stub = env.APPLICATIONS.getByName(String(userId));
   const id = await stub.saveFtsContext({ search, document: {
     type: vehicle.type, vin: vehicle.vin || null, body: vehicle.body || null, chassis: vehicle.chassis || null,
     model: [vehicle.brand, vehicle.model].filter(Boolean).join(' ')
   }, createdAt: Date.now() });
-  await send(env, 'sendMessage', { chat_id: userId,
-    text: 'Проверка ФТС',
-    reply_markup: { inline_keyboard: [[{ text: '🔎 Проверить ФТС', callback_data: `fts:check:${id}` }]] } });
+  const existing = message.reply_markup?.inline_keyboard || [];
+  await send(env, 'editMessageReplyMarkup', { chat_id: userId, message_id: message.message_id,
+    reply_markup: { inline_keyboard: [...existing, [{ text: '🔎 Проверить ФТС', callback_data: `fts:check:${id}` }]] } });
 }
 
 export async function handleFtsCallback(env, query, send) {
@@ -79,19 +93,28 @@ export async function handleFtsCallback(env, query, send) {
   // One object per identifier serializes paid requests across all users/documents.
   const [field, value] = Object.entries(context.search)[0];
   const job = env.APPLICATIONS.getByName(`fts:${field}:${value}`);
-  // Reuse the offer as the waiting message, so even a cached result cannot
-  // overtake status creation. Removing its keyboard also prevents double taps.
+  // Keep the VIN text and all unrelated buttons. Only the FTS action is
+  // consumed; a duplicate Telegram callback sees "not modified" and stops.
+  const originalMarkup = message.reply_markup || { inline_keyboard: [] };
+  const remainingButtons = (originalMarkup.inline_keyboard || [])
+    .map(row => row.filter(button => !button.callback_data?.startsWith('fts:check:')))
+    .filter(row => row.length);
   try {
-    await send(env, 'editMessageText', { chat_id: userId, message_id: message.message_id,
-      text: 'Проверка запущена, ожидаем ответ.', reply_markup: { inline_keyboard: [] } });
-  } catch (error) {
-    if (!/message is not modified/i.test(error.message || '')) return true;
-  }
-  try {
-    await job.subscribeFts({ search: context.search, userId: String(userId), callbackId: query.id,
-      document: context.document, statusMessageId: message.message_id });
+    await send(env, 'editMessageReplyMarkup', { chat_id: userId, message_id: message.message_id,
+      reply_markup: { inline_keyboard: remainingButtons } });
   } catch {
-    await send(env, 'editMessageText', { chat_id: userId, message_id: message.message_id,
+    return true;
+  }
+  let waiting;
+  try {
+    waiting = await send(env, 'sendMessage', { chat_id: userId, text: 'Проверка запущена, ожидаем ответ.' });
+    if (!waiting?.message_id) throw new Error('FTS status message was not created');
+    await job.subscribeFts({ search: context.search, userId: String(userId), callbackId: query.id,
+      document: context.document, statusMessageId: waiting.message_id });
+  } catch {
+    await send(env, 'editMessageReplyMarkup', { chat_id: userId, message_id: message.message_id,
+      reply_markup: originalMarkup });
+    if (waiting?.message_id) await send(env, 'editMessageText', { chat_id: userId, message_id: waiting.message_id,
       text: '🔴 Не удалось запустить проверку ФТС.', reply_markup: { inline_keyboard: [] } });
   }
   return true;
@@ -117,12 +140,14 @@ export function ftsResultMessages(result, document) {
     const fields = ['vin', 'body', 'chassis'].filter(field => document[field] && record[field]);
     const mismatch = fields.some(field => clean(document[field]) !== clean(record[field]));
     const percentage = ftsNameSimilarity(document.model, record.model);
+    const difference = ftsNameDifference(document.model, record.model);
     let status;
     if (mismatch) status = '🔴 Идентификатор не совпадает.';
     else if (percentage === null) status = '🔴 Недостаточно данных для сверки наименования.';
+    else if (difference.kind === 'conflicting') status = `🔴 Разные слова или обозначения — ${percentage}%.`;
     else if (!fields.length) status = `🟡 Наименование: ${percentage}%. Идентификатор ФТС не указан.`;
     else if (percentage === 100) status = '✅ Данные совпадают — 100%.';
-    else status = `${percentage >= 50 ? '🟡' : '🔴'} Совпадение наименования: ${percentage}%.`;
+    else status = `🟡 Совпадение наименования: ${percentage}%.`;
     const label = document.type === 'sbkts' ? 'СБКТС' : document.type === 'epts' ? 'ЭПТС' : 'Документ';
     const lines = [
       ...header, '',

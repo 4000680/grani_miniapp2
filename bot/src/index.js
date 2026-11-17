@@ -715,7 +715,7 @@ function formatDocumentResult(vehicle, util, deadline = null, target = todayUtc(
 async function sendDocumentIdentity(env, chatId, vehicle, replyToMessageId = null) {
   if (!vehicle.vin && !vehicle.surname) return null;
   const identity = `${vehicle.vin || 'VIN не найден'} / ${vehicle.surname || 'фамилия не найдена'}`;
-  return telegram(env, 'sendMessage', {
+  const sent = await telegram(env, 'sendMessage', {
     chat_id: chatId,
     text: `<tg-spoiler>${escapeHtml(identity)}</tg-spoiler>`,
     parse_mode: 'HTML',
@@ -724,11 +724,21 @@ async function sendDocumentIdentity(env, chatId, vehicle, replyToMessageId = nul
       allow_sending_without_reply: true
     } : undefined
   });
+  if (env.APPLICATIONS) await offerFtsCheck(env, {
+    from: { id: chatId }, chat: { id: chatId, type: Number(chatId) > 0 ? 'private' : 'group' },
+    message_id: sent.message_id, reply_markup: sent.reply_markup
+  }, vehicle, telegram).catch(() => console.error('FTS button could not be attached'));
+  return sent;
 }
 
 async function sendDeclarationVin(env, chatId, vehicle, reply_markup = undefined) {
   const text = vehicle.vin || 'VIN не найден';
-  return telegram(env, 'sendMessage', { chat_id: chatId, text, reply_markup });
+  const sent = await telegram(env, 'sendMessage', { chat_id: chatId, text, reply_markup });
+  if (env.APPLICATIONS) await offerFtsCheck(env, {
+    from: { id: chatId }, chat: { id: chatId, type: Number(chatId) > 0 ? 'private' : 'group' },
+    message_id: sent.message_id, reply_markup
+  }, vehicle, telegram).catch(() => console.error('FTS button could not be attached'));
+  return sent;
 }
 
 function peniCases(util) {
@@ -3447,9 +3457,6 @@ async function handleDocumentVolumeReply(env, message) {
 
 async function finishDocumentCalculation(env, message, status, declarationState, vehicle, util, deadline) {
   const userId = message.from?.id || message.chat.id;
-  // The optional external check must never prevent the document calculation.
-  const offerFts = () => offerFtsCheck(env, message, vehicle, telegram)
-    .catch(() => console.error('FTS button could not be offered'));
   if (env.ANALYTICS_DB) {
     try { await recordDocumentType(env.ANALYTICS_DB, message.from?.id, vehicle.type === 'sbkts' ? 'sbkts' : 'epts'); }
     catch (error) { console.error('Analytics document tracking failed', error); }
@@ -3466,11 +3473,9 @@ async function finishDocumentCalculation(env, message, status, declarationState,
         text: documentAgePrompt(vehicle), parse_mode: 'HTML',
         reply_markup: documentAgeKeyboard()
       });
-      await offerFts();
       return;
     }
     await continueDeclarationAfterDocument(env, message.chat.id, userId, declarationState, vehicle, util, deadline, status);
-    await offerFts();
     return;
   }
   if (declarationState?.stage === 'document-volume') await clearCustomsState(env, userId);
@@ -3483,7 +3488,6 @@ async function finishDocumentCalculation(env, message, status, declarationState,
   await releaseTemporaryMessage(env, userId, status.message_id);
   if (!vehicle.issueDate) await sendIssueDatePrompt(env, message.chat.id, cases);
   await saveUtilYearContext(env, userId, vehicle, deadline);
-  await offerFts();
 }
 
 async function handleDocument(env, message) {
@@ -3554,7 +3558,7 @@ async function handleDocument(env, message) {
         parse_mode: 'HTML',
         reply_markup: prompt.reply_markup
       });
-      await offerFtsCheck(env, message, vehicle, telegram).catch(() => console.error('FTS button could not be offered'));
+      await sendDocumentIdentity(env, message.chat.id, vehicle, message.message_id).catch(() => null);
       return;
     }
     console.error('document_processing_error', JSON.stringify({
@@ -5037,7 +5041,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'fts-compact-v41' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'fts-vin-word-check-v42' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
