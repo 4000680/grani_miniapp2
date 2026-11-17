@@ -36,7 +36,7 @@ jobs:
               const response = await fetch(endpoint, { signal: AbortSignal.timeout(10000), cache: 'no-store' });
               const health = await response.json();
               console.log('Deployed version:', health.version);
-              if (response.ok && health.version === 'fts-vin-word-check-v42') process.exit(0);
+              if (response.ok && health.version === 'fts-declaration-stage-v43') process.exit(0);
             } catch (error) {
               console.log('Deployment check:', error.message);
             }

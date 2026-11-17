@@ -54,7 +54,7 @@ export function ftsSearch(vehicle) {
   return null;
 }
 
-export async function offerFtsCheck(env, message, vehicle, send) {
+export async function offerFtsCheck(env, message, vehicle, send, options = {}) {
   const userId = message.from?.id;
   if (message.chat?.type !== 'private' || String(message.chat.id) !== String(userId) ||
       !env.APPLICATIONS || !await canCheckFts(env, userId)) return;
@@ -68,7 +68,7 @@ export async function offerFtsCheck(env, message, vehicle, send) {
   }, createdAt: Date.now() });
   const existing = message.reply_markup?.inline_keyboard || [];
   await send(env, 'editMessageReplyMarkup', { chat_id: userId, message_id: message.message_id,
-    reply_markup: { inline_keyboard: [...existing, [{ text: '🔎 Проверить ФТС', callback_data: `fts:check:${id}` }]] } });
+    reply_markup: { inline_keyboard: [...existing, [{ text: options.declaration ? '🔎 Сверить с ФТС' : '🔎 Проверить ФТС', callback_data: `fts:check:${id}` }]] } });
 }
 
 export async function handleFtsCallback(env, query, send) {
