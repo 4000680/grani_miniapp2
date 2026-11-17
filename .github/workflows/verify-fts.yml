@@ -6,6 +6,7 @@ on:
       - 'bot/src/fts*.js'
       - 'bot/src/applications-store.js'
       - 'bot/test/fts*.mjs'
+      - 'bot/test/declaration-category-flow.test.mjs'
       - '.github/workflows/verify-fts.yml'
   workflow_dispatch:
 permissions:
@@ -35,7 +36,7 @@ jobs:
               const response = await fetch(endpoint, { signal: AbortSignal.timeout(10000), cache: 'no-store' });
               const health = await response.json();
               console.log('Deployed version:', health.version);
-              if (response.ok && health.version === 'fts-compact-v41') process.exit(0);
+              if (response.ok && health.version === 'fts-vin-word-check-v42') process.exit(0);
             } catch (error) {
               console.log('Deployment check:', error.message);
             }

@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { canCheckFts, setFtsAccess } from '../src/fts-access.js';
-import { ftsNameSimilarity, ftsSearch, offerFtsCheck, handleFtsCallback, ftsResultMessages, requestFts, subscribeFts, runFtsAlarm } from '../src/fts.js';
+import { ftsNameDifference, ftsNameSimilarity, ftsSearch, offerFtsCheck, handleFtsCallback, ftsResultMessages, requestFts, subscribeFts, runFtsAlarm } from '../src/fts.js';
 
 const vin = 'X7TEST00000000001';
 const vehicle = { type: 'sbkts', vin, brand: 'Example', model: 'Car' };
@@ -50,7 +50,7 @@ test('button is hidden without access, in groups and without token; offer create
   const env = fixture(t), calls = [];
   const send = async (_env, method, data) => calls.push({ method, data });
   env.APPLICATIONS = { getByName: () => ({ saveFtsContext: async value => { assert.deepEqual(value.search, { vin }); return 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'; } }) };
-  const message = { from: { id: 200 }, chat: { id: 200, type: 'private' } };
+  const message = { from: { id: 200 }, chat: { id: 200, type: 'private' }, message_id: 51 };
   await offerFtsCheck(env, message, vehicle, send);
   assert.equal(calls.length, 0);
   await setFtsAccess(env, 100, 200, true);
@@ -112,7 +112,7 @@ test('click loads the original document context rather than the latest calculati
     assert.equal(key, `fts:vin:${vin}`);
     return { subscribeFts: async input => queued.push(input) };
   } };
-  await handleFtsCallback(env, { id: 'callback', from: { id: 200 }, message: { chat: { id: 200, type: 'private' } }, data: 'fts:check:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }, async () => {});
+  await handleFtsCallback(env, { id: 'callback', from: { id: 200 }, message: { chat: { id: 200, type: 'private' } }, data: 'fts:check:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }, async () => ({ message_id: 52 }));
   assert.equal(queued[0].document.model, 'Original Document');
   assert.deepEqual(queued[0].search, { vin });
 });
@@ -180,29 +180,100 @@ test('name comparison preserves model characters and never rounds a partial matc
   assert.equal(ftsNameSimilarity('A'.repeat(200), 'A'.repeat(199) + 'B'), 99);
   assert.equal(ftsNameSimilarity('', ''), null);
   const partial = ftsResultMessages({ ...found, records: [{ vin, model: 'EXAMPLE CAB' }] }, document)[0];
-  assert.match(partial, /🟡 Совпадение наименования: 90%/);
+  assert.match(partial, /🔴 Разные слова или обозначения — 90%/);
   const different = ftsResultMessages({ ...found, records: [{ vin, model: 'ZZZZZZZZZZZ' }] }, document)[0];
-  assert.match(different, /🔴 Совпадение наименования: 0%/);
+  assert.match(different, /🔴 Разные слова или обозначения — 0%/);
   const absent = ftsResultMessages({ found: false, records: [] }, document)[0];
   assert.match(absent, /VIN: X7TEST00000000001/);
   assert.match(absent, /🔴 Сведения отсутствуют/);
 });
 
-test('offer and status have no navigation; status exists before subscribing a cached request', async t => {
+test('button attaches to existing VIN, preserves declaration actions and creates a separate status before queueing', async t => {
   const env = fixture(t), calls = [], id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
   await setFtsAccess(env, 100, 200, true);
   env.APPLICATIONS = { getByName(key) {
     if (key === '200') return { saveFtsContext: async () => id, getFtsContext: async () => ({ search: { vin }, document }) };
-    return { subscribeFts: async input => { assert.equal(calls.at(-1).method, 'editMessageText'); assert.equal(input.statusMessageId, 51); } };
+    return { subscribeFts: async input => {
+      assert.equal(calls.at(-1).method, 'sendMessage'); assert.equal(input.statusMessageId, 52);
+    } };
   } };
-  const send = async (_env, method, data) => { calls.push({ method, data }); return { message_id: 51 }; };
-  const message = { from: { id: 200 }, chat: { id: 200, type: 'private' }, message_id: 51 };
+  const send = async (_env, method, data) => { calls.push({ method, data }); return { message_id: 52 }; };
+  const confirmation = { text: 'Confirm', callback_data: 'declaration:fts:confirm' };
+  const message = { from: { id: 200 }, chat: { id: 200, type: 'private' }, message_id: 51,
+    text: vin, reply_markup: { inline_keyboard: [[confirmation]] } };
   await offerFtsCheck(env, message, vehicle, send);
-  assert.equal(calls[0].data.text, 'Проверка ФТС');
-  assert.equal(calls[0].data.reply_markup.inline_keyboard.flat().length, 1);
-  await handleFtsCallback(env, { id: 'q', from: { id: 200 }, message, data: 'fts:check:' + id }, send);
-  assert.equal(calls[1].data.text, 'Проверка запущена, ожидаем ответ.');
-  assert.deepEqual(calls[1].data.reply_markup.inline_keyboard, []);
+  assert.equal(calls[0].method, 'editMessageReplyMarkup');
+  assert.equal(calls[0].data.message_id, 51);
+  assert.equal(calls[0].data.text, undefined);
+  assert.deepEqual(calls[0].data.reply_markup.inline_keyboard[0], [confirmation]);
+  const withButton = { ...message, reply_markup: calls[0].data.reply_markup };
+  await handleFtsCallback(env, { id: 'q', from: { id: 200 }, message: withButton, data: 'fts:check:' + id }, send);
+  assert.equal(calls[1].method, 'editMessageReplyMarkup');
+  assert.deepEqual(calls[1].data.reply_markup.inline_keyboard, [[confirmation]]);
+  assert.equal(calls[2].method, 'sendMessage');
+  assert.equal(calls[2].data.text, 'Проверка запущена, ожидаем ответ.');
+  assert.equal(calls[2].data.reply_markup, undefined);
+  assert.equal(calls.some(call => call.method === 'deleteMessage' || call.method === 'editMessageText'), false);
+});
+
+test('replayed click stops at unchanged keyboard without a second waiting message or job', async t => {
+  const env = fixture(t), calls = [], id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  await setFtsAccess(env, 100, 200, true);
+  env.APPLICATIONS = { getByName(key) {
+    if (key === '200') return { getFtsContext: async () => ({ search: { vin }, document }) };
+    return { subscribeFts: async () => { throw Error('must not queue'); } };
+  } };
+  await handleFtsCallback(env, { id: 'duplicate', from: { id: 200 },
+    message: { chat: { id: 200, type: 'private' }, message_id: 51,
+      reply_markup: { inline_keyboard: [[{ callback_data: 'fts:check:' + id }]] } },
+    data: 'fts:check:' + id }, async (_env, method) => {
+      calls.push(method); throw Error('message is not modified');
+    });
+  assert.deepEqual(calls, ['editMessageReplyMarkup']);
+});
+
+test('VIN messages in regular and declaration flows get the button without an extra offer message', async t => {
+  const env = fixture(t), calls = [];
+  await setFtsAccess(env, 100, 200, true);
+  env.APPLICATIONS = { getByName: () => ({ saveFtsContext: async () => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }) };
+  const source = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+  const extract = name => { const i = source.indexOf('async function ' + name + '('); return source.slice(i, source.indexOf('\n}', i) + 2); };
+  const context = vm.createContext({ offerFtsCheck, console, escapeHtml: String,
+    telegram: async (_env, method, data) => { calls.push({ method, data }); return { message_id: 51 }; } });
+  vm.runInContext(extract('sendDocumentIdentity') + '\n' + extract('sendDeclarationVin'), context);
+  await context.sendDocumentIdentity(env, 200, vehicle);
+  assert.deepEqual(calls.map(c => c.method), ['sendMessage', 'editMessageReplyMarkup']);
+  assert.match(calls[0].data.text, /X7TEST00000000001/);
+  calls.length = 0;
+  await context.sendDeclarationVin(env, 200, { ...vehicle, type: 'epts' },
+    { inline_keyboard: [[{ text: 'Confirm', callback_data: 'declaration:fts:confirm' }]] });
+  assert.deepEqual(calls.map(c => c.method), ['sendMessage', 'editMessageReplyMarkup']);
+  assert.equal(calls[0].data.text, vin);
+  assert.equal(calls[1].data.reply_markup.inline_keyboard.length, 2);
+  calls.length = 0;
+  await context.sendDocumentIdentity(env, -200, vehicle);
+  assert.deepEqual(calls.map(c => c.method), ['sendMessage']);
+});
+
+test('missing words differ from competing tokens or numeric model codes in either direction', () => {
+  const report = (a, b) => ftsResultMessages({ found: true, records: [{ vin, model: b }] }, { vin, model: a })[0];
+  for (const [a, b] of [
+    ['Land Rover Range Rover Velar', 'Land Rover Range Rover R 659'],
+    ['Renault Scenic', 'Renault Grand Scenic'],
+    ['BMW Model 550', 'BMW Model 551'],
+    ['TOYOTA RAV4', 'TOYOTA RAV5']
+  ]) {
+    const expected = a === 'Renault Scenic' ? 'missing-words' : 'conflicting';
+    assert.equal(ftsNameDifference(a, b).kind, expected);
+    assert.equal(ftsNameDifference(b, a).kind, expected);
+    assert.match(report(a, b), expected === 'conflicting' ? /🔴 Разные слова или обозначения/ : /🟡 Совпадение наименования/);
+  }
+  assert.deepEqual(ftsNameDifference('Land Rover Range Rover Velar', 'Land Rover Range Rover R 659'),
+    { kind: 'conflicting', onlyDocument: ['VELAR'], onlyFts: ['R', '659'] });
+  assert.equal(ftsNameDifference('Brand Model R659', 'Brand Model R 659').kind, 'same');
+  assert.equal(ftsNameDifference('Model Model', 'Model').kind, 'missing-words');
+  assert.equal(ftsNameDifference('', 'Model').kind, 'unavailable');
+  assert.match(report('Model-X', 'Model X'), /🟡/);
 });
 
 test('result precedes status deletion; duplicate taps and cleanup retries do not query again', async t => {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
 
 const source = await readFile(new URL('../src/index.js', import.meta.url), 'utf8');
 
@@ -20,13 +21,24 @@ test('поиск по шаблону СЭП запрашивает группу 
   assert.match(source, /category: cargo, categoryLabel: cargo/);
 });
 
-test('декларация показывает открытый VIN отдельно после карточки и без подписи', () => {
+test('декларация показывает открытый VIN отдельно после карточки и без подписи', async () => {
   assert.match(source, /async function sendDeclarationVin/);
   const vinStart = source.indexOf('async function sendDeclarationVin');
   const vinEnd = source.indexOf('function peniCases', vinStart);
   const vinFunction = source.slice(vinStart, vinEnd);
   assert.ok(vinFunction.includes('const text = vehicle.vin ||'));
-  assert.ok(vinFunction.includes("return telegram(env, 'sendMessage', { chat_id: chatId, text, reply_markup })"));
+  // Verify the observable VIN message rather than its previous return syntax.
+  const calls = [], sent = { message_id: 51 };
+  const context = vm.createContext({ telegram: async (_env, method, data) => { calls.push({ method, data }); return sent; } });
+  vm.runInContext(vinFunction, context);
+  const keyboard = { inline_keyboard: [[{ text: 'Confirm', callback_data: 'declaration:fts:confirm' }]] };
+  const result = await context.sendDeclarationVin({}, 200, { vin: 'X7TEST00000000001', surname: 'Synthetic' }, keyboard);
+  assert.equal(result, sent);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'sendMessage');
+  assert.equal(calls[0].data.text, 'X7TEST00000000001');
+  assert.equal(calls[0].data.reply_markup, keyboard);
+  assert.equal(calls[0].data.parse_mode, undefined);
   assert.equal(vinFunction.includes('editMessageText'), false);
   const continueStart = source.indexOf('async function continueDeclarationAfterDocument');
   const continueEnd = source.indexOf('async function handleDeclarationReply', continueStart);
