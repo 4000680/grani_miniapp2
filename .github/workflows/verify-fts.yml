@@ -6,6 +6,7 @@ on:
       - 'bot/src/fts*.js'
       - 'bot/src/applications-store.js'
       - 'bot/test/fts*.mjs'
+      - 'bot/test/declaration-category-flow.test.mjs'
       - '.github/workflows/verify-fts.yml'
   workflow_dispatch:
 permissions:
