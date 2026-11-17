@@ -1,4 +1,6 @@
 import { canCheckSignature, setSignatureAccess, filterSignatureState } from './signature-access.js';
+import { canCheckFts, setFtsAccess } from './fts-access.js';
+import { offerFtsCheck, handleFtsCallback } from './fts.js';
 import { SERVICES, openService, handleServiceMessage, handleServiceCallback, clearServiceSession } from './service-requests.js';
 import { PAYMENT_QR_PNG } from './payment-qr.js';
 import { signatureStatusText } from './pdf-signature.js';
@@ -3445,6 +3447,9 @@ async function handleDocumentVolumeReply(env, message) {
 
 async function finishDocumentCalculation(env, message, status, declarationState, vehicle, util, deadline) {
   const userId = message.from?.id || message.chat.id;
+  // The optional external check must never prevent the document calculation.
+  const offerFts = () => offerFtsCheck(env, message, vehicle, telegram)
+    .catch(() => console.error('FTS button could not be offered'));
   if (env.ANALYTICS_DB) {
     try { await recordDocumentType(env.ANALYTICS_DB, message.from?.id, vehicle.type === 'sbkts' ? 'sbkts' : 'epts'); }
     catch (error) { console.error('Analytics document tracking failed', error); }
@@ -3461,9 +3466,11 @@ async function finishDocumentCalculation(env, message, status, declarationState,
         text: documentAgePrompt(vehicle), parse_mode: 'HTML',
         reply_markup: documentAgeKeyboard()
       });
+      await offerFts();
       return;
     }
     await continueDeclarationAfterDocument(env, message.chat.id, userId, declarationState, vehicle, util, deadline, status);
+    await offerFts();
     return;
   }
   if (declarationState?.stage === 'document-volume') await clearCustomsState(env, userId);
@@ -3476,6 +3483,7 @@ async function finishDocumentCalculation(env, message, status, declarationState,
   await releaseTemporaryMessage(env, userId, status.message_id);
   if (!vehicle.issueDate) await sendIssueDatePrompt(env, message.chat.id, cases);
   await saveUtilYearContext(env, userId, vehicle, deadline);
+  await offerFts();
 }
 
 async function handleDocument(env, message) {
@@ -3546,6 +3554,7 @@ async function handleDocument(env, message) {
         parse_mode: 'HTML',
         reply_markup: prompt.reply_markup
       });
+      await offerFtsCheck(env, message, vehicle, telegram).catch(() => console.error('FTS button could not be offered'));
       return;
     }
     console.error('document_processing_error', JSON.stringify({
@@ -4615,14 +4624,16 @@ async function showAnalyticsUser(env, message, userId) {
     return;
   }
   const signatureEnabled = await canCheckSignature(env, user.user_id);
+  const ftsEnabled = await canCheckFts(env, user.user_id);
   const username = user.username ? `@${escapeHtml(user.username)}` : 'не указан';
   const name = [user.first_name, user.last_name].filter(Boolean).map(escapeHtml).join(' ') || 'не указано';
   const profile = user.username ? `\n<a href="https://t.me/${encodeURIComponent(user.username)}">Открыть профиль Telegram</a>` : '';
   const text = `👤 <b>Карточка пользователя</b>\n\nИмя: ${name}\nUsername: ${username}\nID: <code>${escapeHtml(user.user_id)}</code>\nПервый запуск: ${escapeHtml(user.first_seen_at)}\nПоследняя активность: ${escapeHtml(user.last_seen_at)}\nАктивных дней: ${user.active_days}\nДействий: ${user.actions}\nРасчётов: ${user.calculations}\nДоставка сообщений: ${user.chat_available ? 'доступна' : 'недоступна'}${profile}\nПроверка подписи: <b>${signatureEnabled ? 'включена' : 'выключена'}</b>`;
   await telegram(env, 'editMessageText', {
-    chat_id: message.chat.id, message_id: message.message_id, text, parse_mode: 'HTML',
+    chat_id: message.chat.id, message_id: message.message_id, text: `${text}\nПроверка ФТС: <b>${ftsEnabled ? 'включена' : 'выключена'}</b>`, parse_mode: 'HTML',
     reply_markup: { inline_keyboard: [
       [{ text: signatureEnabled ? '🔐 Отключить проверку подписи' : '🔓 Включить проверку подписи', callback_data: `analytics:signature:${user.user_id}:${signatureEnabled ? 'off' : 'on'}` }],
+      [{ text: ftsEnabled ? '🔐 Отключить проверку ФТС' : '🔓 Включить проверку ФТС', callback_data: `analytics:fts:${user.user_id}:${ftsEnabled ? 'off' : 'on'}` }],
       [{ text: '✉️ Написать', callback_data: `analytics:write:${user.user_id}` }],
       [{ text: '💬 Переписка', callback_data: `analytics:conversation:${user.user_id}:0` }],
       [{ text: '📜 История', callback_data: `analytics:history:${user.user_id}:0` }],
@@ -4706,6 +4717,18 @@ async function handleAnalyticsCallback(env, query) {
   } else if (data.startsWith('analytics:segment:')) {
     const [, , segment, offset] = data.split(':');
     await showAnalyticsUsers(env, message, segment, Math.max(0, Number(offset) || 0));
+  } else if (data.startsWith('analytics:fts:')) {
+    const match = data.match(/^analytics:fts:([1-9]\d{0,15}):(on|off)$/);
+    if (!match) return true;
+    const [, userId, action] = match;
+    if (!await getAnalyticsUser(env.ANALYTICS_DB, userId)) return true;
+    try {
+      await setFtsAccess(env, query.from.id, userId, action === 'on');
+    } catch {
+      await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Не удалось сохранить доступ. Попробуйте ещё раз.' });
+      return true;
+    }
+    await showAnalyticsUser(env, message, userId);
   } else if (data.startsWith('analytics:signature:')) {
     const match = data.match(/^analytics:signature:([1-9]\d{0,15}):(on|off)$/);
     if (!match) return true;
@@ -4936,6 +4959,7 @@ async function handleUpdate(env, update) {
   }
   await telegram(env, 'answerCallbackQuery', { callback_query_id: query.id });
   if (!query.message) return;
+  if (await handleFtsCallback(env, query, telegram)) return;
   if (await handleServiceCallback(env, query, telegram)) return;
   await clearServiceSession(env, query.from?.id || query.message.chat.id);
   if (query.data === 'support:start') {
@@ -5013,7 +5037,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'compact-menu-support-v39' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'fts-personal-access-v40' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {

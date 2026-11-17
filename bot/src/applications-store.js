@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { subscribeFts, runFtsAlarm } from './fts.js';
 
 const MAX_APPLICATIONS = 20;
 
@@ -34,6 +35,36 @@ export function normalizeApplication(input) {
 
 export class ApplicationsStore extends DurableObject {
   geocodeQueue = Promise.resolve();
+
+  async saveFtsContext(context) {
+    const id = crypto.randomUUID();
+    await this.ctx.storage.transaction(async tx => {
+      const items = (await tx.get('fts-contexts')) || [];
+      await tx.put('fts-contexts', [{ ...context, id }, ...items].slice(0, 30));
+    });
+    return id;
+  }
+
+  async getFtsContext(id) {
+    return ((await this.ctx.storage.get('fts-contexts')) || [])
+      .find(item => item.id === id && Date.now() - item.createdAt < 30 * 86400000) || null;
+  }
+
+  async subscribeFts(input) {
+    return subscribeFts(this.ctx.storage, this.env, input);
+  }
+
+  async alarm() {
+    const send = async (env, method, data) => {
+      const response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error('FTS result delivery failed');
+      return result.result;
+    };
+    await runFtsAlarm(this.ctx.storage, this.env, send);
+  }
 
   async geocodePlace(query, endpoint = 'https://nominatim.openstreetmap.org/search') {
     const normalized = cleanText(query, 100).toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
