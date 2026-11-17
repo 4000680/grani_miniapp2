@@ -3,8 +3,28 @@ import { canCheckFts } from './fts-access.js';
 const DAY = 86400000;
 const escape = value => String(value ?? 'не указано').slice(0, 300).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const clean = value => String(value || '').replace(/\s/g, '').toUpperCase();
-const name = value => String(value || '').toUpperCase().replace(/[^\p{L}\p{N}]/gu, '');
-const navigation = { inline_keyboard: [[{ text: '‹ Назад', callback_data: 'fts:close' }, { text: '🏠 Главное меню', callback_data: 'menu' }]] };
+// Preserve punctuation and every model character; only case/spacing are cosmetic.
+const comparisonName = value => String(value || '').trim().replace(/\s+/g, ' ').toUpperCase();
+
+export function ftsNameSimilarity(first, second) {
+  const a = Array.from(comparisonName(first)), b = Array.from(comparisonName(second));
+  if (!a.length || !b.length) return null;
+  let row = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 0; i < a.length; i++) {
+    const next = [i + 1];
+    for (let j = 0; j < b.length; j++) {
+      next.push(Math.min(next[j] + 1, row[j + 1] + 1, row[j] + (a[i] === b[j] ? 0 : 1)));
+    }
+    row = next;
+  }
+  // Never round a partial match up to 100%.
+  return Math.floor(100 * (1 - row[b.length] / Math.max(a.length, b.length)));
+}
+
+function ftsDate(value) {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T|\s)/);
+  return match ? `${match[3]}.${match[2]}.${match[1]}` : 'не указана';
+}
 
 export function ftsSearch(vehicle) {
   if (!['sbkts', 'epts'].includes(vehicle?.type)) return null;
@@ -24,17 +44,17 @@ export async function offerFtsCheck(env, message, vehicle, send) {
   if (!env.AVC_TOKEN) return; // No paid action until the runtime secret is configured.
   const search = ftsSearch(vehicle);
   if (!search) {
-    await send(env, 'sendMessage', { chat_id: userId, text: 'Проверка ФТС: в документе не распознан корректный VIN. Проверьте номер в исходном документе.', reply_markup: navigation });
+    await send(env, 'sendMessage', { chat_id: userId, text: 'Проверка ФТС: в документе не распознан корректный VIN. Проверьте номер в исходном документе.' });
     return;
   }
   const stub = env.APPLICATIONS.getByName(String(userId));
   const id = await stub.saveFtsContext({ search, document: {
-    vin: vehicle.vin || null, body: vehicle.body || null, chassis: vehicle.chassis || null,
+    type: vehicle.type, vin: vehicle.vin || null, body: vehicle.body || null, chassis: vehicle.chassis || null,
     model: [vehicle.brand, vehicle.model].filter(Boolean).join(' ')
   }, createdAt: Date.now() });
   await send(env, 'sendMessage', { chat_id: userId,
-    text: '🔎 Сверка с ФТС\n\nСверим идентификатор и наименование с документом, покажем дату выпуска и сведения об утильсборе. Запрос платный по тарифу AvtoVinCod, в том числе если сведений нет. Повторный результат из сохранённой проверки — без нового запроса.',
-    reply_markup: { inline_keyboard: [[{ text: '🔎 Проверить ФТС', callback_data: `fts:check:${id}` }], ...navigation.inline_keyboard] } });
+    text: 'Проверка ФТС',
+    reply_markup: { inline_keyboard: [[{ text: '🔎 Проверить ФТС', callback_data: `fts:check:${id}` }]] } });
 }
 
 export async function handleFtsCallback(env, query, send) {
@@ -47,64 +67,77 @@ export async function handleFtsCallback(env, query, send) {
     return true;
   }
   if (!await canCheckFts(env, userId)) {
-    await send(env, 'sendMessage', { chat_id: userId, text: 'Доступ к проверке ФТС не выдан или отозван.', reply_markup: navigation });
+    await send(env, 'sendMessage', { chat_id: userId, text: 'Доступ к проверке ФТС не выдан или отозван.' });
     return true;
   }
   const id = query.data.match(/^fts:check:([a-f0-9-]{36})$/)?.[1];
   const context = id && env.APPLICATIONS ? await env.APPLICATIONS.getByName(String(userId)).getFtsContext(id) : null;
   if (!context || !env.AVC_TOKEN) {
-    await send(env, 'sendMessage', { chat_id: userId, text: !env.AVC_TOKEN ? 'Проверка ФТС ещё не настроена.' : 'Кнопка устарела. Загрузите документ заново.', reply_markup: navigation });
+    await send(env, 'sendMessage', { chat_id: userId, text: !env.AVC_TOKEN ? 'Проверка ФТС ещё не настроена.' : 'Кнопка устарела. Загрузите документ заново.' });
     return true;
   }
   // One object per identifier serializes paid requests across all users/documents.
   const [field, value] = Object.entries(context.search)[0];
   const job = env.APPLICATIONS.getByName(`fts:${field}:${value}`);
-  await job.subscribeFts({ search: context.search, userId: String(userId), callbackId: query.id, document: context.document });
-  await send(env, 'sendMessage', { chat_id: userId,
-    text: '🔎 Проверка ФТС запущена. Обычно ответ готовится около минуты. Результат придёт отдельным сообщением. Если проверка уже выполнена за последние 24 часа, вернём сохранённый ответ без нового списания.', reply_markup: navigation });
+  // Reuse the offer as the waiting message, so even a cached result cannot
+  // overtake status creation. Removing its keyboard also prevents double taps.
+  try {
+    await send(env, 'editMessageText', { chat_id: userId, message_id: message.message_id,
+      text: 'Проверка запущена, ожидаем ответ.', reply_markup: { inline_keyboard: [] } });
+  } catch (error) {
+    if (!/message is not modified/i.test(error.message || '')) return true;
+  }
+  try {
+    await job.subscribeFts({ search: context.search, userId: String(userId), callbackId: query.id,
+      document: context.document, statusMessageId: message.message_id });
+  } catch {
+    await send(env, 'editMessageText', { chat_id: userId, message_id: message.message_id,
+      text: '🔴 Не удалось запустить проверку ФТС.', reply_markup: { inline_keyboard: [] } });
+  }
   return true;
 }
 
 export function ftsResultMessages(result, document) {
-  const checked = result.checkedAt ? `\nПроверено: ${escape(result.checkedAt)}` : '';
+  const header = ['🔎 <b>Проверка ФТС</b>'];
+  if (document.vin) header.push(`VIN: ${escape(document.vin)}`);
+  else if (document.body) header.push(`Кузов: ${escape(document.body)}`);
+  else if (document.chassis) header.push(`Шасси: ${escape(document.chassis)}`);
   if (result.code) {
     const errors = {
-      INSUFFICIENT_BALANCE: 'Недостаточно средств на балансе AvtoVinCod. Обратитесь к администратору.',
-      PROCESSING: 'ФТС ещё готовит ответ. Проверка оплачена; автоматическое ожидание завершено. Не запускайте новую проверку, обратитесь к администратору.',
-      UNCERTAIN: 'Ответ не получен. Запрос мог быть оплачен. Автоматический повтор отключён, чтобы избежать повторного списания. Обратитесь к администратору.',
-      SOURCE_ERROR: 'Источник принял проверку, но не выполнил её. Проверка оплачена. Обратитесь к администратору.',
-      ACCESS_REVOKED: 'Доступ к проверке ФТС отозван. Запрос не выполнялся.'
+      INSUFFICIENT_BALANCE: 'Проверка недоступна. Обратитесь к администратору.',
+      PROCESSING: 'Ответ ФТС пока не получен.',
+      UNCERTAIN: 'Ответ ФТС не получен. Обратитесь к администратору.',
+      SOURCE_ERROR: 'ФТС не удалось выполнить проверку.',
+      ACCESS_REVOKED: 'Доступ к проверке ФТС отозван.'
     };
-    return [`🔎 <b>Проверка ФТС</b>\n\n${errors[result.code] || 'Сервис ФТС временно недоступен или доступ API не настроен. Обратитесь к администратору.'}\nКод: ${escape(result.code)}`];
+    return [[...header, '', `🔴 ${errors[result.code] || 'Проверка ФТС временно недоступна.'}`].join('\n')];
   }
-  if (!result.found) return [`🔎 <b>Проверка ФТС</b>${checked}\n\nСведения не найдены. Это не подтверждает отсутствие таможенного оформления или оплаты утильсбора.`];
-  return result.records.flatMap((record, index) => {
-    const identifiers = ['vin', 'body', 'chassis'].filter(field => document[field] && record[field]);
-    const mismatch = identifiers.some(field => clean(document[field]) !== clean(record[field]));
-    const compared = identifiers.length > 0;
-    const modelMatch = document.model && record.model && name(document.model) === name(record.model);
+  if (!result.found || !result.records?.length) return [[...header, '', '🔴 Сведения отсутствуют.'].join('\n')];
+  return result.records.map(record => {
+    const fields = ['vin', 'body', 'chassis'].filter(field => document[field] && record[field]);
+    const mismatch = fields.some(field => clean(document[field]) !== clean(record[field]));
+    const percentage = ftsNameSimilarity(document.model, record.model);
+    let status;
+    if (mismatch) status = '🔴 Идентификатор не совпадает.';
+    else if (percentage === null) status = '🔴 Недостаточно данных для сверки наименования.';
+    else if (!fields.length) status = `🟡 Наименование: ${percentage}%. Идентификатор ФТС не указан.`;
+    else if (percentage === 100) status = '✅ Данные совпадают — 100%.';
+    else status = `${percentage >= 50 ? '🟡' : '🔴'} Совпадение наименования: ${percentage}%.`;
+    const label = document.type === 'sbkts' ? 'СБКТС' : document.type === 'epts' ? 'ЭПТС' : 'Документ';
     const lines = [
-      `🔎 <b>Проверка ФТС — запись ${index + 1}</b>${checked}`,
-      `<tg-spoiler>VIN: ${escape(record.vin)}\nКузов: ${escape(record.body)}\nШасси: ${escape(record.chassis)}</tg-spoiler>`,
-      mismatch ? '⚠️ Идентификатор отличается от документа. Проверьте автомобиль вручную.' : compared ? '✅ Идентификатор совпадает с документом.' : '⚠️ Недостаточно данных для сверки идентификатора.',
-      `Наименование ФТС: <b>${escape(record.model)}</b>`,
-      `В документе: ${escape(document.model)}`,
-      modelMatch ? '✅ Написание наименования совпадает.' : '⚠️ Написание наименования отличается или не указано. Нужна ручная сверка.',
-      `Таможенный выпуск: ${escape(record.releaseDate)} ${escape(record.releaseTime)}`,
-      'Дата выпуска ФТС показана справочно; срок и пени по СБКТС не пересчитаны.'
+      ...header, '',
+      `${label}: ${escape(document.model)}`,
+      `ФТС: ${escape(record.model)}`,
+      `Дата выпуска: ${ftsDate(record.releaseDate)}`
     ];
-    const messages = [lines.join('\n')];
-    const fees = Array.isArray(record.recyclingFee) ? record.recyclingFee : [];
-    if (!fees.length) messages[0] += '\nСведения об утильсборе не переданы.';
-    for (const fee of fees) messages.push([
-      `Утильсбор — запись ФТС ${index + 1}`,
-      `Статус: ${escape(fee.paymentStatus)}`,
-      `Таможенный орган: ${escape(fee.customsCode)}`,
-      `Для личного пользования: ${fee.personalUse === true ? 'да' : fee.personalUse === false ? 'нет' : 'не указано'}`,
-      `Дата документа: ${escape(fee.date)}`,
-      'Сумма оплаченного утильсбора в ответе API не указана.'
-    ].join('\n'));
-    return messages;
+    for (const field of fields) {
+      if (clean(document[field]) !== clean(record[field])) {
+        lines.push(`${field === 'vin' ? 'VIN' : field === 'body' ? 'Кузов' : 'Шасси'} ФТС: ${escape(record[field])}`);
+      }
+    }
+    lines.push('', status);
+    if (mismatch && percentage !== null) lines.push(`Совпадение наименования: ${percentage}%.`);
+    return lines.join('\n');
   });
 }
 
@@ -129,9 +162,9 @@ export async function subscribeFts(storage, env, input) {
     let job = await tx.get('fts-job');
     const now = Date.now();
     if (!job || (job.expiresAt && job.expiresAt < now)) job = { search: input.search, state: 'queued', subscribers: {}, createdAt: now };
-    const key = `${input.userId}:${input.callbackId}`;
+    const key = `${input.userId}:${input.statusMessageId || input.callbackId}`;
     if (Object.keys(job.subscribers).length >= 1000) throw new Error('FTS subscriber limit');
-    if (!job.subscribers[key]) job.subscribers[key] = { userId: input.userId, document: input.document, delivered: false };
+    if (!job.subscribers[key]) job.subscribers[key] = { userId: input.userId, document: input.document, statusMessageId: input.statusMessageId || null, delivered: false };
     await tx.put('fts-job', job);
     if (job.state !== 'running') await tx.setAlarm(job.nextAt || now + 1);
   });
@@ -178,16 +211,32 @@ export async function runFtsAlarm(storage, env, send, fetcher = fetch) {
   const completed = await storage.get('fts-job');
   if (completed.state !== 'done') return;
   for (const [key, subscriber] of Object.entries(completed.subscribers)) {
-    if (subscriber.delivered) continue;
-    // Claim delivery before sending; neither webhook nor alarm replay re-bills.
-    await storage.transaction(async tx => {
-      const current = await tx.get('fts-job');
-      current.subscribers[key].delivered = true;
-      await tx.put('fts-job', current);
-    });
-    if (!await canCheckFts(env, subscriber.userId)) continue;
-    for (const text of ftsResultMessages(completed.result, subscriber.document)) {
-      await send(env, 'sendMessage', { chat_id: subscriber.userId, text: `${completed.result.testMode ? '🧪 Бесплатный тест API. Данные условные.\n\n' : ''}${text}`, parse_mode: 'HTML', reply_markup: navigation });
+    if (!subscriber.delivered) {
+      if (await canCheckFts(env, subscriber.userId)) {
+        for (const text of ftsResultMessages(completed.result, subscriber.document)) {
+          await send(env, 'sendMessage', { chat_id: subscriber.userId,
+            text: `${completed.result.testMode ? '🧪 Тестовые данные.\n\n' : ''}${text}`, parse_mode: 'HTML' });
+        }
+      }
+      await storage.transaction(async tx => {
+        const current = await tx.get('fts-job');
+        current.subscribers[key].delivered = true;
+        await tx.put('fts-job', current);
+      });
+    }
+    // Delete only the waiting message, after sending every result. Keep the
+    // result and original VIN message. Retry cleanup without another API call.
+    if (subscriber.statusMessageId && !subscriber.statusDeleted) {
+      try {
+        await send(env, 'deleteMessage', { chat_id: subscriber.userId, message_id: subscriber.statusMessageId });
+      } catch (error) {
+        if (!/message to delete not found/i.test(error.message || '')) throw error;
+      }
+      await storage.transaction(async tx => {
+        const current = await tx.get('fts-job');
+        current.subscribers[key].statusDeleted = true;
+        await tx.put('fts-job', current);
+      });
     }
   }
 }

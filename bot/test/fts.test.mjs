@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { canCheckFts, setFtsAccess } from '../src/fts-access.js';
-import { ftsSearch, offerFtsCheck, handleFtsCallback, ftsResultMessages, requestFts, subscribeFts, runFtsAlarm } from '../src/fts.js';
+import { ftsNameSimilarity, ftsSearch, offerFtsCheck, handleFtsCallback, ftsResultMessages, requestFts, subscribeFts, runFtsAlarm } from '../src/fts.js';
 
 const vin = 'X7TEST00000000001';
 const vehicle = { type: 'sbkts', vin, brand: 'Example', model: 'Car' };
@@ -84,8 +84,8 @@ test('duplicate callbacks, repeated documents and different allowed users share 
   await runFtsAlarm(store, env, send, fetcher);
   await subscribeFts(store, env, input('second', '201')); await runFtsAlarm(store, env, send, fetcher);
   await subscribeFts(store, env, input()); await runFtsAlarm(store, env, send, fetcher);
-  assert.equal(requests, 1); assert.equal(sent.length, 4);
-  assert.match(sent[0].text, /совпадает с документом/);
+  assert.equal(requests, 1); assert.equal(sent.length, 2);
+  assert.match(sent[0].text, /Данные совпадают — 100%/);
 });
 
 test('a second click arriving while provider request is in flight joins that same check', async t => {
@@ -101,7 +101,7 @@ test('a second click arriving while provider request is in flight joins that sam
   await started;
   await subscribeFts(store, env, input('while-running'));
   resolveResponse(response(found)); await alarm;
-  assert.equal(requests, 1); assert.equal(sent.length, 4);
+  assert.equal(requests, 1); assert.equal(sent.length, 2);
 });
 
 test('click loads the original document context rather than the latest calculation', async t => {
@@ -125,7 +125,7 @@ test('PROCESSING polls only within paid window; found false differs from unpaid 
   assert.equal(sent.length, 0); assert.equal((await store.get('fts-job')).state, 'queued');
   assert.ok(store.alarm > Date.now());
   await runFtsAlarm(store, env, send, async () => { requests++; return response({ success: 1, found: false, records: [] }); });
-  assert.equal(requests, 2); assert.match(sent[0].text, /не подтверждает отсутствие/);
+  assert.equal(requests, 2); assert.match(sent[0].text, /🔴 Сведения отсутствуют/);
   const long = storage(); await subscribeFts(long, env, input());
   const job = await long.get('fts-job'); job.createdAt = Date.now() - 26 * 60000; await long.put('fts-job', job);
   // An overdue alarm must stop before a request could exceed the provider's 30-minute replay window.
@@ -155,13 +155,86 @@ test('revocation before alarm prevents request; revocation during request hides 
   assert.equal(sent.length, 0);
 });
 
-test('all records and fee rows are shown, false and null are distinct, mismatch warns and HTML is escaped', () => {
-  const result = { ...found, records: [...found.records, { vin: 'OTHER', model: '<bad>', recyclingFee: [{ personalUse: null }, { personalUse: true }] }] };
-  const messages = ftsResultMessages(result, document);
-  assert.equal(messages.length, 5);
-  assert.match(messages[1], /пользования: нет/); assert.match(messages[3], /пользования: не указано/); assert.match(messages[4], /пользования: да/);
-  assert.match(messages[2], /Идентификатор отличается/); assert.match(messages[2], /&lt;bad&gt;/);
-  assert.match(ftsResultMessages({ code: 'SOURCE_ERROR' }, document)[0], /оплачена/);
+test('compact result keeps VIN, document/FTS names and date; removes technical and fee blocks', () => {
+  const result = { ...found, records: [...found.records, { vin: 'OTHER', model: '<bad>', releaseDate: '2025-08-30T03:00:00', recyclingFee: [{ personalUse: null }] }] };
+  const messages = ftsResultMessages(result, { ...document, type: 'sbkts' });
+  assert.equal(messages.length, 2);
+  assert.match(messages[0], /VIN: X7TEST00000000001/);
+  assert.match(messages[0], /СБКТС: Example Car/);
+  assert.match(messages[0], /ФТС: EXAMPLE CAR/);
+  assert.match(messages[0], /Дата выпуска: 01.01.2026/);
+  assert.match(messages[0], /✅ Данные совпадают — 100%/);
+  assert.match(messages[1], /Дата выпуска: 30.08.2025/);
+  assert.match(messages[1], /🔴 Идентификатор не совпадает/);
+  assert.match(messages[1], /VIN ФТС: OTHER/);
+  assert.match(messages[1], /&lt;bad&gt;/);
+  assert.doesNotMatch(messages.join(''), /Проверено:|03:00|15:00|оплачен|оплата|API|requestId|tg-spoiler|Утильсбор/);
+  assert.doesNotMatch(ftsResultMessages({ code: 'SOURCE_ERROR' }, document)[0], /оплачена|Код:/);
+});
+
+test('name comparison preserves model characters and never rounds a partial match to 100', () => {
+  assert.equal(ftsNameSimilarity('EXAMPLE CAR', 'example car'), 100);
+  assert.equal(ftsNameSimilarity('CLQ5030XLJ6KM', 'CLQ5030XLJ6KM'), 100);
+  assert.equal(ftsNameSimilarity('CHUFEI CLQ5030XLJ6KM', 'CLQ5030XLJ6KM'), 65);
+  assert.equal(ftsNameSimilarity('MODEL-X', 'MODEL X'), 85);
+  assert.equal(ftsNameSimilarity('A'.repeat(200), 'A'.repeat(199) + 'B'), 99);
+  assert.equal(ftsNameSimilarity('', ''), null);
+  const partial = ftsResultMessages({ ...found, records: [{ vin, model: 'EXAMPLE CAB' }] }, document)[0];
+  assert.match(partial, /🟡 Совпадение наименования: 90%/);
+  const different = ftsResultMessages({ ...found, records: [{ vin, model: 'ZZZZZZZZZZZ' }] }, document)[0];
+  assert.match(different, /🔴 Совпадение наименования: 0%/);
+  const absent = ftsResultMessages({ found: false, records: [] }, document)[0];
+  assert.match(absent, /VIN: X7TEST00000000001/);
+  assert.match(absent, /🔴 Сведения отсутствуют/);
+});
+
+test('offer and status have no navigation; status exists before subscribing a cached request', async t => {
+  const env = fixture(t), calls = [], id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  await setFtsAccess(env, 100, 200, true);
+  env.APPLICATIONS = { getByName(key) {
+    if (key === '200') return { saveFtsContext: async () => id, getFtsContext: async () => ({ search: { vin }, document }) };
+    return { subscribeFts: async input => { assert.equal(calls.at(-1).method, 'editMessageText'); assert.equal(input.statusMessageId, 51); } };
+  } };
+  const send = async (_env, method, data) => { calls.push({ method, data }); return { message_id: 51 }; };
+  const message = { from: { id: 200 }, chat: { id: 200, type: 'private' }, message_id: 51 };
+  await offerFtsCheck(env, message, vehicle, send);
+  assert.equal(calls[0].data.text, 'Проверка ФТС');
+  assert.equal(calls[0].data.reply_markup.inline_keyboard.flat().length, 1);
+  await handleFtsCallback(env, { id: 'q', from: { id: 200 }, message, data: 'fts:check:' + id }, send);
+  assert.equal(calls[1].data.text, 'Проверка запущена, ожидаем ответ.');
+  assert.deepEqual(calls[1].data.reply_markup.inline_keyboard, []);
+});
+
+test('result precedes status deletion; duplicate taps and cleanup retries do not query again', async t => {
+  const env = fixture(t), store = storage(), calls = []; let requests = 0, failCleanup = true;
+  await setFtsAccess(env, 100, 200, true);
+  await subscribeFts(store, env, { ...input(), statusMessageId: 51 });
+  await subscribeFts(store, env, { ...input('double-tap'), statusMessageId: 51 });
+  const fetcher = async () => { requests++; return response(found); };
+  const send = async (_env, method, data) => {
+    calls.push({ method, data });
+    if (method === 'deleteMessage' && failCleanup) throw Error('temporary Telegram failure');
+  };
+  await assert.rejects(runFtsAlarm(store, env, send, fetcher), /temporary/);
+  assert.equal(calls[0].method, 'sendMessage');
+  assert.equal(calls[0].data.reply_markup, undefined);
+  assert.equal(calls[1].method, 'deleteMessage');
+  assert.equal(calls[1].data.message_id, 51);
+  failCleanup = false;
+  await runFtsAlarm(store, env, send, fetcher);
+  assert.equal(requests, 1);
+  assert.equal(calls.filter(call => call.method === 'sendMessage').length, 1);
+  assert.equal(calls.filter(call => call.method === 'deleteMessage').length, 2);
+});
+
+test('failed result delivery leaves waiting message and retries without a new paid request', async t => {
+  const env = fixture(t), store = storage(), calls = []; let requests = 0;
+  await setFtsAccess(env, 100, 200, true); await subscribeFts(store, env, { ...input(), statusMessageId: 51 });
+  const fetcher = async () => { requests++; return response(found); };
+  await assert.rejects(runFtsAlarm(store, env, async () => { throw Error('delivery failure'); }, fetcher), /delivery/);
+  assert.equal(Object.values((await store.get('fts-job')).subscribers)[0].delivered, false);
+  await runFtsAlarm(store, env, async (_env, method) => calls.push(method), fetcher);
+  assert.equal(requests, 1); assert.deepEqual(calls, ['sendMessage', 'deleteMessage']);
 });
 
 test('administrator card grants and revokes FTS independently; ordinary and group callbacks are ignored', async t => {

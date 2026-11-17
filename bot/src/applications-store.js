@@ -60,7 +60,7 @@ export class ApplicationsStore extends DurableObject {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
       });
       const result = await response.json();
-      if (!response.ok || !result.ok) throw new Error('FTS result delivery failed');
+      if (!response.ok || !result.ok) throw new Error(`FTS delivery failed: ${result.description || response.status}`);
       return result.result;
     };
     await runFtsAlarm(this.ctx.storage, this.env, send);
