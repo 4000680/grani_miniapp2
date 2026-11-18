@@ -1,3 +1,4 @@
+import { createDocumentTask } from './document-task.js';
 import { canCheckSignature, setSignatureAccess, filterSignatureState } from './signature-access.js';
 import { canCheckFts, setFtsAccess } from './fts-access.js';
 import { offerFtsCheck, handleFtsCallback } from './fts.js';
@@ -246,10 +247,10 @@ function infoKeyboard(section, env) {
   return { inline_keyboard: rows };
 }
 
-async function telegram(env, method, data) {
+async function telegram(env, method, data, { signal } = {}) {
   if (!env.BOT_TOKEN) throw new Error('BOT_TOKEN is not configured');
   const response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
-    method: 'POST',
+    method: 'POST', signal,
     headers: data instanceof FormData ? undefined : { 'content-type': 'application/json' },
     body: data instanceof FormData ? data : JSON.stringify(data)
   });
@@ -3454,7 +3455,7 @@ async function handleDocumentVolumeReply(env, message) {
 async function finishDocumentCalculation(env, message, status, declarationState, vehicle, util, deadline) {
   const userId = message.from?.id || message.chat.id;
   if (env.ANALYTICS_DB) {
-    try { await recordDocumentType(env.ANALYTICS_DB, message.from?.id, vehicle.type === 'sbkts' ? 'sbkts' : 'epts'); }
+    try { await createDocumentTask(1000).run('запись статистики документа', () => recordDocumentType(env.ANALYTICS_DB, message.from?.id, vehicle.type === 'sbkts' ? 'sbkts' : 'epts')); }
     catch (error) { console.error('Analytics document tracking failed', error); }
   }
   if (declarationState?.mode === 'declaration') {
@@ -3516,13 +3517,17 @@ async function handleDocument(env, message) {
   await cleanupTemporaryMessages(env, userId, message.chat.id);
   await telegram(env, 'sendChatAction', { chat_id: message.chat.id, action: 'typing' });
   const status = await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: declarationState?.mode === 'declaration' ? '📄 Читаю документ для расчёта по декларации…' : '📄 Читаю документ и рассчитываю утильсбор…' });
-  await trackTemporaryMessage(env, userId, status.message_id);
+  const task = createDocumentTask();
   try {
-    const file = await telegram(env, 'getFile', { file_id: document.file_id });
-    const response = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`);
-    if (!response.ok) throw new Error('Telegram не отдал файл для скачивания');
-    const checkSignature = message.chat.type === 'private' && await canCheckSignature(env, message.from?.id);
-    const { vehicle, util, deadline } = await processVehicleDocument(new Uint8Array(await response.arrayBuffer()), new Date(), { checkSignature });
+    await task.run('сохранение статуса загрузки', () => trackTemporaryMessage(env, userId, status.message_id), 2000);
+    const file = await task.run('получение файла из Telegram', signal => telegram(env, 'getFile', { file_id: document.file_id }, { signal }), 6000);
+    const bytes = await task.run('скачивание PDF из Telegram', async signal => {
+      const response = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`, { signal });
+      if (!response.ok) throw new Error('Telegram не отдал файл для скачивания');
+      return new Uint8Array(await response.arrayBuffer());
+    }, 10000);
+    const checkSignature = message.chat.type === 'private' && await task.run('проверка доступа к подписи', () => canCheckSignature(env, message.from?.id), 1500).catch(() => false);
+    const { vehicle, util, deadline } = await task.run('чтение PDF и расчёт', () => processVehicleDocument(bytes, new Date(), { checkSignature }));
     await finishDocumentCalculation(env, message, status, declarationState, vehicle, util, deadline);
   } catch (error) {
     const controlled = controlledDocumentError(error);
@@ -3559,7 +3564,8 @@ async function handleDocument(env, message) {
     }
     console.error('document_processing_error', JSON.stringify({
       documentType: 'sbkts-or-epts',
-      code: controlled.code,
+      code: error.code === 'DOCUMENT_TIMEOUT' ? error.code : controlled.code,
+      stage: error.documentStage || null,
       message: controlled.message
     }));
     await telegram(env, 'editMessageText', {
@@ -3621,12 +3627,16 @@ async function handleGroupCalculation(env, query) {
   try {
     const document = sourceMessage.document;
     if (document.file_size > 20 * 1024 * 1024) throw new Error('Файл больше 20 МБ');
-    const file = await telegram(env, 'getFile', { file_id: document.file_id });
-    const response = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`);
-    if (!response.ok) throw new Error('Telegram не отдал файл для скачивания');
-    const { vehicle, util, deadline } = await processVehicleDocument(new Uint8Array(await response.arrayBuffer()));
+    const task = createDocumentTask();
+    const file = await task.run('получение файла из Telegram', signal => telegram(env, 'getFile', { file_id: document.file_id }, { signal }), 6000);
+    const bytes = await task.run('скачивание PDF из Telegram', async signal => {
+      const response = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`, { signal });
+      if (!response.ok) throw new Error('Telegram не отдал файл для скачивания');
+      return new Uint8Array(await response.arrayBuffer());
+    }, 10000);
+    const { vehicle, util, deadline } = await task.run('чтение PDF и расчёт', () => processVehicleDocument(bytes));
     if (env.ANALYTICS_DB) {
-      try { await recordDocumentType(env.ANALYTICS_DB, query.from?.id, vehicle.type === 'sbkts' ? 'sbkts' : 'epts'); }
+      try { await createDocumentTask(1000).run('запись статистики документа', () => recordDocumentType(env.ANALYTICS_DB, query.from?.id, vehicle.type === 'sbkts' ? 'sbkts' : 'epts')); }
       catch (error) { console.error('Analytics document tracking failed', error); }
     }
     await telegram(env, 'editMessageText', {
@@ -3641,7 +3651,8 @@ async function handleGroupCalculation(env, query) {
     const controlled = controlledDocumentError(error);
     console.error('group_document_processing_error', JSON.stringify({
       documentType: 'sbkts-or-epts',
-      code: controlled.code,
+      code: error.code === 'DOCUMENT_TIMEOUT' ? error.code : controlled.code,
+      stage: error.documentStage || null,
       message: controlled.message
     }));
     await telegram(env, 'editMessageText', {
@@ -5044,7 +5055,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'fts-declaration-stage-v43' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'document-timeout-v44' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {

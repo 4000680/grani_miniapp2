@@ -1,3 +1,4 @@
+import { createDocumentTask } from '../src/document-task.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -372,7 +373,7 @@ test('cargo clarification does not offer FTS early in declaration mode; regular 
   const i = source.indexOf('async function handleDocument(');
   const code = source.slice(i, source.indexOf('\n}', i) + 2);
   let mode = 'declaration';
-  const context = vm.createContext({ console, Date, Uint8Array,
+  const context = vm.createContext({ createDocumentTask, console, Date, Uint8Array,
     getCustomsState: async () => ({ mode }),
     cleanupTemporaryMessages: async () => {}, trackTemporaryMessage: async () => {},
     telegram: async (_env, method) => method === 'getFile' ? { file_path: 'synthetic.pdf' } : { message_id: 51 },

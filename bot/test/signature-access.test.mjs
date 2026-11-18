@@ -1,3 +1,4 @@
+import { createDocumentTask } from '../src/document-task.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -70,7 +71,7 @@ test('admin card button grants and revokes access; forged and group callbacks do
 });
 test('upload uses actual sender permission; group calculation never enables signature screening',async t=>{
  const env=fixture(t),checks=[],completed=[];
- const context=vm.createContext({Date,Uint8Array,canCheckSignature,
+ const context=vm.createContext({createDocumentTask,Date,Uint8Array,canCheckSignature,
   getCustomsState:async()=>null,cleanupTemporaryMessages:async()=>{},trackTemporaryMessage:async()=>{},
   telegram:async(_env,method)=>method==='getFile'?{file_path:'test.pdf'}:{message_id:1},
   fetch:async()=>({ok:true,arrayBuffer:async()=>new ArrayBuffer(0)}),
