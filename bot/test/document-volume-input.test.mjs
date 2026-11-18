@@ -16,7 +16,7 @@ const vehicle = {type:'sbkts',brand:'TEST',model:'CAR',year:2025,category:'M1',c
 function runtime(initial) {
   let state = initial;
   const sent = [], completed = [];
-  const context = vm.createContext({createDocumentTask,
+  const context = vm.createContext({reportBotIncident:async()=>{},createDocumentTask,
     Date, Uint8Array, DocumentProcessingError, calculateUtil, addWorkingDays,
     canCheckSignature:async()=>false,
     getCustomsState:async()=>state, setCustomsState:async(_env,_id,next)=>{state=next;},

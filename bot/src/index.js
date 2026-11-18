@@ -1,3 +1,4 @@
+import { reportBotIncident, monitorBotOperation, pollBotMonitoring, listBotIncidents, incidentText } from './bot-monitoring.js';
 import { createDocumentTask } from './document-task.js';
 import { canCheckSignature, setSignatureAccess, filterSignatureState } from './signature-access.js';
 import { canCheckFts, setFtsAccess } from './fts-access.js';
@@ -3562,6 +3563,7 @@ async function handleDocument(env, message) {
       if (mode !== 'declaration') await sendDocumentIdentity(env, message.chat.id, vehicle, message.message_id).catch(() => null);
       return;
     }
+    await reportBotIncident(env, { section: 'document', userId, code: error.code === 'DOCUMENT_TIMEOUT' ? 'DOCUMENT_TIMEOUT' : 'DOCUMENT_ERROR', stage: error.documentStage });
     console.error('document_processing_error', JSON.stringify({
       documentType: 'sbkts-or-epts',
       code: error.code === 'DOCUMENT_TIMEOUT' ? error.code : controlled.code,
@@ -3649,6 +3651,7 @@ async function handleGroupCalculation(env, query) {
     await sendDocumentIdentity(env, botMessage.chat.id, vehicle, sourceMessage.message_id).catch(() => null);
   } catch (error) {
     const controlled = controlledDocumentError(error);
+    await reportBotIncident(env, { section: 'group_document', userId: query.from?.id, code: error.code === 'DOCUMENT_TIMEOUT' ? 'DOCUMENT_TIMEOUT' : 'DOCUMENT_ERROR', stage: error.documentStage });
     console.error('group_document_processing_error', JSON.stringify({
       documentType: 'sbkts-or-epts',
       code: error.code === 'DOCUMENT_TIMEOUT' ? error.code : controlled.code,
@@ -4547,7 +4550,7 @@ function analyticsHomeKeyboard() {
   return { inline_keyboard: [
     [{ text: '📊 Статистика', callback_data: 'analytics:stats' }, { text: '👥 Пользователи', callback_data: 'analytics:users' }],
     [{ text: '🧩 Сегменты', callback_data: 'analytics:segments' }, { text: '🧮 Расчёты', callback_data: 'analytics:calculations' }],
-    [{ text: '📣 Рассылка', callback_data: 'analytics:broadcast' }]
+    [{ text: '📣 Рассылка', callback_data: 'analytics:broadcast' }, { text: '🚨 Ошибки', callback_data: 'analytics:errors' }]
   ] };
 }
 
@@ -4722,6 +4725,12 @@ async function handleAnalyticsCallback(env, query) {
   if (data === 'analytics:home') {
     await clearAdminSession(env.ANALYTICS_DB, adminId);
     await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: '📈 <b>Аналитика «Брокер Грани»</b>\n\nВыберите нужный раздел.', parse_mode: 'HTML', reply_markup: analyticsHomeKeyboard() });
+  } else if (data === 'analytics:errors') {
+    const items = await listBotIncidents(env);
+    await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id,
+      text: items.length ? items.map(incidentText).join('\n\n').slice(0, 4000) : '🚨 Ошибок пока нет.',
+      reply_markup: { inline_keyboard: [[{ text: '🔄 Обновить', callback_data: 'analytics:errors' }], [{ text: '‹ В админку', callback_data: 'analytics:home' }]] }
+    });
   } else if (data === 'analytics:stats' || data === 'analytics:calculations') {
     const stats = await analyticsOverview(env.ANALYTICS_DB);
     await telegram(env, 'editMessageText', { chat_id: message.chat.id, message_id: message.message_id, text: analyticsStatsText(stats), parse_mode: 'HTML', reply_markup: analyticsBackKeyboard() });
@@ -5037,6 +5046,7 @@ async function setupBot(request, env) {
 export default {
   async scheduled(controller, env, ctx) {
     if (!env.ANALYTICS_DB) return;
+    ctx.waitUntil(pollBotMonitoring(env, telegram).catch(() => console.error('bot_monitoring_poll_failed')));
     ctx.waitUntil(retrySupportNotifications(env, telegram).catch(error => console.error('Support delivery retry failed', error)));
     ctx.waitUntil(processCampaignBatch(env.ANALYTICS_DB, (chatId, text) =>
       telegram(env, 'sendMessage', { chat_id: chatId, text })
@@ -5055,14 +5065,17 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'document-timeout-v44' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'admin-error-monitor-v45' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
         return new Response('Forbidden', { status: 403 });
       }
       const update = await request.json();
-      ctx.waitUntil(handleUpdate(env, update).catch(async error => {
+      const actor = update.message?.from || update.callback_query?.from;
+      const section = update.message?.document ? 'document' : update.callback_query?.data?.startsWith('fts:') ? 'fts' : 'update';
+      ctx.waitUntil(monitorBotOperation(env, { section, userId: actor?.id, stage: section === 'fts' ? 'запуск проверки' : 'обработка обновления' },
+        () => handleUpdate(env, update)).catch(async error => {
         console.error('Update handling failed',error);
         const message=update.message || update.callback_query?.message;
         if(message?.chat?.type==='private') {

@@ -1,3 +1,4 @@
+import { reportBotIncident } from './bot-monitoring.js';
 import { canCheckFts } from './fts-access.js';
 
 const DAY = 86400000;
@@ -102,7 +103,11 @@ export async function handleFtsCallback(env, query, send) {
   try {
     await send(env, 'editMessageReplyMarkup', { chat_id: userId, message_id: message.message_id,
       reply_markup: { inline_keyboard: remainingButtons } });
-  } catch {
+  } catch (error) {
+    if (!/message is not modified/i.test(error.message || '')) {
+      await reportBotIncident(env, { section: 'fts', userId, code: 'FTS_BUTTON_FAILED', stage: 'обновление кнопки ФТС' });
+      await send(env, 'sendMessage', { chat_id: userId, text: '🔴 Не удалось запустить проверку ФТС: кнопка не обновилась. Попробуйте ещё раз.' });
+    }
     return true;
   }
   let waiting;
@@ -112,6 +117,7 @@ export async function handleFtsCallback(env, query, send) {
     await job.subscribeFts({ search: context.search, userId: String(userId), callbackId: query.id,
       document: context.document, statusMessageId: waiting.message_id });
   } catch {
+    await reportBotIncident(env, { section: 'fts', userId, code: 'FTS_START_FAILED', stage: 'запуск проверки' });
     await send(env, 'editMessageReplyMarkup', { chat_id: userId, message_id: message.message_id,
       reply_markup: originalMarkup });
     if (waiting?.message_id) await send(env, 'editMessageText', { chat_id: userId, message_id: waiting.message_id,
@@ -235,6 +241,12 @@ export async function runFtsAlarm(storage, env, send, fetcher = fetch) {
   }
   const completed = await storage.get('fts-job');
   if (completed.state !== 'done') return;
+  const incidentCodes = { UNCERTAIN:'FTS_UNCERTAIN', SOURCE_ERROR:'FTS_SOURCE_ERROR', INSUFFICIENT_BALANCE:'FTS_BALANCE', PROCESSING:'FTS_PROCESSING' };
+  if (incidentCodes[completed.result?.code] && !completed.incidentReported) {
+    const recorded = await reportBotIncident(env, { section: 'fts', userId: Object.values(completed.subscribers)[0]?.userId,
+      code: incidentCodes[completed.result.code], stage: 'проверка ФТС' });
+    if (recorded) await storage.transaction(async tx => { const current = await tx.get('fts-job'); current.incidentReported = true; await tx.put('fts-job', current); });
+  }
   for (const [key, subscriber] of Object.entries(completed.subscribers)) {
     if (!subscriber.delivered) {
       if (await canCheckFts(env, subscriber.userId)) {

@@ -239,7 +239,7 @@ test('regular VIN gets FTS action; declaration VIN keeps only manual confirmatio
   env.APPLICATIONS = { getByName: () => ({ saveFtsContext: async () => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }) };
   const source = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
   const extract = name => { const i = source.indexOf('async function ' + name + '('); return source.slice(i, source.indexOf('\n}', i) + 2); };
-  const context = vm.createContext({ offerFtsCheck, console, escapeHtml: String,
+  const context = vm.createContext({reportBotIncident:async()=>{}, offerFtsCheck, console, escapeHtml: String,
     telegram: async (_env, method, data) => { calls.push({ method, data }); return { message_id: 51 }; } });
   vm.runInContext(extract('sendDocumentIdentity') + '\n' + extract('sendDeclarationVin'), context);
   await context.sendDocumentIdentity(env, 200, vehicle);
@@ -314,7 +314,7 @@ test('administrator card grants and revokes FTS independently; ordinary and grou
   const env = fixture(t), calls = [];
   const source = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
   const extract = name => { const start = source.indexOf(`async function ${name}(`); return source.slice(start, source.indexOf('\n}', start) + 2); };
-  const context = vm.createContext({ canCheckSignature: async () => false, canCheckFts, setFtsAccess, escapeHtml: String,
+  const context = vm.createContext({reportBotIncident:async()=>{}, canCheckSignature: async () => false, canCheckFts, setFtsAccess, escapeHtml: String,
     getAnalyticsUser: async (_db, id) => ({ user_id: id }), clearAdminSession: async () => {},
     telegram: async (_env, method, data) => calls.push(data) });
   vm.runInContext(extract('showAnalyticsUser') + '\n' + extract('handleAnalyticsCallback'), context);
@@ -344,7 +344,7 @@ test('declaration FTS action attaches to the name comparison step, with manual c
   env.APPLICATIONS = { getByName: () => ({ saveFtsContext: async () => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }) };
   const source = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
   const extract = name => { const i = source.indexOf('async function ' + name + '('); return source.slice(i, source.indexOf('\n}', i) + 2); };
-  const context = vm.createContext({ console, offerFtsCheck, escapeHtml: String,
+  const context = vm.createContext({reportBotIncident:async()=>{}, console, offerFtsCheck, escapeHtml: String,
     setCustomsState: async (_env, _id, state) => states.push(state),
     findDeclarationPrice: () => ({ exact: null }), declarationVehicleLines: () => [],
     declarationKeyboard: rows => ({ inline_keyboard: [...rows, [{ text: 'Назад', callback_data: 'declaration:back:start' }, { text: 'Главное меню', callback_data: 'menu' }]] }),
@@ -373,7 +373,7 @@ test('cargo clarification does not offer FTS early in declaration mode; regular 
   const i = source.indexOf('async function handleDocument(');
   const code = source.slice(i, source.indexOf('\n}', i) + 2);
   let mode = 'declaration';
-  const context = vm.createContext({ createDocumentTask, console, Date, Uint8Array,
+  const context = vm.createContext({reportBotIncident:async()=>{}, createDocumentTask, console, Date, Uint8Array,
     getCustomsState: async () => ({ mode }),
     cleanupTemporaryMessages: async () => {}, trackTemporaryMessage: async () => {},
     telegram: async (_env, method) => method === 'getFile' ? { file_path: 'synthetic.pdf' } : { message_id: 51 },

@@ -23,7 +23,7 @@ const start=source.indexOf('async function handleDocument(');
 const handler=source.slice(start,source.indexOf('\n}',start)+2);
 function runtime(stage) {
  const sent=[],done=[];
- const context=vm.createContext({Date,Uint8Array,console:{error(){}},
+ const context=vm.createContext({reportBotIncident:async()=>{},Date,Uint8Array,console:{error(){}},
   createDocumentTask:()=>createDocumentTask(25),
   getCustomsState:async()=>null,cleanupTemporaryMessages:async()=>{},trackTemporaryMessage:async()=>{},
   telegram:async(_env,method,data)=>{

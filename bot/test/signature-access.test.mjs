@@ -50,7 +50,7 @@ const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
 function extract(name){const start=source.indexOf(`async function ${name}(`);assert.ok(start>=0,name);return source.slice(start,source.indexOf('\n}',start)+2)}
 test('admin card button grants and revokes access; forged and group callbacks do nothing',async t=>{
  const env=fixture(t),calls=[];
- const context=vm.createContext({canCheckSignature,setSignatureAccess,canCheckFts,setFtsAccess,escapeHtml:String,
+ const context=vm.createContext({reportBotIncident:async()=>{},canCheckSignature,setSignatureAccess,canCheckFts,setFtsAccess,escapeHtml:String,
   getAnalyticsUser:async(_db,id)=>({user_id:id,first_name:'Test'}),
   telegram:async(_env,method,data)=>{calls.push({method,data});},clearAdminSession:async()=>{}});
  vm.runInContext(extract('showAnalyticsUser')+'\n'+extract('handleAnalyticsCallback'),context);
@@ -71,7 +71,7 @@ test('admin card button grants and revokes access; forged and group callbacks do
 });
 test('upload uses actual sender permission; group calculation never enables signature screening',async t=>{
  const env=fixture(t),checks=[],completed=[];
- const context=vm.createContext({createDocumentTask,Date,Uint8Array,canCheckSignature,
+ const context=vm.createContext({reportBotIncident:async()=>{},createDocumentTask,Date,Uint8Array,canCheckSignature,
   getCustomsState:async()=>null,cleanupTemporaryMessages:async()=>{},trackTemporaryMessage:async()=>{},
   telegram:async(_env,method)=>method==='getFile'?{file_path:'test.pdf'}:{message_id:1},
   fetch:async()=>({ok:true,arrayBuffer:async()=>new ArrayBuffer(0)}),
@@ -94,7 +94,7 @@ test('document pipeline skips inspection on success and failure unless explicitl
  const start=source.indexOf('export async function processVehicleDocument(');
  const body=source.slice(start,source.indexOf('\n}',start)+2).replace('export ','');
  let inspections=0,fail=false;
- const context=vm.createContext({Date,readPdf:async()=>{if(fail)throw Error('bad PDF');return {text:'x'.repeat(50)}},
+ const context=vm.createContext({reportBotIncident:async()=>{},Date,readPdf:async()=>{if(fail)throw Error('bad PDF');return {text:'x'.repeat(50)}},
   inspectPdfScreening:async()=>{inspections++;return {presence:'present'}},
   parseVehicleDocument:()=>({ccm:1997}),calculateUtil:()=>[{commercial:123}],addWorkingDays:()=>null});
  vm.runInContext(body,context);

@@ -1,3 +1,4 @@
+import { monitorBotOperation } from './bot-monitoring.js';
 import { DurableObject } from 'cloudflare:workers';
 import { subscribeFts, runFtsAlarm } from './fts.js';
 
@@ -57,13 +58,16 @@ export class ApplicationsStore extends DurableObject {
   async alarm() {
     const send = async (env, method, data) => {
       const response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+        signal: AbortSignal.timeout(10000), method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
       });
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(`FTS delivery failed: ${result.description || response.status}`);
       return result.result;
     };
-    await runFtsAlarm(this.ctx.storage, this.env, send);
+    const job = await this.ctx.storage.get('fts-job');
+    await monitorBotOperation(this.env, { section: 'fts', stage: 'проверка ФТС', code: 'FTS_ALARM_ERROR',
+      userId: Object.values(job?.subscribers || {})[0]?.userId, maxMs: 180000 },
+      () => runFtsAlarm(this.ctx.storage, this.env, send));
   }
 
   async geocodePlace(query, endpoint = 'https://nominatim.openstreetmap.org/search') {
