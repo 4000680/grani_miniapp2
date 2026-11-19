@@ -4,6 +4,7 @@ import { canCheckSignature, setSignatureAccess, filterSignatureState } from './s
 import { canCheckFts, setFtsAccess } from './fts-access.js';
 import { offerFtsCheck, handleFtsCallback } from './fts.js';
 import { handleWebsiteFts } from './fts-website.js';
+import { handleWebsiteCalculator } from './website-calculator.js';
 import { SERVICES, openService, handleServiceMessage, handleServiceCallback, clearServiceSession } from './service-requests.js';
 import { PAYMENT_QR_PNG } from './payment-qr.js';
 import { signatureStatusText } from './pdf-signature.js';
@@ -5057,6 +5058,8 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === '/api/website/fts') return handleWebsiteFts(request, env);
+      const websiteCalculator = url.pathname.match(/^\/api\/website\/util\/(options|manual|document|declaration)$/);
+      if (websiteCalculator) return handleWebsiteCalculator(request, websiteCalculator[1]);
       if (url.pathname === '/api/applications') return handleApplicationsApi(request, env);
       if (url.pathname === '/api/profile') return handleMiniAppProfile(request, env);
       if (url.pathname === '/api/actions') return handleMiniAppAction(request, env);
@@ -5067,7 +5070,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'website-monitor-v47' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'website-calculator-v48' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
