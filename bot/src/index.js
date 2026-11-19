@@ -3,6 +3,7 @@ import { createDocumentTask } from './document-task.js';
 import { canCheckSignature, setSignatureAccess, filterSignatureState } from './signature-access.js';
 import { canCheckFts, setFtsAccess } from './fts-access.js';
 import { offerFtsCheck, handleFtsCallback } from './fts.js';
+import { handleWebsiteFts } from './fts-website.js';
 import { SERVICES, openService, handleServiceMessage, handleServiceCallback, clearServiceSession } from './service-requests.js';
 import { PAYMENT_QR_PNG } from './payment-qr.js';
 import { signatureStatusText } from './pdf-signature.js';
@@ -5055,6 +5056,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     try {
+      if (url.pathname === '/api/website/fts') return handleWebsiteFts(request, env);
       if (url.pathname === '/api/applications') return handleApplicationsApi(request, env);
       if (url.pathname === '/api/profile') return handleMiniAppProfile(request, env);
       if (url.pathname === '/api/actions') return handleMiniAppAction(request, env);
@@ -5065,7 +5067,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'admin-error-monitor-v45' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'website-fts-v46' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {

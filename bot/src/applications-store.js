@@ -1,6 +1,7 @@
 import { monitorBotOperation } from './bot-monitoring.js';
 import { DurableObject } from 'cloudflare:workers';
 import { subscribeFts, runFtsAlarm } from './fts.js';
+import { checkWebsiteFts } from './fts-website.js';
 
 const MAX_APPLICATIONS = 20;
 
@@ -53,6 +54,10 @@ export class ApplicationsStore extends DurableObject {
 
   async subscribeFts(input) {
     return subscribeFts(this.ctx.storage, this.env, input);
+  }
+
+  async checkWebsiteFts(vin, browserId, ipKey) {
+    return checkWebsiteFts(this.ctx.storage, this.env, vin, browserId, ipKey);
   }
 
   async alarm() {

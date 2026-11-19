@@ -30,13 +30,17 @@ jobs:
         timeout-minutes: 5
         run: |
           node --input-type=module <<'NODE'
-          const endpoint = 'https://grani-miniapp2.4000680.workers.dev/';
+          const endpoint = 'https://grani-miniapp2.4000680.workers.dev/api/website/fts';
           for (let attempt = 0; attempt < 24; attempt++) {
             try {
-              const response = await fetch(endpoint, { signal: AbortSignal.timeout(10000), cache: 'no-store' });
+              const response = await fetch(endpoint, {
+                method: 'POST', signal: AbortSignal.timeout(10000), cache: 'no-store',
+                headers: { Origin: 'https://grani-br.ru', 'Content-Type': 'application/json' },
+                body: '{}'
+              });
               const health = await response.json();
-              console.log('Deployed version:', health.version);
-              if (response.ok && health.version === 'fts-declaration-stage-v43') process.exit(0);
+              console.log('Endpoint validation status:', response.status);
+              if (response.status === 400 && health.code === 'INVALID_INPUT') process.exit(0);
             } catch (error) {
               console.log('Deployment check:', error.message);
             }
