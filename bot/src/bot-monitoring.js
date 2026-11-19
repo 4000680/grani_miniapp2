@@ -1,10 +1,10 @@
 import { createDocumentTask } from './document-task.js';
 
 const ready = new WeakMap();
-const sections = { document:'Загрузка PDF', group_document:'PDF в группе', fts:'Проверка ФТС', update:'Действие в боте', system:'Служебная задача' };
-const stages = new Set(['сохранение статуса загрузки','получение файла из Telegram','скачивание PDF из Telegram','проверка доступа к подписи','чтение PDF и расчёт','запуск проверки','обновление кнопки ФТС','проверка ФТС','доставка результата','обработка обновления']);
+const sections = { website_fts:'Сайт · проверка ФТС', admin:'Админка', document:'Загрузка PDF', group_document:'PDF в группе', fts:'Проверка ФТС', update:'Действие в боте', system:'Служебная задача' };
+const stages = new Set(['журнал ошибок','открытие карточки пользователя','открытие админки','запрос сайта к ФТС','сохранение статуса загрузки','получение файла из Telegram','скачивание PDF из Telegram','проверка доступа к подписи','чтение PDF и расчёт','запуск проверки','обновление кнопки ФТС','проверка ФТС','доставка результата','обработка обновления']);
 const reasons = {
- DOCUMENT_TIMEOUT:'Превышено время ожидания', DOCUMENT_ERROR:'Не удалось обработать документ',
+ WEBSITE_FTS_ERROR:'Сайт не получил результат проверки ФТС', DOCUMENT_TIMEOUT:'Превышено время ожидания', DOCUMENT_ERROR:'Не удалось обработать документ',
  FTS_START_FAILED:'Не удалось запустить проверку ФТС', FTS_BUTTON_FAILED:'Не удалось обновить кнопку ФТС',
  FTS_UNCERTAIN:'Сервис не подтвердил результат запроса ФТС', FTS_SOURCE_ERROR:'Источник ФТС вернул ошибку',
  FTS_BALANCE:'Недостаточно средств у сервиса проверки ФТС', FTS_ALARM_ERROR:'Сбой фоновой проверки или доставки ответа ФТС',
@@ -92,6 +92,6 @@ export async function pollBotMonitoring(env, send) {
   }
  }
  const cutoff=Date.now()-30*86400000;
- await db.prepare('DELETE FROM bot_incidents WHERE last_at<? AND notified=1').bind(cutoff).run();
+ await db.prepare('DELETE FROM bot_incidents WHERE last_at<?').bind(cutoff).run();
  await db.prepare("DELETE FROM bot_operations WHERE started_at<? AND state!='running'").bind(cutoff).run();
 }

@@ -1,3 +1,4 @@
+import { reportBotIncident } from './bot-monitoring.js';
 import { requestFts } from './fts.js';
 
 const origins = new Set(['https://grani-br.ru', 'https://www.grani-br.ru']);
@@ -68,14 +69,23 @@ export async function handleWebsiteFts(request, env) {
       typeof input.browserId !== 'string' || !browserPattern.test(input.browserId)) {
     return respond({ code: 'INVALID_INPUT' }, 400);
   }
+  const reportFailure = () => reportBotIncident(env, {
+    section: 'website_fts', stage: 'запрос сайта к ФТС', code: 'WEBSITE_FTS_ERROR',
+  });
   const ip = request.headers.get('CF-Connecting-IP');
-  if (!env.AVC_TOKEN || !env.APPLICATIONS || !ip) return respond({ code: 'UNAVAILABLE' }, 503);
+  if (!ip) return respond({ code: 'UNAVAILABLE' }, 503);
+  if (!env.AVC_TOKEN || !env.APPLICATIONS) {
+    await reportFailure();
+    return respond({ code: 'UNAVAILABLE' }, 503);
+  }
   try {
     const ipKey = await networkKey(env.AVC_TOKEN, ip);
     const result = await env.APPLICATIONS.getByName('website-fts').checkWebsiteFts(input.vin, input.browserId, ipKey);
     const status = result.code?.endsWith('_LIMIT') ? 429 : result.code ? 503 : result.pending ? 202 : 200;
+    if (status === 503) await reportFailure();
     return respond(result, status);
   } catch {
+    await reportFailure();
     return respond({ code: 'UNAVAILABLE' }, 503);
   }
 }

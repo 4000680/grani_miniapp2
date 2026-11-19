@@ -5067,7 +5067,7 @@ export default {
       }
       if (request.method === 'GET' && url.pathname.startsWith('/setup/')) return setupBot(request, env);
       if (request.method === 'GET' && url.pathname === '/') {
-        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'website-fts-v46' });
+        return Response.json({ ok: true, service: 'grani-telegram-bot', version: 'website-monitor-v47' });
       }
       if (request.method !== 'POST' || url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (!env.WEBHOOK_SECRET || request.headers.get('x-telegram-bot-api-secret-token') !== env.WEBHOOK_SECRET) {
@@ -5075,8 +5075,13 @@ export default {
       }
       const update = await request.json();
       const actor = update.message?.from || update.callback_query?.from;
-      const section = update.message?.document ? 'document' : update.callback_query?.data?.startsWith('fts:') ? 'fts' : 'update';
-      ctx.waitUntil(monitorBotOperation(env, { section, userId: actor?.id, stage: section === 'fts' ? 'запуск проверки' : 'обработка обновления' },
+      const action = update.callback_query?.data;
+      const adminStage = action === 'analytics:errors' ? 'журнал ошибок'
+        : action?.startsWith('analytics:user:') ? 'открытие карточки пользователя'
+        : action?.startsWith('analytics:') || /^\/admin(?:@\w+)?(?:\s|$)/i.test(update.message?.text || '') ? 'открытие админки' : null;
+      const section = adminStage ? 'admin' : update.message?.document ? 'document' : action?.startsWith('fts:') ? 'fts' : 'update';
+      const stage = adminStage || (section === 'fts' ? 'запуск проверки' : 'обработка обновления');
+      ctx.waitUntil(monitorBotOperation(env, { section, userId: actor?.id, stage },
         () => handleUpdate(env, update)).catch(async error => {
         console.error('Update handling failed',error);
         const message=update.message || update.callback_query?.message;
