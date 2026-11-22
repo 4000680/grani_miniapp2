@@ -7,7 +7,7 @@
   "services": [
     {
       "binding": "BLOG_EDITOR",
-      "service": "grani-blog-editor",
+      "service": "grani-br-blog",
       "entrypoint": "EditorialService"
     }
   ],
