@@ -1,3 +1,4 @@
+import { handleEditorialReply } from './editorial-review.js';
 import { reportBotIncident, monitorBotOperation, pollBotMonitoring, listBotIncidents, incidentText } from './bot-monitoring.js';
 import { createDocumentTask } from './document-task.js';
 import { canCheckSignature, setSignatureAccess, filterSignatureState } from './signature-access.js';
@@ -4903,6 +4904,7 @@ async function handleAnalyticsAdminText(env, message) {
 }
 
 async function handleUpdate(env, update) {
+  if (update.message && await handleEditorialReply(env, update.message, telegram)) return;
   if (env.ANALYTICS_DB) {
     try { await trackUpdate(env.ANALYTICS_DB, update); }
     catch (error) { console.error('Analytics tracking failed', error); }
