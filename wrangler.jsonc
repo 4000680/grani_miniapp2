@@ -4,6 +4,13 @@
   "main": "bot/src/index.js",
   "compatibility_date": "2026-09-01",
   "keep_vars": true,
+  "services": [
+    {
+      "binding": "BLOG_EDITOR",
+      "service": "grani-br-blog",
+      "entrypoint": "EditorialService"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "ANALYTICS_DB",

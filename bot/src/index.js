@@ -4903,6 +4903,18 @@ async function handleAnalyticsAdminText(env, message) {
 }
 
 async function handleUpdate(env, update) {
+  const editorialMessage = update.message;
+  const editorialParent = editorialMessage?.reply_to_message;
+  const editorId = String(env.EDITORIAL_REVIEW_ADMIN_ID || env.ADMIN_ID || env.ADMIN_TELEGRAM_ID || '');
+  if (env.BLOG_EDITOR && editorId && editorialMessage?.chat?.type === 'private'
+      && String(editorialMessage.from?.id) === editorId && String(editorialMessage.chat.id) === editorId
+      && editorialParent?.from?.is_bot && String(editorialParent.from.id) === env.BOT_TOKEN?.split(':')[0]
+      && editorialParent?.document?.file_name === 'lgotnyy-utilsbor-2026.html'
+      && ['Льготный утильсбор · HTML-превью сайта на согласование',
+        'Льготный утильсбор · обновлённое HTML-превью для согласования',
+      ].some((prefix) => editorialParent.caption?.startsWith(prefix))) {
+    if (await env.BLOG_EDITOR.handleReply(editorialMessage)) return;
+  }
   if (env.ANALYTICS_DB) {
     try { await trackUpdate(env.ANALYTICS_DB, update); }
     catch (error) { console.error('Analytics tracking failed', error); }
