@@ -48,7 +48,7 @@ test('access is closed by default and a grant can be revoked only by the admin',
   assert.equal(await canUseBlueInk(env, 200), false);
 });
 
-test('a photo becomes a downloadable PNG once and its result can be deleted', async t => {
+test('a document becomes a downloadable PNG once and its result can be deleted', async t => {
   const env = fixture(t);
   await setBlueInkAccess(env, 100, 200, true);
   const calls = [];
@@ -69,6 +69,9 @@ test('a photo becomes a downloadable PNG once and its result can be deleted', as
     if (url.startsWith('https://api.telegram.org/')) return new Response(sample);
     const payload = JSON.parse(options.body);
     requests.push(payload);
+    if (url.includes('gemini-3.1-flash-lite:')) {
+      return Response.json({ candidates: [{ content: { parts: [{ text: 'OTHER' }] } }] });
+    }
     const part = { inlineData: { mimeType: 'image/png', data: Buffer.from(sample).toString('base64') } };
     return Response.json({ candidates: [{ content: { parts: [part] } }] });
   });
@@ -77,9 +80,9 @@ test('a photo becomes a downloadable PNG once and its result can be deleted', as
   const message = { chat, from, message_id: 11, photo: [{ file_id: 'input' }] };
   assert.equal(await handleBlueInkUpload(env, message, store, telegram), true);
   assert.equal(await handleBlueInkUpload(env, message, store, telegram), true);
-  assert.equal(requests.length, 1);
+  assert.equal(requests.length, 2);
   assert.equal(requests[0].contents[0].parts[1].inlineData.mimeType, 'image/png');
-  assert.match(requests[0].contents[0].parts[0].text, /visual reference/);
+  assert.match(requests[1].contents[0].parts[0].text, /visual reference/);
   const result = calls.find(([method]) => method === 'sendDocument')[1];
   assert.match(result.get('reply_markup'), /blueink:retry/);
   assert.deepEqual(calls.at(-1), ['deleteMessage', { chat_id: 200, message_id: 11 }]);
@@ -111,4 +114,31 @@ test('retry deletes the previous PNG before opening a new upload', async t => {
   assert.deepEqual(calls[0], ['deleteMessage', { chat_id: 200, message_id: 12 }]);
   assert.match(calls[1][1].text, /Пришлите фото/);
   assert.deepEqual(calls[2], ['open', 13]);
+});
+
+test('standalone sketch is recolored at the same pixel positions without image generation', async t => {
+  const env = fixture(t);
+  await setBlueInkAccess(env, 100, 200, true);
+  const input = encode({ width: 3, height: 1, channels: 1,
+    data: Uint8Array.of(250, 18, 251) });
+  const requested = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    if (url.startsWith('https://api.telegram.org/')) return new Response(input);
+    requested.push(url);
+    return Response.json({ candidates: [{ content: { parts: [{ text: 'DRAWING' }] } }] });
+  });
+  let result;
+  const telegram = async (_env, name, data) => {
+    if (name === 'getFile') return { file_path: 'sketch.png' };
+    if (name === 'sendDocument') result = data.get('document');
+  };
+  await handleBlueInkUpload(env, {
+    chat: { type: 'private', id: 200 }, from: { id: 200 }, message_id: 11, photo: [{ file_id: 'sketch' }]
+  }, { async claimBlueInkUpload() { return { promptId: 10 }; } }, telegram);
+  assert.equal(requested.length, 1);
+  assert.match(requested[0], /flash-lite:generateContent/);
+  const { width, height, data } = decode(new Uint8Array(await result.arrayBuffer()));
+  assert.deepEqual([width, height], [3, 1]);
+  assert.deepEqual([...data.slice(0, 3), ...data.slice(6)], Array(6).fill(255));
+  assert.ok(data[3] < data[4] && data[4] < data[5] && data[5] < 255);
 });
