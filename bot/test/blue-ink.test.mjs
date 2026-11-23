@@ -142,3 +142,17 @@ test('standalone sketch is recolored at the same pixel positions without image g
   assert.deepEqual([...data.slice(0, 3), ...data.slice(6)], Array(6).fill(255));
   assert.ok(data[3] < data[4] && data[4] < data[5] && data[5] < 255);
 });
+
+test('white margins are cropped without scaling or distorting the strokes', () => {
+  const width = 100;
+  const height = 80;
+  const data = new Uint8Array(width * height * 3).fill(255);
+  for (const x of [35, 50]) data.set([20, 50, 155], (40 * width + x) * 3);
+  const result = decode(whiteAndBluePng(encode({ width, height, channels: 3, data })));
+  assert.deepEqual([result.width, result.height], [32, 17]);
+  const bluePixels = [];
+  for (let pixel = 0; pixel < result.data.length; pixel += 3) {
+    if (result.data[pixel] < 255) bluePixels.push(pixel / 3);
+  }
+  assert.deepEqual(bluePixels, [8 * result.width + 8, 8 * result.width + 23]);
+});
