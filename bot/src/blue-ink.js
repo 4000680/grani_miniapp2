@@ -3,6 +3,10 @@ import jpeg from 'jpeg-js';
 import { canUseBlueInk } from './blue-ink-access.js';
 
 const maxBytes = 3 * 1024 * 1024;
+const inkLuminance = 0.2126 * 234 + 0.7152 * 198 + 0.0722 * 91;
+const [inkRed, inkGreen, inkBlue] = [234, 198, 91].map(channel =>
+  inkLuminance + 1.05 * (channel - inkLuminance)
+);
 const inputTypes = new Set(['image/png', 'image/jpeg']);
 const fileName = 'blue-ink.png';
 const deleteAction = 'blueink:delete';
@@ -53,9 +57,9 @@ export function whiteAndBluePng(bytes, preserveStrokes = false) {
       right = Math.max(right, x);
       bottom = Math.max(bottom, y);
     }
-    rgb[pos] = Math.round(255 - ink * 234);
-    rgb[pos + 1] = Math.round(255 - ink * 198);
-    rgb[pos + 2] = Math.round(255 - ink * 91);
+    rgb[pos] = Math.round(255 - ink * inkRed);
+    rgb[pos + 1] = Math.round(255 - ink * inkGreen);
+    rgb[pos + 2] = Math.round(255 - ink * inkBlue);
   }
   if (!hasInk) throw new Error('Generated image has no blue strokes');
   const margin = Math.max(8, Math.ceil(Math.max(right - left + 1, bottom - top + 1) * 0.06));
