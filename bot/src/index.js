@@ -1,3 +1,5 @@
+import { canUseBlueInk, setBlueInkAccess } from './blue-ink-access.js';
+import { handleBlueInkCallback, handleBlueInkUpload } from './blue-ink.js';
 import { reportBotIncident, monitorBotOperation, pollBotMonitoring, listBotIncidents, incidentText } from './bot-monitoring.js';
 import { createDocumentTask } from './document-task.js';
 import { canCheckSignature, setSignatureAccess, filterSignatureState } from './signature-access.js';
@@ -207,6 +209,14 @@ function menuKeyboard(env) {
       ]
     ]
   };
+}
+
+async function personalMenuKeyboard(env, userId) {
+  const keyboard = menuKeyboard(env);
+  if (env.GEMINI_API_KEY && env.APPLICATIONS && await canUseBlueInk(env, userId)) {
+    keyboard.inline_keyboard.splice(-1, 0, [{ text: '✍️ Синяя надпись', callback_data: 'blueink:start' }]);
+  }
+  return keyboard;
 }
 
 function servicesKeyboard() {
@@ -3670,7 +3680,14 @@ async function handleGroupCalculation(env, query) {
   }
 }
 
+async function closeBlueInkPrompt(env, userId) {
+  if (!env.GEMINI_API_KEY) return;
+  const promptId = await applicationsStub(env, userId)?.cancelBlueInkUpload();
+  if (promptId) await deleteBotMessage(env, userId, promptId);
+}
+
 async function sendMenu(env, chatId, text = MENU_TEXT) {
+  await closeBlueInkPrompt(env, chatId);
   await clearSupportSession(env, chatId);
   await clearOrganizationCatalogState(env, chatId);
   await resetCustomsFlowForMainMenu(env, chatId);
@@ -3680,7 +3697,7 @@ async function sendMenu(env, chatId, text = MENU_TEXT) {
     chat_id: chatId,
     text,
     parse_mode: 'HTML',
-    reply_markup: menuKeyboard(env)
+    reply_markup: await personalMenuKeyboard(env, chatId)
   });
   await trackTemporaryMessage(env, chatId, sent.message_id);
   return sent;
@@ -3697,7 +3714,7 @@ async function editMenu(env, message) {
     message_id: message.message_id,
     text: MENU_TEXT,
     parse_mode: 'HTML',
-    reply_markup: menuKeyboard(env)
+    reply_markup: await personalMenuKeyboard(env, message.chat.id)
   });
   await trackTemporaryMessage(env, message.chat.id, message.message_id);
   return edited;
@@ -4648,15 +4665,17 @@ async function showAnalyticsUser(env, message, userId) {
   }
   const signatureEnabled = await canCheckSignature(env, user.user_id);
   const ftsEnabled = await canCheckFts(env, user.user_id);
+  const blueInkEnabled = await canUseBlueInk(env, user.user_id);
   const username = user.username ? `@${escapeHtml(user.username)}` : 'не указан';
   const name = [user.first_name, user.last_name].filter(Boolean).map(escapeHtml).join(' ') || 'не указано';
   const profile = user.username ? `\n<a href="https://t.me/${encodeURIComponent(user.username)}">Открыть профиль Telegram</a>` : '';
   const text = `👤 <b>Карточка пользователя</b>\n\nИмя: ${name}\nUsername: ${username}\nID: <code>${escapeHtml(user.user_id)}</code>\nПервый запуск: ${escapeHtml(user.first_seen_at)}\nПоследняя активность: ${escapeHtml(user.last_seen_at)}\nАктивных дней: ${user.active_days}\nДействий: ${user.actions}\nРасчётов: ${user.calculations}\nДоставка сообщений: ${user.chat_available ? 'доступна' : 'недоступна'}${profile}\nПроверка подписи: <b>${signatureEnabled ? 'включена' : 'выключена'}</b>`;
   await telegram(env, 'editMessageText', {
-    chat_id: message.chat.id, message_id: message.message_id, text: `${text}\nПроверка ФТС: <b>${ftsEnabled ? 'включена' : 'выключена'}</b>`, parse_mode: 'HTML',
+    chat_id: message.chat.id, message_id: message.message_id, text: `${text}\nПроверка ФТС: <b>${ftsEnabled ? 'включена' : 'выключена'}</b>\nСиняя надпись: <b>${blueInkEnabled ? 'включена' : 'выключена'}</b>`, parse_mode: 'HTML',
     reply_markup: { inline_keyboard: [
       [{ text: signatureEnabled ? '🔐 Отключить проверку подписи' : '🔓 Включить проверку подписи', callback_data: `analytics:signature:${user.user_id}:${signatureEnabled ? 'off' : 'on'}` }],
       [{ text: ftsEnabled ? '🔐 Отключить проверку ФТС' : '🔓 Включить проверку ФТС', callback_data: `analytics:fts:${user.user_id}:${ftsEnabled ? 'off' : 'on'}` }],
+      [{ text: blueInkEnabled ? '🔐 Отключить синюю надпись' : '🔓 Включить синюю надпись', callback_data: `analytics:blueink:${user.user_id}:${blueInkEnabled ? 'off' : 'on'}` }],
       [{ text: '✉️ Написать', callback_data: `analytics:write:${user.user_id}` }],
       [{ text: '💬 Переписка', callback_data: `analytics:conversation:${user.user_id}:0` }],
       [{ text: '📜 История', callback_data: `analytics:history:${user.user_id}:0` }],
@@ -4746,6 +4765,18 @@ async function handleAnalyticsCallback(env, query) {
   } else if (data.startsWith('analytics:segment:')) {
     const [, , segment, offset] = data.split(':');
     await showAnalyticsUsers(env, message, segment, Math.max(0, Number(offset) || 0));
+  } else if (data.startsWith('analytics:blueink:')) {
+    const match = data.match(/^analytics:blueink:([1-9]\d{0,15}):(on|off)$/);
+    if (!match) return true;
+    const [, userId, action] = match;
+    if (!await getAnalyticsUser(env.ANALYTICS_DB, userId)) return true;
+    try {
+      await setBlueInkAccess(env, query.from.id, userId, action === 'on');
+    } catch {
+      await telegram(env, 'sendMessage', { chat_id: message.chat.id, text: 'Не удалось сохранить доступ. Попробуйте ещё раз.' });
+      return true;
+    }
+    await showAnalyticsUser(env, message, userId);
   } else if (data.startsWith('analytics:fts:')) {
     const match = data.match(/^analytics:fts:([1-9]\d{0,15}):(on|off)$/);
     if (!match) return true;
@@ -4950,6 +4981,9 @@ async function handleUpdate(env, update) {
       })) return;
     } catch (error) { console.error('CRM reply handling failed', error); }
   }
+  if (update.message?.chat?.type === 'private'
+    && (update.message.photo || update.message.document)
+    && await handleBlueInkUpload(env, update.message, applicationsStub(env, update.message.from?.id), telegram)) return;
   if (update.message?.document) {
     if (isGroupChat(update.message.chat)) await offerGroupCalculation(env, update.message);
     else await handleDocument(env, update.message);
@@ -5000,6 +5034,16 @@ async function handleUpdate(env, update) {
   }
   await telegram(env, 'answerCallbackQuery', { callback_query_id: query.id });
   if (!query.message) return;
+  if (query.message.chat.type === 'private') {
+    if (await handleBlueInkCallback(env, query, applicationsStub(env, query.from?.id), telegram, sendMenu)) {
+      if (query.data === 'blueink:start') {
+        await clearServiceSession(env, query.from.id);
+        await clearSupportSession(env, query.from.id);
+      }
+      return;
+    }
+    await closeBlueInkPrompt(env, query.from?.id);
+  }
   if (await handleFtsCallback(env, query, telegram)) return;
   if (await handleServiceCallback(env, query, telegram)) return;
   await clearServiceSession(env, query.from?.id || query.message.chat.id);

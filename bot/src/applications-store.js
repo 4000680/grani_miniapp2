@@ -177,6 +177,35 @@ export class ApplicationsStore extends DurableObject {
     await this.ctx.storage.delete('customs-state');
   }
 
+  async openBlueInkUpload(promptId) {
+    return this.ctx.storage.transaction(async tx => {
+      const previous = await tx.get('blue-ink-prompt');
+      if (!previous || previous.promptId < promptId) {
+        await tx.put('blue-ink-prompt', { promptId, expires: Date.now() + 10 * 60 * 1000 });
+        return previous?.promptId;
+      }
+      return promptId;
+    });
+  }
+
+  async claimBlueInkUpload(messageId) {
+    return this.ctx.storage.transaction(async tx => {
+      const previous = await tx.get('blue-ink-last-input');
+      if (previous && previous.messageId >= messageId && previous.expires > Date.now()) return 'duplicate';
+      const prompt = await tx.get('blue-ink-prompt');
+      if (!prompt || prompt.promptId >= messageId || prompt.expires <= Date.now()) return null;
+      await tx.delete('blue-ink-prompt');
+      await tx.put('blue-ink-last-input', { messageId, expires: Date.now() + 10 * 60 * 1000 });
+      return prompt;
+    });
+  }
+
+  async cancelBlueInkUpload() {
+    const prompt = await this.ctx.storage.get('blue-ink-prompt');
+    await this.ctx.storage.delete('blue-ink-prompt');
+    return prompt?.promptId;
+  }
+
   async getMessageFlowState() {
     return (await this.ctx.storage.get('message-flow-state')) || null;
   }

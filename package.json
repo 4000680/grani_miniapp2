@@ -15,6 +15,8 @@
   },
   "dependencies": {
     "asn1js": "^4.0.0",
+    "fast-png": "^8.0.0",
+    "jpeg-js": "^0.4.4",
     "node-gost-crypto": "^1.0.2",
     "pdf-lib": "^1.17.1",
     "pkijs": "^4.0.1",

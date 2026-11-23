@@ -314,7 +314,7 @@ test('administrator card grants and revokes FTS independently; ordinary and grou
   const env = fixture(t), calls = [];
   const source = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
   const extract = name => { const start = source.indexOf(`async function ${name}(`); return source.slice(start, source.indexOf('\n}', start) + 2); };
-  const context = vm.createContext({reportBotIncident:async()=>{}, canCheckSignature: async () => false, canCheckFts, setFtsAccess, escapeHtml: String,
+  const context = vm.createContext({reportBotIncident:async()=>{}, canUseBlueInk:async()=>false,canCheckSignature: async () => false, canCheckFts, setFtsAccess, escapeHtml: String,
     getAnalyticsUser: async (_db, id) => ({ user_id: id }), clearAdminSession: async () => {},
     telegram: async (_env, method, data) => calls.push(data) });
   vm.runInContext(extract('showAnalyticsUser') + '\n' + extract('handleAnalyticsCallback'), context);

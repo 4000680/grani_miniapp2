@@ -50,7 +50,7 @@ const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8');
 function extract(name){const start=source.indexOf(`async function ${name}(`);assert.ok(start>=0,name);return source.slice(start,source.indexOf('\n}',start)+2)}
 test('admin card button grants and revokes access; forged and group callbacks do nothing',async t=>{
  const env=fixture(t),calls=[];
- const context=vm.createContext({reportBotIncident:async()=>{},canCheckSignature,setSignatureAccess,canCheckFts,setFtsAccess,escapeHtml:String,
+ const context=vm.createContext({reportBotIncident:async()=>{},canUseBlueInk:async()=>false,canCheckSignature,setSignatureAccess,canCheckFts,setFtsAccess,escapeHtml:String,
   getAnalyticsUser:async(_db,id)=>({user_id:id,first_name:'Test'}),
   telegram:async(_env,method,data)=>{calls.push({method,data});},clearAdminSession:async()=>{}});
  vm.runInContext(extract('showAnalyticsUser')+'\n'+extract('handleAnalyticsCallback'),context);
