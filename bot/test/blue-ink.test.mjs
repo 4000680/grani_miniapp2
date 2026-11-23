@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { encode, decode } from 'fast-png';
 import { canUseBlueInk, setBlueInkAccess } from '../src/blue-ink-access.js';
-import { handleBlueInkCallback, handleBlueInkUpload, readApprovedWord, whiteAndBluePng } from '../src/blue-ink.js';
+import { handleBlueInkCallback, handleBlueInkUpload, whiteAndBluePng } from '../src/blue-ink.js';
 
 function fixture(t) {
   const sqlite = new DatabaseSync(':memory:');
@@ -35,14 +35,6 @@ test('PNG turns neutral background pure white and retains different blue stroke 
   assert.deepEqual([...data.slice(0, 3)], [255, 255, 255]);
   assert.ok(data[5] > data[4] && data[4] > data[3]);
   assert.ok(data[6] > data[3] && data[6] < 255);
-});
-
-test('classification must approve a single plain word', () => {
-  const read = (approved, word) => readApprovedWord([{ text: JSON.stringify({ approved, word }) }]);
-  assert.equal(read(true, 'Весна'), 'Весна');
-  assert.equal(read(false, 'Весна'), null);
-  assert.equal(read(true, 'И.И.'), null);
-  assert.equal(read(true, 'Два слова'), null);
 });
 
 test('access is closed by default and a grant can be revoked only by the admin', async t => {
@@ -77,8 +69,7 @@ test('a photo becomes a downloadable PNG once and its result can be deleted', as
     if (url.startsWith('https://api.telegram.org/')) return new Response(sample);
     const payload = JSON.parse(options.body);
     requests.push(payload);
-    const part = requests.length === 1 ? { text: '{"approved":true,"word":"Весна"}' }
-      : { inlineData: { mimeType: 'image/png', data: Buffer.from(sample).toString('base64') } };
+    const part = { inlineData: { mimeType: 'image/png', data: Buffer.from(sample).toString('base64') } };
     return Response.json({ candidates: [{ content: { parts: [part] } }] });
   });
   const chat = { type: 'private', id: 200 };
@@ -86,10 +77,9 @@ test('a photo becomes a downloadable PNG once and its result can be deleted', as
   const message = { chat, from, message_id: 11, photo: [{ file_id: 'input' }] };
   assert.equal(await handleBlueInkUpload(env, message, store, telegram), true);
   assert.equal(await handleBlueInkUpload(env, message, store, telegram), true);
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 1);
   assert.equal(requests[0].contents[0].parts[1].inlineData.mimeType, 'image/png');
-  assert.equal(requests[1].contents[0].parts.length, 1);
-  assert.match(requests[1].contents[0].parts[0].text, /Весна/);
+  assert.match(requests[0].contents[0].parts[0].text, /visual reference/);
   const output = calls.find(([method]) => method === 'sendDocument')[1].get('document');
   assert.equal(output.name, 'blue-ink.png');
   assert.equal(output.type, 'image/png');
