@@ -34,6 +34,7 @@ export function whiteAndBluePng(bytes, preserveStrokes = false) {
   const { width, height, data, channels } = image;
   const rgb = new Uint8Array(width * height * 3);
   let hasInk = false;
+  let left = width, top = height, right = -1, bottom = -1;
   for (let pos = 0, pixel = 0; pos < rgb.length; pos += 3, pixel += channels) {
     const red = data[pixel];
     const green = channels >= 3 ? data[pixel + 1] : red;
@@ -44,12 +45,33 @@ export function whiteAndBluePng(bytes, preserveStrokes = false) {
       : blue - red > 8 && blue - green > 3
         ? alpha * Math.max(0, (242 - red) / 242) : 0;
     hasInk ||= ink > 0.1;
+    if (ink > 0.01) {
+      const y = Math.floor(pos / (width * 3));
+      const x = (pos / 3) % width;
+      left = Math.min(left, x);
+      top = Math.min(top, y);
+      right = Math.max(right, x);
+      bottom = Math.max(bottom, y);
+    }
     rgb[pos] = Math.round(255 - ink * 234);
     rgb[pos + 1] = Math.round(255 - ink * 198);
     rgb[pos + 2] = Math.round(255 - ink * 91);
   }
   if (!hasInk) throw new Error('Generated image has no blue strokes');
-  return encode({ width, height, channels: 3, data: rgb });
+  const margin = Math.max(8, Math.ceil(Math.max(right - left + 1, bottom - top + 1) * 0.06));
+  left = Math.max(0, left - margin);
+  top = Math.max(0, top - margin);
+  right = Math.min(width - 1, right + margin);
+  bottom = Math.min(height - 1, bottom + margin);
+  const outputWidth = right - left + 1;
+  const outputHeight = bottom - top + 1;
+  const cropped = new Uint8Array(outputWidth * outputHeight * 3);
+  const rowBytes = outputWidth * 3;
+  for (let y = 0; y < outputHeight; y++) {
+    const start = ((top + y) * width + left) * 3;
+    cropped.set(rgb.subarray(start, start + rowBytes), y * rowBytes);
+  }
+  return encode({ width: outputWidth, height: outputHeight, channels: 3, data: cropped });
 }
 
 async function gemini(env, model, parts, generationConfig, timeout) {
