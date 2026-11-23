@@ -80,7 +80,10 @@ test('a photo becomes a downloadable PNG once and its result can be deleted', as
   assert.equal(requests.length, 1);
   assert.equal(requests[0].contents[0].parts[1].inlineData.mimeType, 'image/png');
   assert.match(requests[0].contents[0].parts[0].text, /visual reference/);
-  const output = calls.find(([method]) => method === 'sendDocument')[1].get('document');
+  const result = calls.find(([method]) => method === 'sendDocument')[1];
+  assert.match(result.get('reply_markup'), /blueink:retry/);
+  assert.deepEqual(calls.at(-1), ['deleteMessage', { chat_id: 200, message_id: 11 }]);
+  const output = result.get('document');
   assert.equal(output.name, 'blue-ink.png');
   assert.equal(output.type, 'image/png');
   assert.deepEqual([...decode(new Uint8Array(await output.arrayBuffer())).data.slice(0, 3)], [255, 255, 255]);
@@ -90,4 +93,22 @@ test('a photo becomes a downloadable PNG once and its result can be deleted', as
     message: { chat, message_id: 12, from: { is_bot: true }, document: { file_name: output.name } }
   }, store, telegram, async () => {});
   assert.deepEqual(calls.at(-1), ['deleteMessage', { chat_id: 200, message_id: 12 }]);
+});
+
+test('retry deletes the previous PNG before opening a new upload', async t => {
+  const env = fixture(t);
+  await setBlueInkAccess(env, 100, 200, true);
+  const calls = [];
+  const store = { async openBlueInkUpload(id) { calls.push(['open', id]); } };
+  const telegram = async (_env, method, args) => {
+    calls.push([method, args]);
+    return { message_id: 13 };
+  };
+  await handleBlueInkCallback(env, {
+    data: 'blueink:retry', from: { id: 200 },
+    message: { chat: { type: 'private', id: 200 }, message_id: 12, from: { is_bot: true }, document: { file_name: 'blue-ink.png' } }
+  }, store, telegram, async () => assert.fail('retry should open a new upload'));
+  assert.deepEqual(calls[0], ['deleteMessage', { chat_id: 200, message_id: 12 }]);
+  assert.match(calls[1][1].text, /Пришлите фото/);
+  assert.deepEqual(calls[2], ['open', 13]);
 });
