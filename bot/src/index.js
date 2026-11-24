@@ -1,5 +1,5 @@
 import { hasContractAccess, setContractAccess } from './contract-access.js';
-import { canFillContract, contractButton, handleContractCallback, handleContractMessage } from './contract-flow.js';
+import { canFillContract, closeContractDraft, handleContractCallback, handleContractMessage } from './contract-flow.js';
 import { canUseBlueInk, setBlueInkAccess } from './blue-ink-access.js';
 import { handleBlueInkCallback, handleBlueInkUpload } from './blue-ink.js';
 import { reportBotIncident, monitorBotOperation, pollBotMonitoring, listBotIncidents, incidentText } from './bot-monitoring.js';
@@ -37,7 +37,6 @@ import {
   calculatePeniDailySummary,
   calculateUtil,
   DocumentProcessingError,
-  extractContractApplicant,
   parseFlexibleDate,
   processVehicleDocument,
   todayUtc
@@ -216,9 +215,14 @@ function menuKeyboard(env) {
 
 async function personalMenuKeyboard(env, userId) {
   const keyboard = menuKeyboard(env);
+  const tools = [];
   if (env.GEMINI_API_KEY && env.APPLICATIONS && await canUseBlueInk(env, userId)) {
-    keyboard.inline_keyboard.splice(-1, 0, [{ text: '✍️ Синяя надпись', callback_data: 'blueink:start' }]);
+    tools.push({ text: '✍️ Подпись', callback_data: 'blueink:start' });
   }
+  if (env.CONTRACT_SERVICE_TOKEN && await canFillContract(env, userId)) {
+    tools.push({ text: '📝 Договор', callback_data: 'contract:open' });
+  }
+  if (tools.length) keyboard.inline_keyboard.splice(-1, 0, tools);
   return keyboard;
 }
 
@@ -3543,13 +3547,7 @@ async function handleDocument(env, message) {
       return new Uint8Array(await response.arrayBuffer());
     }, 10000);
     const checkSignature = message.chat.type === 'private' && await task.run('проверка доступа к подписи', () => canCheckSignature(env, message.from?.id), 1500).catch(() => false);
-    const { document: parsedDocument, vehicle, util, deadline } = await task.run('чтение PDF и расчёт', () => processVehicleDocument(bytes, new Date(), { checkSignature }));
-    if (declarationState?.mode === 'declaration') declarationState.fillContract = null;
-    if (declarationState?.mode === 'declaration' && vehicle.type === 'sbkts' && message.chat.type === 'private' && await canFillContract(env, userId)) {
-      declarationState.fillContract = await contractButton(env, userId, {
-        type: vehicle.type, contractApplicant: extractContractApplicant(parsedDocument)
-      }).catch(() => null);
-    }
+    const { vehicle, util, deadline } = await task.run('чтение PDF и расчёт', () => processVehicleDocument(bytes, new Date(), { checkSignature }));
     await finishDocumentCalculation(env, message, status, declarationState, vehicle, util, deadline);
   } catch (error) {
     const controlled = controlledDocumentError(error);
@@ -3696,6 +3694,7 @@ async function closeBlueInkPrompt(env, userId) {
 }
 
 async function sendMenu(env, chatId, text = MENU_TEXT) {
+  if (env.CONTRACT_SERVICE_TOKEN && Number(chatId) > 0) await closeContractDraft(env, chatId, telegram);
   await closeBlueInkPrompt(env, chatId);
   await clearSupportSession(env, chatId);
   await clearOrganizationCatalogState(env, chatId);
@@ -4206,9 +4205,6 @@ async function promptDeclarationCategory(env, chatId, userId, state, workingMess
 async function promptDeclarationFtsName(env, chatId, userId, state, workingMessage = null) {
   const next = { ...state, mode: 'declaration', stage: 'fts-name' };
   await setCustomsState(env, userId, next);
-  const fillContract = next.fillContract && next.vehicle.type === 'sbkts' && String(chatId) === String(userId) && await canFillContract(env, userId)
-    ? next.fillContract
-    : null;
   const documentName = [next.vehicle.brand, next.vehicle.model].filter(Boolean).join(' ');
   const suggestedPrice = findDeclarationPrice(documentName).exact;
   const confirmationKeyboard = declarationKeyboard([
@@ -4217,7 +4213,6 @@ async function promptDeclarationFtsName(env, chatId, userId, state, workingMessa
   const reply_markup = next.vehicle.vin
     ? declarationKeyboard([], next.backFromFts || 'declaration:back:start')
     : confirmationKeyboard;
-  if (fillContract) reply_markup.inline_keyboard.unshift([fillContract]);
   const baseUtilLines = (next.util || []).map(item =>
     `<b>Коммерческий утилизационный сбор (${ageLabel(item.age)}):</b> ${formatMoney(item.commercial)}`
   );
@@ -5064,6 +5059,7 @@ async function handleUpdate(env, update) {
   if (await handleContractCallback(env, query, telegram)) return;
   if (!query.message) return;
   if (query.message.chat.type === 'private') {
+    await closeContractDraft(env, query.from?.id, telegram);
     if (await handleBlueInkCallback(env, query, applicationsStub(env, query.from?.id), telegram, sendMenu)) {
       if (query.data === 'blueink:start') {
         await clearServiceSession(env, query.from.id);
