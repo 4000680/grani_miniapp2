@@ -236,7 +236,12 @@ export function extractContractApplicant(document) {
   }
   const applicant = normalize([pageValue(lines, label, 180), ...continuation].filter(Boolean).join(' '));
   const match = applicant.match(/^([\p{L}–-]+ [\p{L}–-]+ [\p{L}–-]+)(?:[,;]\s*|\s+|$)(.*)$/u);
-  return match ? { full_name: match[1], address: match[2] } : {};
+  if (!match) return {};
+  const registration = match[2].replace(/^адрес\s+регистрации\s*[:：—-]\s*/i, '');
+  const address = registration
+    .split(/(?:фактический\s+адрес|адрес\s+фактического\s+проживания|электронная\s+почта|e-mail|телефон)\s*[:：]/i, 1)[0]
+    .replace(/[\s,;]+$/, '');
+  return { full_name: match[1], address };
 }
 
 function parseSbkts(document) {

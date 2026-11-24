@@ -110,17 +110,12 @@ export async function handleContractCallback(env, query, send) {
     draft = await show(send, env, userId, { ...draft, stage: 'template' }, 'Выберите договор.', [
       [button(draft, 'TR-24', 'tr24'), button(draft, 'ЛОГ', 'log')]
     ], draft.preview);
-  } else if (draft.stage === 'template' && ['tr24', 'log'].includes(action)) {
-    draft = await show(send, env, userId, { ...draft, template: action, stage: 'method' }, 'Как добавить данные паспорта?', [
-      [button(draft, 'Загрузить фото паспорта', 'photo')],
-      [button(draft, 'Ввести вручную', 'manual')],
-      [button(draft, 'Назад', 'start')]
-    ], draft.preview);
-  } else if (draft.template && action === 'photo') {
-    draft = await show(send, env, userId, { ...draft, stage: 'photo' },
-      'Пришлите фото или PDF-скан разворота паспорта с серией и номером. Для PDF нужный разворот должен быть на первой странице.', [
+  } else if ((draft.stage === 'template' && ['tr24', 'log'].includes(action)) || (draft.template && action === 'photo')) {
+    const template = action === 'photo' ? draft.template : action;
+    draft = await show(send, env, userId, { ...draft, template, stage: 'photo' },
+      'Загрузите паспорт или введите данные вручную. Принимаю фото и PDF с разворотом на первой странице.', [
         [button(draft, 'Ввести вручную', 'manual')],
-        [button(draft, 'Назад', 'review')]
+        [button(draft, 'Назад', action === 'photo' ? 'review' : 'start')]
       ], draft.preview);
   } else if (draft.template && action === 'review') {
     draft = await review(send, env, userId, draft);
@@ -198,7 +193,9 @@ export async function handleContractMessage(env, message, send) {
     return true;
   }
   if (draft?.stage === 'field' && message.text) {
-    const value = message.text.trim().replace(/\s+/g, ' ');
+    let value = message.text.trim().replace(/\s+/g, ' ');
+    if (draft.field === 'full_name') value = value.replace(/^Ф\.?И\.?О\.?\s*:\s*/i, '');
+    if (draft.field === 'address') value = value.replace(/^адрес(?:\s+регистрации)?\s*:\s*/i, '');
     if (!valid(draft.field, value)) {
       await send(env, 'sendMessage', { chat_id: userId, text: `Проверьте формат поля «${labels[draft.field]}» и попробуйте ещё раз.` });
       return true;
@@ -216,22 +213,30 @@ export async function handleContractMessage(env, message, send) {
       return true;
     }
     if (!await store.claimContractDraft(draft.id, 'photo', 'reading')) return true;
+    let failureMessage = 'Не удалось обработать файл паспорта. Попробуйте заново или введите данные вручную.';
     try {
       const file = await send(env, 'getFile', { file_id: source.file_id }, { signal: AbortSignal.timeout(6000) });
       const photo = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`, { signal: AbortSignal.timeout(10000) });
       if (!photo.ok) throw new Error('Telegram image unavailable');
       const bytes = await photo.arrayBuffer();
       if (bytes.byteLength > 8 * 1024 * 1024) throw new Error('Image too large');
+      failureMessage = 'Сервис распознавания не смог обработать файл. Попробуйте фото или введите данные вручную.';
       const result = await service(env, '/ocr', bytes, isPdf ? 'application/pdf' : 'application/octet-stream');
       if (!result.ok) throw new Error('OCR unavailable');
       const fields = await result.json();
       if (!await store.claimContractDraft(draft.id, 'reading', 'photo')) return true;
-      for (const key of passportKeys) {
-        if (typeof fields[key] === 'string' && valid(key, fields[key]) && !draft.fields[key]) draft.fields[key] = fields[key];
+      const recognized = passportKeys.filter(key => typeof fields[key] === 'string' && valid(key, fields[key]));
+      for (const key of recognized) {
+        if (!draft.fields[key]) draft.fields[key] = fields[key];
+      }
+      if (!recognized.length) {
+        draft = await review(send, env, userId, draft, 'Файл обработан, но паспортные данные не прочитались. Пришлите более чёткий разворот или введите данные вручную.');
+        await store.updateContractDraft(draft);
+        return true;
       }
     } catch {
       if (!await store.claimContractDraft(draft.id, 'reading', 'photo')) return true;
-      draft = await review(send, env, userId, draft, 'Не удалось прочитать паспорт. Попробуйте другое фото или введите данные вручную.');
+      draft = await review(send, env, userId, draft, failureMessage);
       await store.updateContractDraft(draft);
       return true;
     }
