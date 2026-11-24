@@ -118,7 +118,7 @@ export async function handleContractCallback(env, query, send) {
     ], draft.preview);
   } else if (draft.template && action === 'photo') {
     draft = await show(send, env, userId, { ...draft, stage: 'photo' },
-      'Пришлите фото разворота с серией и номером. Можно отправить его файлом, чтобы сохранить качество.', [
+      'Пришлите фото или PDF-скан разворота паспорта с серией и номером. Для PDF нужный разворот должен быть на первой странице.', [
         [button(draft, 'Ввести вручную', 'manual')],
         [button(draft, 'Назад', 'review')]
       ], draft.preview);
@@ -166,7 +166,8 @@ export async function handleContractMessage(env, message, send) {
   if (!isPrivateOwner(message, userId) || !await canFillContract(env, userId) || message.text?.startsWith('/')) return false;
   const store = flowStore(env, userId);
   let draft = await store.getContractDraft();
-  if (draft?.stage === 'sbkts' && message.document) {
+  if (!draft) return false;
+  if (draft.stage === 'sbkts' && message.document) {
     const fileInfo = message.document;
     if (fileInfo.mime_type !== 'application/pdf' && !/\.pdf$/i.test(fileInfo.file_name || '')) {
       await send(env, 'sendMessage', { chat_id: userId, text: 'Отправьте СБКТС в формате PDF.' });
@@ -203,17 +204,25 @@ export async function handleContractMessage(env, message, send) {
       return true;
     }
     draft.fields[draft.field] = value;
-  } else if (draft?.stage === 'photo' && (message.photo?.length || message.document?.mime_type?.startsWith('image/'))) {
-    if (!await store.claimContractDraft(draft.id, 'photo', 'reading')) return true;
+  } else if (draft.stage === 'photo' && (message.photo?.length || message.document)) {
     const source = message.document || message.photo.at(-1);
+    const isPdf = source.mime_type === 'application/pdf' || /\.pdf$/i.test(source.file_name || '');
+    if (message.document && !isPdf && !source.mime_type?.startsWith('image/') && !/\.(jpe?g|png|webp|tiff?)$/i.test(source.file_name || '')) {
+      await send(env, 'sendMessage', { chat_id: userId, text: 'Пришлите фото или PDF-скан паспорта.' });
+      return true;
+    }
+    if (source.file_size > 8 * 1024 * 1024) {
+      await send(env, 'sendMessage', { chat_id: userId, text: 'Файл больше 8 МБ. Пришлите файл меньшего размера или введите данные вручную.' });
+      return true;
+    }
+    if (!await store.claimContractDraft(draft.id, 'photo', 'reading')) return true;
     try {
-      if (source.file_size > 8 * 1024 * 1024) throw new Error('Image too large');
       const file = await send(env, 'getFile', { file_id: source.file_id }, { signal: AbortSignal.timeout(6000) });
       const photo = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`, { signal: AbortSignal.timeout(10000) });
       if (!photo.ok) throw new Error('Telegram image unavailable');
       const bytes = await photo.arrayBuffer();
       if (bytes.byteLength > 8 * 1024 * 1024) throw new Error('Image too large');
-      const result = await service(env, '/ocr', bytes, 'application/octet-stream');
+      const result = await service(env, '/ocr', bytes, isPdf ? 'application/pdf' : 'application/octet-stream');
       if (!result.ok) throw new Error('OCR unavailable');
       const fields = await result.json();
       if (!await store.claimContractDraft(draft.id, 'reading', 'photo')) return true;
@@ -222,12 +231,22 @@ export async function handleContractMessage(env, message, send) {
       }
     } catch {
       if (!await store.claimContractDraft(draft.id, 'reading', 'photo')) return true;
-      draft = await review(send, env, userId, draft, 'Распознать фото не удалось. Заполните поля вручную или пришлите другое фото.');
+      draft = await review(send, env, userId, draft, 'Не удалось прочитать паспорт. Попробуйте другое фото или введите данные вручную.');
       await store.updateContractDraft(draft);
       return true;
     }
   } else {
-    return false;
+    const hint = {
+      sbkts: 'Отправьте СБКТС в формате PDF.',
+      photo: 'Пришлите фото или PDF-скан паспорта.',
+      field: 'Отправьте значение поля текстом.',
+      template: 'Выберите шаблон договора кнопкой.',
+      method: 'Выберите загрузку паспорта или ручной ввод.',
+      edit: 'Выберите поле кнопкой.',
+      review: 'Проверьте данные и выберите действие кнопкой.'
+    }[draft.stage];
+    if (hint) await send(env, 'sendMessage', { chat_id: userId, text: hint });
+    return true;
   }
   draft = await review(send, env, userId, draft);
   await store.updateContractDraft(draft);
