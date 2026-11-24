@@ -1,3 +1,5 @@
+import { hasContractAccess } from './contract-access.js';
+
 const labels = {
   full_name: 'ФИО',
   address: 'Адрес регистрации',
@@ -9,9 +11,9 @@ const labels = {
 const keys = Object.keys(labels);
 const passportKeys = keys.slice(2);
 
-export function canFillContract(env, userId) {
-  return Boolean(userId && env.APPLICATIONS && env.CONTRACT_SERVICE_URL && env.CONTRACT_SERVICE_TOKEN
-    && (env.CONTRACT_USER_IDS || '').split(',').map(id => id.trim()).includes(String(userId)));
+export async function canFillContract(env, userId) {
+  return Boolean(env.APPLICATIONS && env.CONTRACT_SERVICE_URL && env.CONTRACT_SERVICE_TOKEN
+    && await hasContractAccess(env, userId));
 }
 
 function flowStore(env, userId) {
@@ -19,7 +21,7 @@ function flowStore(env, userId) {
 }
 
 export async function contractButton(env, userId, vehicle) {
-  if (vehicle.type !== 'sbkts' || !canFillContract(env, userId)) return null;
+  if (vehicle.type !== 'sbkts' || !await canFillContract(env, userId)) return null;
   const id = crypto.randomUUID().slice(0, 12);
   await flowStore(env, userId).saveContractDraft({
     id, fields: vehicle.contractApplicant || {}, stage: 'ready'
@@ -81,7 +83,7 @@ export async function handleContractCallback(env, query, send) {
   const match = query.data?.match(/^contract:([^:]+):(.+)$/);
   if (!match) return false;
   const userId = query.from?.id;
-  if (!isPrivateOwner(query.message, userId) || !canFillContract(env, userId)) return true;
+  if (!isPrivateOwner(query.message, userId) || !await canFillContract(env, userId)) return true;
   const store = flowStore(env, userId);
   let draft = await store.getContractDraft();
   if (!draft || draft.id !== match[1]) {
@@ -151,7 +153,7 @@ export async function handleContractCallback(env, query, send) {
 
 export async function handleContractMessage(env, message, send) {
   const userId = message.from?.id;
-  if (!isPrivateOwner(message, userId) || !canFillContract(env, userId) || message.text?.startsWith('/')) return false;
+  if (!isPrivateOwner(message, userId) || !await canFillContract(env, userId) || message.text?.startsWith('/')) return false;
   const store = flowStore(env, userId);
   let draft = await store.getContractDraft();
   if (draft?.stage === 'field' && message.text) {
