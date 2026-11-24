@@ -89,13 +89,31 @@ async function deleteContractMessages(send, env, chatId, draft) {
   }
 }
 
+function contractErrorCode(error, fallback) {
+  const code = error?.message || '';
+  return /^(TIMEOUT|NETWORK|HTTP [0-9]{3})$/.test(code) ? code : fallback;
+}
+
 async function service(env, path, body, contentType) {
   const url = new URL(path, env.CONTRACT_SERVICE_URL);
   if (url.protocol !== 'https:') throw new Error('Contract service requires HTTPS');
-  return fetch(url, {
-    method: 'POST', body, redirect: 'error', signal: AbortSignal.timeout(52000),
-    headers: { authorization: `Bearer ${env.CONTRACT_SERVICE_TOKEN}`, 'content-type': contentType }
-  });
+  let response;
+  try {
+    response = await fetch(url.toString(), {
+      method: 'POST', body, redirect: 'error', signal: AbortSignal.timeout(52000),
+      headers: { authorization: `Bearer ${env.CONTRACT_SERVICE_TOKEN}`, 'content-type': contentType }
+    });
+  } catch (error) {
+    const code = ['TimeoutError', 'AbortError'].includes(error?.name) ? 'TIMEOUT' : 'NETWORK';
+    console.error('Contract service request failed', { path, code });
+    throw new Error(code);
+  }
+  if (!response.ok) {
+    const code = `HTTP ${response.status}`;
+    console.error('Contract service request failed', { path, code });
+    throw new Error(code);
+  }
+  return response;
 }
 
 function button(draft, text, action) {
@@ -165,15 +183,15 @@ export async function handleContractCallback(env, query, send) {
     if (!await store.claimContractDraft(draft.id, 'review', 'sending')) return true;
     try {
       const response = await service(env, '/render', JSON.stringify({ template: draft.template, fields: draft.fields }), 'application/json');
-      if (!response.ok) throw new Error('Contract render failed');
       const body = new FormData();
       body.set('chat_id', String(userId));
       body.set('protect_content', 'true');
       body.set('document', await response.blob(), draft.template === 'log' ? 'Договор ЛОГ.docx' : 'Договор TR-24.docx');
       await send(env, 'sendDocument', body);
-    } catch {
+    } catch (error) {
+      const code = contractErrorCode(error, 'DELIVERY');
       if (await store.claimContractDraft(draft.id, 'sending', 'review')) {
-        await send(env, 'sendMessage', { chat_id: userId, text: 'Не удалось выдать договор. Нажмите «Подтвердить» ещё раз.' });
+        await send(env, 'sendMessage', { chat_id: userId, text: `Не удалось выдать договор. Код: ${code}.` });
       }
       return true;
     }
@@ -258,7 +276,6 @@ export async function handleContractMessage(env, message, send) {
       if (bytes.byteLength > 8 * 1024 * 1024) throw new Error('Image too large');
       failureMessage = 'Сервис распознавания не смог обработать файл. Попробуйте фото или введите данные вручную.';
       const result = await service(env, '/ocr', bytes, isPdf ? 'application/pdf' : 'application/octet-stream');
-      if (!result.ok) throw new Error('OCR unavailable');
       const fields = await result.json();
       if (!await store.claimContractDraft(draft.id, 'reading', 'photo')) return true;
       const recognized = passportKeys.filter(key => typeof fields[key] === 'string' && valid(key, fields[key]));
@@ -270,7 +287,8 @@ export async function handleContractMessage(env, message, send) {
         await store.updateContractDraft(draft);
         return true;
       }
-    } catch {
+    } catch (error) {
+      failureMessage += ` Код: ${contractErrorCode(error, 'OCR')}.`;
       if (!await store.claimContractDraft(draft.id, 'reading', 'photo')) return true;
       draft = await review(send, env, userId, draft, failureMessage);
       await store.updateContractDraft(draft);
