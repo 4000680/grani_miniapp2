@@ -1,3 +1,4 @@
+import { extractContractApplicant, readPdf } from './document-processing.js';
 import { hasContractAccess } from './contract-access.js';
 
 const labels = {
@@ -20,13 +21,13 @@ function flowStore(env, userId) {
   return env.APPLICATIONS.getByName(`contract:${userId}`);
 }
 
-export async function contractButton(env, userId, vehicle) {
-  if (vehicle.type !== 'sbkts' || !await canFillContract(env, userId)) return null;
-  const id = crypto.randomUUID().slice(0, 12);
-  await flowStore(env, userId).saveContractDraft({
-    id, fields: vehicle.contractApplicant || {}, stage: 'ready'
-  });
-  return { text: '📝 Заполнить договор', callback_data: `contract:${id}:start` };
+export async function closeContractDraft(env, userId, send) {
+  if (!await canFillContract(env, userId)) return;
+  const store = flowStore(env, userId);
+  const draft = await store.getContractDraft();
+  if (!draft) return;
+  await store.clearContractDraft(draft.id);
+  if (draft.preview) await send(env, 'deleteMessage', { chat_id: userId, message_id: draft.preview }).catch(() => {});
 }
 
 function isPrivateOwner(message, userId) {
@@ -80,23 +81,32 @@ async function review(send, env, chatId, draft, note = '') {
 }
 
 export async function handleContractCallback(env, query, send) {
-  const match = query.data?.match(/^contract:([^:]+):(.+)$/);
-  if (!match) return false;
+  if (!query.data?.startsWith('contract:')) return false;
   const userId = query.from?.id;
   if (!isPrivateOwner(query.message, userId) || !await canFillContract(env, userId)) return true;
   const store = flowStore(env, userId);
+  if (query.data === 'contract:open') {
+    const previous = await store.getContractDraft();
+    const draft = await show(send, env, userId, {
+      id: crypto.randomUUID().slice(0, 12), stage: 'sbkts', fields: {}
+    }, 'Отправьте СБКТС в формате PDF для заполнения договора.', [], previous?.preview);
+    await store.saveContractDraft(draft);
+    return true;
+  }
+  const match = query.data.match(/^contract:([^:]+):(.+)$/);
+  if (!match) return true;
   let draft = await store.getContractDraft();
   if (!draft || draft.id !== match[1]) {
-    await send(env, 'sendMessage', { chat_id: userId, text: 'Откройте договор из последнего загруженного СБКТС.' });
+    await send(env, 'sendMessage', { chat_id: userId, text: 'Откройте «Договор» в главном меню и загрузите СБКТС.' });
     return true;
   }
   const action = match[2];
   if (action === 'cancel') {
-    await store.clearContractDraft();
+    await store.clearContractDraft(draft.id);
     if (draft.preview) await send(env, 'deleteMessage', { chat_id: userId, message_id: draft.preview }).catch(() => {});
     return true;
   }
-  if (action === 'start') {
+  if (action === 'start' && draft.stage !== 'sbkts' && draft.stage !== 'reading-sbkts') {
     draft = await show(send, env, userId, { ...draft, stage: 'template' }, 'Выберите договор.', [
       [button(draft, 'TR-24', 'tr24'), button(draft, 'ЛОГ', 'log')]
     ], draft.preview);
@@ -156,6 +166,36 @@ export async function handleContractMessage(env, message, send) {
   if (!isPrivateOwner(message, userId) || !await canFillContract(env, userId) || message.text?.startsWith('/')) return false;
   const store = flowStore(env, userId);
   let draft = await store.getContractDraft();
+  if (draft?.stage === 'sbkts' && message.document) {
+    const fileInfo = message.document;
+    if (fileInfo.mime_type !== 'application/pdf' && !/\.pdf$/i.test(fileInfo.file_name || '')) {
+      await send(env, 'sendMessage', { chat_id: userId, text: 'Отправьте СБКТС в формате PDF.' });
+      return true;
+    }
+    if (!await store.claimContractDraft(draft.id, 'sbkts', 'reading-sbkts')) return true;
+    let fields;
+    try {
+      const file = await send(env, 'getFile', { file_id: fileInfo.file_id }, { signal: AbortSignal.timeout(6000) });
+      const response = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${file.file_path}`, { signal: AbortSignal.timeout(10000) });
+      if (!response.ok) throw new Error('Telegram PDF unavailable');
+      const document = await readPdf(new Uint8Array(await response.arrayBuffer()));
+      if (!/СВИДЕТЕЛЬСТВО О БЕЗОПАСНОСТИ КОНСТРУКЦИИ/i.test(document.text.replace(/\s+/g, ' '))) {
+        throw new Error('СБКТС не найден');
+      }
+      fields = extractContractApplicant(document);
+    } catch {
+      if (await store.claimContractDraft(draft.id, 'reading-sbkts', 'sbkts')) {
+        await send(env, 'sendMessage', { chat_id: userId, text: 'Не удалось прочитать СБКТС. Отправьте другой PDF с текстовым слоем.' });
+      }
+      return true;
+    }
+    if (!await store.claimContractDraft(draft.id, 'reading-sbkts', 'template')) return true;
+    draft = await show(send, env, userId, { ...draft, fields, stage: 'template' }, 'Выберите договор.', [
+      [button(draft, 'TR-24', 'tr24'), button(draft, 'ЛОГ', 'log')]
+    ], draft.preview);
+    await store.updateContractDraft(draft);
+    return true;
+  }
   if (draft?.stage === 'field' && message.text) {
     const value = message.text.trim().replace(/\s+/g, ' ');
     if (!valid(draft.field, value)) {
