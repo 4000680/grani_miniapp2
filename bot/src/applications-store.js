@@ -38,6 +38,45 @@ export function normalizeApplication(input) {
 export class ApplicationsStore extends DurableObject {
   geocodeQueue = Promise.resolve();
 
+  async saveContractDraft(draft) {
+    const storage = this.ctx.storage;
+    await storage.transaction(async tx => {
+      const expiresAt = Date.now() + 30 * 60000;
+      await tx.put('contract-draft', { ...draft, expiresAt });
+      await tx.setAlarm(expiresAt);
+    });
+  }
+
+  async getContractDraft() {
+    const draft = await this.ctx.storage.get('contract-draft');
+    return draft?.expiresAt > Date.now() ? draft : null;
+  }
+
+  async updateContractDraft(draft) {
+    await this.ctx.storage.transaction(async tx => {
+      const current = await tx.get('contract-draft');
+      if (current?.id === draft.id && current.expiresAt > Date.now()) {
+        await tx.put('contract-draft', { ...draft, expiresAt: current.expiresAt });
+      }
+    });
+  }
+
+  async claimContractDraft(id, expectedStage, stage) {
+    return this.ctx.storage.transaction(async tx => {
+      const current = await tx.get('contract-draft');
+      if (current?.id !== id || current.stage !== expectedStage || current.expiresAt <= Date.now()) return false;
+      await tx.put('contract-draft', { ...current, stage });
+      return true;
+    });
+  }
+
+  async clearContractDraft(id) {
+    await this.ctx.storage.transaction(async tx => {
+      const current = await tx.get('contract-draft');
+      if (current && (!id || id === current.id)) await tx.delete('contract-draft');
+    });
+  }
+
   async saveFtsContext(context) {
     const id = crypto.randomUUID();
     await this.ctx.storage.transaction(async tx => {
@@ -61,6 +100,12 @@ export class ApplicationsStore extends DurableObject {
   }
 
   async alarm() {
+    const contract = await this.ctx.storage.get('contract-draft');
+    if (contract) {
+      if (contract.expiresAt <= Date.now()) await this.clearContractDraft(contract.id);
+      else await this.ctx.storage.setAlarm(contract.expiresAt);
+      return;
+    }
     const send = async (env, method, data) => {
       const response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
         signal: AbortSignal.timeout(10000), method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
