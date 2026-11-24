@@ -128,8 +128,14 @@ function button(draft, text, action) {
 async function show(send, env, chatId, draft, text, rows, previous) {
   const markup = { inline_keyboard: [...rows, [button(draft, 'Отмена', 'cancel')]] };
   if (previous) await send(env, 'deleteMessage', { chat_id: chatId, message_id: previous }).catch(() => {});
-  const sent = await send(env, 'sendMessage', { chat_id: chatId, text, reply_markup: markup, protect_content: true });
+  const sent = await send(env, 'sendMessage', { chat_id: chatId, text, reply_markup: markup });
   return { ...draft, preview: sent.message_id };
+}
+
+function promptPassport(send, env, userId, draft) {
+  return show(send, env, userId, { ...draft, stage: 'photo' },
+    'Загрузите паспорт или введите данные вручную. Принимаю фото и PDF с разворотом на первой странице.',
+    [[button(draft, 'Ввести вручную', 'manual')]], draft.preview);
 }
 
 async function review(send, env, chatId, draft, note = '') {
@@ -150,9 +156,10 @@ export async function handleContractCallback(env, query, send) {
   const store = flowStore(env, userId);
   if (query.data === 'contract:open') {
     const previous = await store.getContractDraft();
-    const draft = await show(send, env, userId, {
-      id: crypto.randomUUID().slice(0, 12), stage: 'sbkts', fields: {}
-    }, 'Отправьте СБКТС в формате PDF для заполнения договора.', [], previous?.preview);
+    const initial = { id: crypto.randomUUID().slice(0, 12), stage: 'choose-template', fields: {} };
+    const draft = await show(send, env, userId, initial, 'Какой договор заполнить?', [
+      [button(initial, 'TR-24', 'tr24'), button(initial, 'ЛОГ', 'log')]
+    ], previous?.preview);
     await store.saveContractDraft({ ...draft, messageIds: [draft.preview] });
     return true;
   }
@@ -173,13 +180,12 @@ export async function handleContractCallback(env, query, send) {
     draft = await show(send, env, userId, { ...draft, stage: 'template' }, 'Выберите договор.', [
       [button(draft, 'TR-24', 'tr24'), button(draft, 'ЛОГ', 'log')]
     ], draft.preview);
-  } else if ((draft.stage === 'template' && ['tr24', 'log'].includes(action)) || (draft.template && action === 'photo')) {
-    const template = action === 'photo' ? draft.template : action;
-    draft = await show(send, env, userId, { ...draft, template, stage: 'photo' },
-      'Загрузите паспорт или введите данные вручную. Принимаю фото и PDF с разворотом на первой странице.', [
-        [button(draft, 'Ввести вручную', 'manual')]
-      ], draft.preview);
-  } else if (draft.template && ['manual', 'edit'].includes(action) && !['reading', 'sending'].includes(draft.stage)) {
+  } else if (draft.stage === 'choose-template' && ['tr24', 'log'].includes(action)) {
+    draft = await show(send, env, userId, { ...draft, template: action, stage: 'sbkts' },
+      'Отправьте СБКТС в формате PDF для заполнения договора.', [], draft.preview);
+  } else if ((draft.stage === 'template' && ['tr24', 'log'].includes(action)) || (draft.template && action === 'photo' && ['review', 'manual', 'field', 'edit'].includes(draft.stage))) {
+    draft = await promptPassport(send, env, userId, { ...draft, template: action === 'photo' ? draft.template : action });
+  } else if (draft.template && ['manual', 'edit'].includes(action) && ['photo', 'review', 'manual', 'field', 'edit'].includes(draft.stage)) {
     const fields = manualFields(draft);
     draft = await show(send, env, userId, { ...draft, stage: 'manual', manualFields: fields },
       ['Отправьте одним сообщением, по одной строке на пункт:', ...fields.map(key => manualLabels[key])].join('\n'),
@@ -190,7 +196,6 @@ export async function handleContractCallback(env, query, send) {
       const response = await service(env, '/render', JSON.stringify({ template: draft.template, fields: draft.fields }), 'application/json');
       const body = new FormData();
       body.set('chat_id', String(userId));
-      body.set('protect_content', 'true');
       body.set('reply_markup', JSON.stringify({ inline_keyboard: [[
         { text: '📝 Заполнить новый', callback_data: 'contract:open' },
         { text: '🏠 Главное меню', callback_data: 'calc:result:menu' }
@@ -253,10 +258,13 @@ export async function handleContractMessage(env, message, send) {
       }
       return true;
     }
-    if (!await store.claimContractDraft(draft.id, 'reading-sbkts', 'template')) return true;
-    draft = await show(send, env, userId, { ...draft, fields, stage: 'template' }, 'Выберите договор.', [
-      [button(draft, 'TR-24', 'tr24'), button(draft, 'ЛОГ', 'log')]
-    ], draft.preview);
+    const nextStage = draft.template ? 'photo' : 'template';
+    if (!await store.claimContractDraft(draft.id, 'reading-sbkts', nextStage)) return true;
+    draft = draft.template
+      ? await promptPassport(send, env, userId, { ...draft, fields })
+      : await show(send, env, userId, { ...draft, fields, stage: 'template' }, 'Выберите договор.', [
+        [button(draft, 'TR-24', 'tr24'), button(draft, 'ЛОГ', 'log')]
+      ], draft.preview);
     await store.updateContractDraft(draft);
     return true;
   }
@@ -312,6 +320,7 @@ export async function handleContractMessage(env, message, send) {
       photo: 'Пришлите фото или PDF-скан паспорта.',
       manual: 'Отправьте паспортные данные одним сообщением, по одной строке на пункт.',
       template: 'Выберите шаблон договора кнопкой.',
+      'choose-template': 'Выберите шаблон договора кнопкой.',
       method: 'Выберите загрузку паспорта или ручной ввод.',
       edit: 'Введите паспортные данные одним сообщением.',
       review: 'Проверьте данные и выберите действие кнопкой.'
