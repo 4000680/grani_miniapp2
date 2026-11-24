@@ -394,3 +394,48 @@ test('cargo clarification does not offer FTS early in declaration mode; regular 
   await context.handleDocument(env, message);
   assert.equal(identities.length, 1);
 });
+
+test('a cached source error is labeled and its button can start exactly one fresh request', async t => {
+  const env = fixture(t), store = storage(), results = [];
+  const contextId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const request = { ...input(), contextId };
+  await setFtsAccess(env, 100, 200, true);
+  let requests = 0;
+  const fetcher = async () => ++requests <= 2
+    ? response({ success: 0, code: 'SOURCE_ERROR' }) : response(found);
+  const send = async (_env, method, data) => {
+    if (method === 'sendMessage') results.push(data);
+    return { message_id: 70 + results.length };
+  };
+  await subscribeFts(store, env, request);
+  await runFtsAlarm(store, env, send, fetcher);
+  await subscribeFts(store, env, { ...request, callbackId: 'another-document' });
+  await runFtsAlarm(store, env, send, fetcher);
+  assert.equal(requests, 1);
+  assert.doesNotMatch(results[0].text, /Сохранённая/);
+  assert.match(results[1].text, /Сохранённая проверка .+ МСК/);
+  const button = results[1].reply_markup.inline_keyboard[0][0];
+  assert.equal(button.text, 'Повторить проверку ФТС');
+  assert.ok(Buffer.byteLength(button.callback_data) <= 64);
+  assert.doesNotMatch(results[1].text, /оплат|списа/);
+
+  env.APPLICATIONS = { getByName: key => key === '200'
+    ? { getFtsContext: async id => id === contextId ? request : null }
+    : { subscribeFts: next => subscribeFts(store, env, next) } };
+  const query = { id: 'tap', data: button.callback_data, from: { id: 200 },
+    message: { message_id: 81, chat: { id: 200, type: 'private' }, reply_markup: results[1].reply_markup } };
+  await handleFtsCallback(env, query, send);
+  await handleFtsCallback(env, query, send);
+  await runFtsAlarm(store, env, send, fetcher);
+  assert.equal(requests, 2);
+  const newButton = results.at(-1).reply_markup.inline_keyboard[0][0];
+  assert.notEqual(newButton.callback_data, button.callback_data);
+  await handleFtsCallback(env, query, send);
+  await runFtsAlarm(store, env, send, fetcher);
+  assert.equal(requests, 2);
+  await handleFtsCallback(env, { ...query, data: newButton.callback_data }, send);
+  await runFtsAlarm(store, env, send, fetcher);
+  assert.equal(requests, 3);
+  assert.match(results.at(-1).text, /Данные совпадают/);
+  assert.equal(results.at(-1).reply_markup, undefined);
+});

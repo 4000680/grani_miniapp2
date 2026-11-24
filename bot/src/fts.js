@@ -85,7 +85,9 @@ export async function handleFtsCallback(env, query, send) {
     await send(env, 'sendMessage', { chat_id: userId, text: 'Доступ к проверке ФТС не выдан или отозван.' });
     return true;
   }
-  const id = query.data.match(/^fts:check:([a-f0-9-]{36})$/)?.[1];
+  const action = query.data.match(/^fts:(?:check:([a-f0-9-]{36})|retry:([a-f0-9-]{36}):([a-f0-9]{16}))$/);
+  const id = action?.[1] || action?.[2];
+  const retryKey = action?.[3];
   const context = id && env.APPLICATIONS ? await env.APPLICATIONS.getByName(String(userId)).getFtsContext(id) : null;
   if (!context || !env.AVC_TOKEN) {
     await send(env, 'sendMessage', { chat_id: userId, text: !env.AVC_TOKEN ? 'Проверка ФТС ещё не настроена.' : 'Кнопка устарела. Загрузите документ заново.' });
@@ -98,7 +100,7 @@ export async function handleFtsCallback(env, query, send) {
   // consumed; a duplicate Telegram callback sees "not modified" and stops.
   const originalMarkup = message.reply_markup || { inline_keyboard: [] };
   const remainingButtons = (originalMarkup.inline_keyboard || [])
-    .map(row => row.filter(button => !button.callback_data?.startsWith('fts:check:')))
+    .map(row => row.filter(button => button.callback_data !== query.data))
     .filter(row => row.length);
   try {
     await send(env, 'editMessageReplyMarkup', { chat_id: userId, message_id: message.message_id,
@@ -114,8 +116,12 @@ export async function handleFtsCallback(env, query, send) {
   try {
     waiting = await send(env, 'sendMessage', { chat_id: userId, text: 'Проверка запущена, ожидаем ответ.' });
     if (!waiting?.message_id) throw new Error('FTS status message was not created');
-    await job.subscribeFts({ search: context.search, userId: String(userId), callbackId: query.id,
-      document: context.document, statusMessageId: waiting.message_id });
+    const queued = await job.subscribeFts({ search: context.search, userId: String(userId), callbackId: query.id,
+      document: context.document, statusMessageId: waiting.message_id, contextId: id, retryKey });
+    if (queued === false) await send(env, 'editMessageText', {
+      chat_id: userId, message_id: waiting.message_id,
+      text: 'Эта кнопка повтора устарела. Используйте результат последней проверки ФТС.'
+    });
   } catch {
     await reportBotIncident(env, { section: 'fts', userId, code: 'FTS_START_FAILED', stage: 'запуск проверки' });
     await send(env, 'editMessageReplyMarkup', { chat_id: userId, message_id: message.message_id,
@@ -188,17 +194,35 @@ export async function requestFts(env, search, fetcher = fetch) {
 // Durable alarms outlive the webhook's background time limit. Persist the claim
 // before the HTTP call; a crash never silently issues a second paid request.
 export async function subscribeFts(storage, env, input) {
-  if (!await canCheckFts(env, input.userId)) return;
-  await storage.transaction(async tx => {
+  if (!await canCheckFts(env, input.userId)) return false;
+  return storage.transaction(async tx => {
     let job = await tx.get('fts-job');
     const now = Date.now();
-    if (!job || (job.expiresAt && job.expiresAt < now)) job = { search: input.search, state: 'queued', subscribers: {}, createdAt: now };
+    if (input.retryKey) {
+      if (job?.state !== 'done' || job.result?.code !== 'SOURCE_ERROR' || job.retryKey !== input.retryKey) return false;
+      // A button belongs to one failed attempt. Consume it atomically, keeping
+      // subscribers whose previous result or waiting-message cleanup is pending.
+      const subscribers = Object.fromEntries(Object.entries(job.subscribers).filter(([, subscriber]) =>
+        !subscriber.delivered || (subscriber.statusMessageId && !subscriber.statusDeleted)));
+      job = { search: job.search, state: 'queued', subscribers, createdAt: now };
+    } else if (!job || (job.expiresAt && job.expiresAt < now)) {
+      job = { search: input.search, state: 'queued', subscribers: {}, createdAt: now };
+    }
     const key = `${input.userId}:${input.statusMessageId || input.callbackId}`;
     if (Object.keys(job.subscribers).length >= 1000) throw new Error('FTS subscriber limit');
-    if (!job.subscribers[key]) job.subscribers[key] = { userId: input.userId, document: input.document, statusMessageId: input.statusMessageId || null, delivered: false };
+    if (!job.subscribers[key]) job.subscribers[key] = {
+      userId: input.userId, document: input.document, statusMessageId: input.statusMessageId || null, delivered: false,
+      contextId: input.contextId || null,
+      cachedSourceErrorAt: job.state === 'done' && job.result?.code === 'SOURCE_ERROR' ? job.expiresAt - DAY : null
+    };
     await tx.put('fts-job', job);
     if (job.state !== 'running') await tx.setAlarm(job.nextAt || now + 1);
+    return true;
   });
+}
+
+function newFtsRetryKey() {
+  return crypto.randomUUID().replaceAll('-', '').slice(0, 16);
 }
 
 export async function runFtsAlarm(storage, env, send, fetcher = fetch) {
@@ -215,6 +239,9 @@ export async function runFtsAlarm(storage, env, send, fetcher = fetch) {
     if (current.state === 'queued') {
       current.state = 'running';
       await tx.setAlarm(Date.now() + 120000);
+    }
+    if (current.state === 'done' && current.result?.code === 'SOURCE_ERROR' && !current.retryKey) {
+      current.retryKey = newFtsRetryKey();
     }
     await tx.put('fts-job', current);
     return current;
@@ -234,6 +261,7 @@ export async function runFtsAlarm(storage, env, send, fetcher = fetch) {
         current.state = 'done'; current.nextAt = null;
         const uncertainOrPaid = !result.code || ['UNCERTAIN', 'SOURCE_ERROR', 'PROCESSING'].includes(result.code);
         current.expiresAt = Date.now() + (uncertainOrPaid ? DAY : 60000);
+        if (result.code === 'SOURCE_ERROR') current.retryKey = newFtsRetryKey();
         await tx.deleteAlarm();
       }
       await tx.put('fts-job', current);
@@ -251,8 +279,18 @@ export async function runFtsAlarm(storage, env, send, fetcher = fetch) {
     if (!subscriber.delivered) {
       if (await canCheckFts(env, subscriber.userId)) {
         for (const text of ftsResultMessages(completed.result, subscriber.document)) {
+          const retryButton = completed.retryKey && subscriber.contextId && {
+            reply_markup: { inline_keyboard: [[{ text: 'Повторить проверку ФТС',
+              callback_data: `fts:retry:${subscriber.contextId}:${completed.retryKey}` }]] }
+          };
+          const cachedAt = subscriber.cachedSourceErrorAt;
+          const cachedNote = cachedAt && cachedAt === completed.expiresAt - DAY && completed.result.code === 'SOURCE_ERROR'
+            ? '\n\nСохранённая проверка ' + new Date(cachedAt).toLocaleString('ru-RU', {
+              timeZone: 'Europe/Moscow', dateStyle: 'short', timeStyle: 'short'
+            }) + ' МСК.' : '';
           await send(env, 'sendMessage', { chat_id: subscriber.userId,
-            text: `${completed.result.testMode ? '🧪 Тестовые данные.\n\n' : ''}${text}`, parse_mode: 'HTML' });
+            text: `${completed.result.testMode ? '🧪 Тестовые данные.\n\n' : ''}${text}${cachedNote}`,
+            parse_mode: 'HTML', ...retryButton });
         }
       }
       await storage.transaction(async tx => {
