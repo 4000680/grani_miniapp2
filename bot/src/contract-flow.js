@@ -100,7 +100,7 @@ async function service(env, path, body, contentType) {
   let response;
   try {
     response = await fetch(url.toString(), {
-      method: 'POST', body, redirect: 'error', signal: AbortSignal.timeout(52000),
+      method: 'POST', body, redirect: 'manual', signal: AbortSignal.timeout(52000),
       headers: { authorization: `Bearer ${env.CONTRACT_SERVICE_TOKEN}`, 'content-type': contentType }
     });
   } catch (error) {
