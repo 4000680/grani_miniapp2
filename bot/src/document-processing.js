@@ -224,6 +224,21 @@ function sbktsEngineVolume(lines) {
   return null;
 }
 
+export function extractContractApplicant(document) {
+  const lines = document.pages[0] || [];
+  const label = /^ЗАЯВИТЕЛЬ И ЕГО АДРЕС(?:\s|$)/i;
+  const index = lines.findIndex(line => label.test(line.text));
+  if (index < 0) return {};
+  const continuation = [];
+  for (const line of lines.slice(index + 1, index + 7)) {
+    if (line.items.some(item => item.x < 180)) break;
+    continuation.push(line.text);
+  }
+  const applicant = normalize([pageValue(lines, label, 180), ...continuation].filter(Boolean).join(' '));
+  const match = applicant.match(/^([\p{L}–-]+ [\p{L}–-]+ [\p{L}–-]+)(?:[,;]\s*|\s+|$)(.*)$/u);
+  return match ? { full_name: match[1], address: match[2] } : {};
+}
+
 function parseSbkts(document) {
   const first = document.pages[0] || [];
   const second = document.pages[1] || [];

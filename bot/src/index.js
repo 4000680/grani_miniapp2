@@ -1,3 +1,4 @@
+import { canFillContract, contractButton, handleContractCallback, handleContractMessage } from './contract-flow.js';
 import { canUseBlueInk, setBlueInkAccess } from './blue-ink-access.js';
 import { handleBlueInkCallback, handleBlueInkUpload } from './blue-ink.js';
 import { reportBotIncident, monitorBotOperation, pollBotMonitoring, listBotIncidents, incidentText } from './bot-monitoring.js';
@@ -35,6 +36,7 @@ import {
   calculatePeniDailySummary,
   calculateUtil,
   DocumentProcessingError,
+  extractContractApplicant,
   parseFlexibleDate,
   processVehicleDocument,
   todayUtc
@@ -3540,7 +3542,13 @@ async function handleDocument(env, message) {
       return new Uint8Array(await response.arrayBuffer());
     }, 10000);
     const checkSignature = message.chat.type === 'private' && await task.run('проверка доступа к подписи', () => canCheckSignature(env, message.from?.id), 1500).catch(() => false);
-    const { vehicle, util, deadline } = await task.run('чтение PDF и расчёт', () => processVehicleDocument(bytes, new Date(), { checkSignature }));
+    const { document: parsedDocument, vehicle, util, deadline } = await task.run('чтение PDF и расчёт', () => processVehicleDocument(bytes, new Date(), { checkSignature }));
+    if (declarationState?.mode === 'declaration') declarationState.fillContract = null;
+    if (declarationState?.mode === 'declaration' && vehicle.type === 'sbkts' && message.chat.type === 'private' && canFillContract(env, userId)) {
+      declarationState.fillContract = await contractButton(env, userId, {
+        type: vehicle.type, contractApplicant: extractContractApplicant(parsedDocument)
+      }).catch(() => null);
+    }
     await finishDocumentCalculation(env, message, status, declarationState, vehicle, util, deadline);
   } catch (error) {
     const controlled = controlledDocumentError(error);
@@ -4197,6 +4205,9 @@ async function promptDeclarationCategory(env, chatId, userId, state, workingMess
 async function promptDeclarationFtsName(env, chatId, userId, state, workingMessage = null) {
   const next = { ...state, mode: 'declaration', stage: 'fts-name' };
   await setCustomsState(env, userId, next);
+  const fillContract = next.fillContract && next.vehicle.type === 'sbkts' && String(chatId) === String(userId) && canFillContract(env, userId)
+    ? next.fillContract
+    : null;
   const documentName = [next.vehicle.brand, next.vehicle.model].filter(Boolean).join(' ');
   const suggestedPrice = findDeclarationPrice(documentName).exact;
   const confirmationKeyboard = declarationKeyboard([
@@ -4205,6 +4216,7 @@ async function promptDeclarationFtsName(env, chatId, userId, state, workingMessa
   const reply_markup = next.vehicle.vin
     ? declarationKeyboard([], next.backFromFts || 'declaration:back:start')
     : confirmationKeyboard;
+  if (fillContract) reply_markup.inline_keyboard.unshift([fillContract]);
   const baseUtilLines = (next.util || []).map(item =>
     `<b>Коммерческий утилизационный сбор (${ageLabel(item.age)}):</b> ${formatMoney(item.commercial)}`
   );
@@ -4960,6 +4972,7 @@ async function handleUpdate(env, update) {
     }
   }
   const adminId = String(env.ADMIN_ID || env.ADMIN_TELEGRAM_ID || '');
+  if (update.message && await handleContractMessage(env, update.message, telegram)) return;
   if (update.message && await handleServiceMessage(env, update.message, telegram)) return;
   if (update.message && await handleSupportMessage(env, update.message, telegram)) return;
   if (env.ANALYTICS_DB && adminId && update.message?.chat?.type === 'private') {
@@ -5033,6 +5046,7 @@ async function handleUpdate(env, update) {
     return;
   }
   await telegram(env, 'answerCallbackQuery', { callback_query_id: query.id });
+  if (await handleContractCallback(env, query, telegram)) return;
   if (!query.message) return;
   if (query.message.chat.type === 'private') {
     if (await handleBlueInkCallback(env, query, applicationsStub(env, query.from?.id), telegram, sendMenu)) {
