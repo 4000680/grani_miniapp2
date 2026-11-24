@@ -191,17 +191,24 @@ export async function handleContractCallback(env, query, send) {
       const body = new FormData();
       body.set('chat_id', String(userId));
       body.set('protect_content', 'true');
+      body.set('reply_markup', JSON.stringify({ inline_keyboard: [[
+        { text: '📝 Заполнить новый', callback_data: 'contract:open' },
+        { text: '🏠 Главное меню', callback_data: 'calc:result:menu' }
+      ]] }));
       body.set('document', await response.blob(), draft.template === 'log' ? 'Договор ЛОГ.docx' : 'Договор TR-24.docx');
       await send(env, 'sendDocument', body);
     } catch (error) {
       const code = contractErrorCode(error, 'DELIVERY');
       if (await store.claimContractDraft(draft.id, 'sending', 'review')) {
-        await send(env, 'sendMessage', { chat_id: userId, text: `Не удалось выдать договор. Код: ${code}.` });
+        const notice = await send(env, 'sendMessage', { chat_id: userId, text: `Не удалось выдать договор. Код: ${code}.` });
+        if (!await store.trackContractMessage(draft.id, notice.message_id)) {
+          await send(env, 'deleteMessage', { chat_id: userId, message_id: notice.message_id }).catch(() => {});
+        }
       }
       return true;
     }
-    await store.clearContractDraft(draft.id);
-    if (draft.preview) await send(env, 'deleteMessage', { chat_id: userId, message_id: draft.preview }).catch(() => {});
+    const completed = await store.clearContractDraft(draft.id);
+    if (completed) await deleteContractMessages(send, env, userId, completed);
     return true;
   } else {
     return true;
