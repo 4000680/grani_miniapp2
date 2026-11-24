@@ -56,8 +56,17 @@ export class ApplicationsStore extends DurableObject {
     await this.ctx.storage.transaction(async tx => {
       const current = await tx.get('contract-draft');
       if (current?.id === draft.id && current.expiresAt > Date.now()) {
-        await tx.put('contract-draft', { ...draft, expiresAt: current.expiresAt });
+        await tx.put('contract-draft', { ...draft, messageIds: [...new Set([...(current.messageIds || []), draft.preview].filter(Boolean))], expiresAt: current.expiresAt });
       }
+    });
+  }
+
+  async trackContractMessage(id, messageId) {
+    return this.ctx.storage.transaction(async tx => {
+      const draft = await tx.get('contract-draft');
+      if (draft?.id !== id || draft.expiresAt <= Date.now()) return false;
+      await tx.put('contract-draft', { ...draft, messageIds: [...new Set([...(draft.messageIds || []), messageId])] });
+      return true;
     });
   }
 
@@ -71,9 +80,11 @@ export class ApplicationsStore extends DurableObject {
   }
 
   async clearContractDraft(id) {
-    await this.ctx.storage.transaction(async tx => {
+    return this.ctx.storage.transaction(async tx => {
       const current = await tx.get('contract-draft');
-      if (current && (!id || id === current.id)) await tx.delete('contract-draft');
+      if (!current || (id && id !== current.id)) return null;
+      await tx.delete('contract-draft');
+      return current;
     });
   }
 

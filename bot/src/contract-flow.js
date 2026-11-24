@@ -49,6 +49,46 @@ function valid(key, value) {
   return true;
 }
 
+function manualFields(draft) {
+  return ['passport', 'issuer', 'issued', ...['full_name', 'address'].filter(key => !valid(key, draft.fields[key]))];
+}
+
+const manualLabels = { ...labels, passport: 'Серия и номер', issued: 'Дата выдачи (ДД.ММ.ГГГГ)' };
+
+export function parseManualContract(text, fields) {
+  const lines = text.trim().split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (lines.length !== fields.length) return { error: 'Отправьте все строки одним сообщением.' };
+  const values = {};
+  for (const [index, key] of fields.entries()) {
+    let value = lines[index];
+    if (key === 'passport') {
+      value = value.replace(/^серия и номер\s*:\s*/i, '').replace(/[\s-]+/g, '');
+      if (!/^[0-9]{10}$/.test(value)) return { error: 'В первой строке должно быть 10 цифр: 4 для серии и 6 для номера.' };
+      values.series = value.slice(0, 4);
+      values.number = value.slice(4);
+      continue;
+    }
+    value = value.replace(new RegExp(`^${labels[key]}\\s*:\\s*`, 'i'), '');
+    if (key === 'issued') {
+      const date = value.match(/^([0-9]{1,2})[. /-]([0-9]{1,2})[. /-]([0-9]{4})$/);
+      if (date) value = `${date[1].padStart(2, '0')}.${date[2].padStart(2, '0')}.${date[3]}`;
+    }
+    if (!valid(key, value)) return { error: `Проверьте строку «${manualLabels[key]}».` };
+    values[key] = value;
+  }
+  return { values };
+}
+
+async function deleteContractMessages(send, env, chatId, draft) {
+  const ids = [...new Set([...(draft.messageIds || []), draft.preview].filter(Number.isInteger))];
+  for (let i = 0; i < ids.length; i += 100) {
+    const batch = ids.slice(i, i + 100);
+    await send(env, 'deleteMessages', { chat_id: chatId, message_ids: batch }).catch(() =>
+      Promise.all(batch.map(message_id => send(env, 'deleteMessage', { chat_id: chatId, message_id }).catch(() => {})))
+    );
+  }
+}
+
 async function service(env, path, body, contentType) {
   const url = new URL(path, env.CONTRACT_SERVICE_URL);
   if (url.protocol !== 'https:') throw new Error('Contract service requires HTTPS');
@@ -76,7 +116,7 @@ async function review(send, env, chatId, draft, note = '') {
     ...keys.map(key => `${labels[key]}: ${draft.fields[key] || 'не заполнено'}`)
   ].filter(Boolean).join('\n'), [
     ...(complete ? [[button(draft, 'Подтвердить и получить Word', 'confirm')]] : []),
-    [button(draft, 'Изменить', 'edit'), button(draft, 'Загрузить фото паспорта', 'photo')]
+    [button(draft, complete ? 'Изменить паспортные данные' : 'Ввести вручную', 'manual'), button(draft, 'Загрузить паспорт', 'photo')]
   ], draft.preview);
 }
 
@@ -90,7 +130,7 @@ export async function handleContractCallback(env, query, send) {
     const draft = await show(send, env, userId, {
       id: crypto.randomUUID().slice(0, 12), stage: 'sbkts', fields: {}
     }, 'Отправьте СБКТС в формате PDF для заполнения договора.', [], previous?.preview);
-    await store.saveContractDraft(draft);
+    await store.saveContractDraft({ ...draft, messageIds: [draft.preview] });
     return true;
   }
   const match = query.data.match(/^contract:([^:]+):(.+)$/);
@@ -102,8 +142,8 @@ export async function handleContractCallback(env, query, send) {
   }
   const action = match[2];
   if (action === 'cancel') {
-    await store.clearContractDraft(draft.id);
-    if (draft.preview) await send(env, 'deleteMessage', { chat_id: userId, message_id: draft.preview }).catch(() => {});
+    const cancelled = await store.clearContractDraft(draft.id);
+    if (cancelled) await deleteContractMessages(send, env, userId, cancelled);
     return true;
   }
   if (action === 'start' && draft.stage !== 'sbkts' && draft.stage !== 'reading-sbkts') {
@@ -114,22 +154,13 @@ export async function handleContractCallback(env, query, send) {
     const template = action === 'photo' ? draft.template : action;
     draft = await show(send, env, userId, { ...draft, template, stage: 'photo' },
       'Загрузите паспорт или введите данные вручную. Принимаю фото и PDF с разворотом на первой странице.', [
-        [button(draft, 'Ввести вручную', 'manual')],
-        [button(draft, 'Назад', action === 'photo' ? 'review' : 'start')]
+        [button(draft, 'Ввести вручную', 'manual')]
       ], draft.preview);
-  } else if (draft.template && action === 'review') {
-    draft = await review(send, env, userId, draft);
-  } else if (draft.template && (action === 'manual' || action === 'edit')) {
-    draft = await show(send, env, userId, { ...draft, stage: 'edit' }, 'Какое поле заполнить или изменить?', [
-      ...keys.map(key => [button(draft, labels[key], `field-${key}`)]),
-      [button(draft, 'Назад', 'review')]
-    ], draft.preview);
-  } else if (draft.stage === 'edit' && action.startsWith('field-') && keys.includes(action.slice(6))) {
-    const field = action.slice(6);
-    const hint = field === 'issued' ? ' в формате ДД.ММ.ГГГГ' : '';
-    draft = await show(send, env, userId, { ...draft, stage: 'field', field }, `Введите «${labels[field]}»${hint}.`, [
-      [button(draft, 'Назад', 'edit')]
-    ], draft.preview);
+  } else if (draft.template && ['manual', 'edit'].includes(action) && !['reading', 'sending'].includes(draft.stage)) {
+    const fields = manualFields(draft);
+    draft = await show(send, env, userId, { ...draft, stage: 'manual', manualFields: fields },
+      ['Отправьте одним сообщением, по одной строке на пункт:', ...fields.map(key => manualLabels[key])].join('\n'),
+      [[button(draft, 'Загрузить паспорт', 'photo')]], draft.preview);
   } else if (draft.stage === 'review' && action === 'confirm' && keys.every(key => valid(key, draft.fields[key]))) {
     if (!await store.claimContractDraft(draft.id, 'review', 'sending')) return true;
     try {
@@ -162,10 +193,17 @@ export async function handleContractMessage(env, message, send) {
   const store = flowStore(env, userId);
   let draft = await store.getContractDraft();
   if (!draft) return false;
+  if (Number.isInteger(message.message_id) && !await store.trackContractMessage(draft.id, message.message_id)) return true;
+  const tell = async text => {
+    const sent = await send(env, 'sendMessage', { chat_id: userId, text });
+    if (!await store.trackContractMessage(draft.id, sent.message_id)) {
+      await send(env, 'deleteMessage', { chat_id: userId, message_id: sent.message_id }).catch(() => {});
+    }
+  };
   if (draft.stage === 'sbkts' && message.document) {
     const fileInfo = message.document;
     if (fileInfo.mime_type !== 'application/pdf' && !/\.pdf$/i.test(fileInfo.file_name || '')) {
-      await send(env, 'sendMessage', { chat_id: userId, text: 'Отправьте СБКТС в формате PDF.' });
+      await tell('Отправьте СБКТС в формате PDF.');
       return true;
     }
     if (!await store.claimContractDraft(draft.id, 'sbkts', 'reading-sbkts')) return true;
@@ -181,7 +219,7 @@ export async function handleContractMessage(env, message, send) {
       fields = extractContractApplicant(document);
     } catch {
       if (await store.claimContractDraft(draft.id, 'reading-sbkts', 'sbkts')) {
-        await send(env, 'sendMessage', { chat_id: userId, text: 'Не удалось прочитать СБКТС. Отправьте другой PDF с текстовым слоем.' });
+        await tell('Не удалось прочитать СБКТС. Отправьте другой PDF с текстовым слоем.');
       }
       return true;
     }
@@ -192,24 +230,22 @@ export async function handleContractMessage(env, message, send) {
     await store.updateContractDraft(draft);
     return true;
   }
-  if (draft?.stage === 'field' && message.text) {
-    let value = message.text.trim().replace(/\s+/g, ' ');
-    if (draft.field === 'full_name') value = value.replace(/^Ф\.?И\.?О\.?\s*:\s*/i, '');
-    if (draft.field === 'address') value = value.replace(/^адрес(?:\s+регистрации)?\s*:\s*/i, '');
-    if (!valid(draft.field, value)) {
-      await send(env, 'sendMessage', { chat_id: userId, text: `Проверьте формат поля «${labels[draft.field]}» и попробуйте ещё раз.` });
+  if (message.text && ['photo', 'manual', 'field', 'edit'].includes(draft.stage)) {
+    const result = parseManualContract(message.text, draft.manualFields || manualFields(draft));
+    if (result.error) {
+      await tell(result.error);
       return true;
     }
-    draft.fields[draft.field] = value;
+    draft.fields = { ...draft.fields, ...result.values };
   } else if (draft.stage === 'photo' && (message.photo?.length || message.document)) {
     const source = message.document || message.photo.at(-1);
     const isPdf = source.mime_type === 'application/pdf' || /\.pdf$/i.test(source.file_name || '');
     if (message.document && !isPdf && !source.mime_type?.startsWith('image/') && !/\.(jpe?g|png|webp|tiff?)$/i.test(source.file_name || '')) {
-      await send(env, 'sendMessage', { chat_id: userId, text: 'Пришлите фото или PDF-скан паспорта.' });
+      await tell('Пришлите фото или PDF-скан паспорта.');
       return true;
     }
     if (source.file_size > 8 * 1024 * 1024) {
-      await send(env, 'sendMessage', { chat_id: userId, text: 'Файл больше 8 МБ. Пришлите файл меньшего размера или введите данные вручную.' });
+      await tell('Файл больше 8 МБ. Пришлите файл меньшего размера или введите данные вручную.');
       return true;
     }
     if (!await store.claimContractDraft(draft.id, 'photo', 'reading')) return true;
@@ -244,13 +280,13 @@ export async function handleContractMessage(env, message, send) {
     const hint = {
       sbkts: 'Отправьте СБКТС в формате PDF.',
       photo: 'Пришлите фото или PDF-скан паспорта.',
-      field: 'Отправьте значение поля текстом.',
+      manual: 'Отправьте паспортные данные одним сообщением, по одной строке на пункт.',
       template: 'Выберите шаблон договора кнопкой.',
       method: 'Выберите загрузку паспорта или ручной ввод.',
-      edit: 'Выберите поле кнопкой.',
+      edit: 'Введите паспортные данные одним сообщением.',
       review: 'Проверьте данные и выберите действие кнопкой.'
     }[draft.stage];
-    if (hint) await send(env, 'sendMessage', { chat_id: userId, text: hint });
+    if (hint) await tell(hint);
     return true;
   }
   draft = await review(send, env, userId, draft);
