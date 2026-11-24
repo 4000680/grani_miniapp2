@@ -105,7 +105,12 @@ async function service(env, path, body, contentType) {
     });
   } catch (error) {
     const code = ['TimeoutError', 'AbortError'].includes(error?.name) ? 'TIMEOUT' : 'NETWORK';
-    console.error('Contract service request failed', { path, code });
+    const detail = String(error?.message || '')
+      .split(env.CONTRACT_SERVICE_TOKEN).join('[redacted]')
+      .replace(/https?:[^\s]+/gi, '[url]')
+      .replace(/[\r\n]/g, ' ')
+      .slice(0, 240);
+    console.error('Contract service request failed', { path, code, detail });
     throw new Error(code);
   }
   if (!response.ok) {
